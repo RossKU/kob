@@ -418,61 +418,6 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
 }
 
 #[test]
-fn the_open_token_list_reads_the_rows_the_union_did() {
-    for seed in [7u64, 8] {
-        let conn = store(seed, 300);
-        // Remove the holdings: the union has no preference for tokens with a holding, and the cap
-        // keeps those first.
-        conn.execute("DELETE FROM token_holdings", []).unwrap();
-        // Add more distinct (token, program, family) rows of listed orders.
-        for t in 10u8..40 {
-            conn.execute(
-                "INSERT INTO orders (covenant_id, contract, template_id, family, side, token_id, token_tpl_id, in_book, \
-                 genesis_state, genesis_block, genesis_daa, listed, origin) VALUES (?1,'KobAsk',?2,?3,1,?4,?5,1,x'00',1,1,1,'chain')",
-                params![
-                    vec![t; 32],
-                    intern(&conn, &[9u8; 32]).unwrap(),
-                    1 + (t % 2) as i64,
-                    intern(&conn, &tok(t % 7)).unwrap(),
-                    intern(&conn, &[t % 3; 32]).unwrap()
-                ],
-            )
-            .unwrap();
-        }
-        let old = "SELECT DISTINCT tk.h, tp.h, o.family FROM orders o JOIN ids tk ON tk.id = o.token_id JOIN ids tp ON tp.id = o.token_tpl_id \
-                   WHERE o.listed = 1 \
-                   UNION SELECT DISTINCT qt.h, e.tpl_hash, 0 FROM orders o JOIN ids qt ON qt.id = o.quote_id \
-                   JOIN token_events e ON e.token_cov_id = qt.h \
-                   WHERE o.listed = 1 AND e.tpl_hash IS NOT NULL \
-                   UNION SELECT DISTINCT token_cov_id, tpl_hash, 0 FROM token_events WHERE tpl_hash IS NOT NULL \
-                   ORDER BY 1, 3 DESC LIMIT ?1";
-        for max in [1usize, 2, 3, 5, 8, 13, 5_000] {
-            let want: Vec<(Vec<u8>, Vec<u8>, i64)> = conn
-                .prepare(old)
-                .unwrap()
-                .query_map([max as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-                .unwrap()
-                .collect::<rusqlite::Result<_>>()
-                .unwrap();
-            let got = open_token_rows(&conn, max, &|| false).unwrap().0;
-            let all = open_token_rows(&conn, 5_000, &|| false).unwrap().0;
-            if max.saturating_mul(2) >= all.len() {
-                // The scan reads every row: exactly the rows the union read.
-                assert_eq!(got, want, "seed {seed} max {max}");
-            } else {
-                // The scan stops after twice `max` rows. The orders name their token and
-                // program by id, so it reads them in the order the ids were first seen, not the
-                // order of the hashes. The rows kept under the cap may therefore differ from the
-                // lowest hashes the union kept. Still exactly `max` rows, each one the union has.
-                assert_eq!(got.len(), want.len(), "seed {seed} max {max}");
-                assert!(got.iter().all(|r| all.contains(r)), "seed {seed} max {max}: a row the union does not have");
-            }
-        }
-        assert!(open_token_rows(&conn, 5_000, &|| false).unwrap().0.len() > 13);
-    }
-}
-
-#[test]
 fn the_holdings_pages_are_the_same_through_the_live_indexes() {
     let conn = store(9, 600);
     let ctx = ctx();

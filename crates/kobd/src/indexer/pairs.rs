@@ -779,6 +779,20 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
 /// Pairs are oriented as the orders are: `base` is A and `quote` is B, and an order of B/A is
 /// counted under B/A. They are sorted by (base, quote).
 pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResult<Vec<PairSummary>> {
+    Ok(pairs_page(conn, ctx, token)?.pairs)
+}
+
+/// [`pairs`] and whether the scan reached its cap ([`PAIR_SCAN_MAX`] rows read): then pairs whose fillable orders all
+/// come after the oldest `PAIR_SCAN_MAX` may be missing, and `GET /v1/pairs` says so in `x-kob-truncated: 1` (R9).
+#[derive(Debug, Clone, Serialize)]
+pub struct PairsPage {
+    /// Serialized first: the API reads the flag from the body's head and sends the array alone (`api::rest::pairs`).
+    pub truncated: bool,
+    pub pairs: Vec<PairSummary>,
+}
+
+/// See [`pairs`].
+pub fn pairs_page(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResult<PairsPage> {
     let now = eval_daa(conn, ctx)?.min(i64::MAX as u64) as i64;
     // The oldest `PAIR_SCAN_MAX` pair orders fillable now (`pair_live`, R4C2-2): of all pairs, or of those naming
     // `token` as base and as quote, each read in its index and merged by age. Each is counted from its row as the writer
@@ -814,11 +828,20 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
         b: Vec<u8>,
         age: (i64, Vec<u8>),
     }
+    let mut cut: bool;
     let rows: Vec<Row> = match token {
-        None => read("INDEXED BY pair_live_age WHERE ?1 IS NULL")?,
+        None => {
+            let r = read("INDEXED BY pair_live_age WHERE ?1 IS NULL")?;
+            cut = r.len() >= PAIR_SCAN_MAX;
+            r
+        }
         Some(_) => {
             let mut all = read("INDEXED BY pair_live_base WHERE pl.token_id = (SELECT id FROM ids WHERE h = ?1)")?;
-            all.extend(read("INDEXED BY pair_live_quote WHERE pl.quote_id = (SELECT id FROM ids WHERE h = ?1)")?);
+            cut = all.len() >= PAIR_SCAN_MAX;
+            let quote = read("INDEXED BY pair_live_quote WHERE pl.quote_id = (SELECT id FROM ids WHERE h = ?1)")?;
+            cut |= quote.len() >= PAIR_SCAN_MAX;
+            all.extend(quote);
+            cut |= all.len() > PAIR_SCAN_MAX;
             all.sort_by(|x, y| x.age.cmp(&y.age));
             all.dedup_by(|x, y| x.id == y.id);
             all.truncate(PAIR_SCAN_MAX);
@@ -853,7 +876,7 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
             (true, true) => e.entry_asks += 1,
         }
     }
-    Ok(counts.into_values().collect())
+    Ok(PairsPage { truncated: cut, pairs: counts.into_values().collect() })
 }
 
 // Pair charts.
