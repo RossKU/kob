@@ -116,3 +116,37 @@ test('a merge that takes the side branch\'s copy of the record does not hide the
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, new RegExp(`lock template KobLockAuto ${oldHash} was issued`));
 });
+
+test('a lock listed on a merged branch and dropped before the merge: refused, then accounted for by withdrawn_locks (R6T-5)', () => {
+  const d = repo();
+  commit(d, [cur], 'base');
+  const main = git(d, 'rev-parse', '--abbrev-ref', 'HEAD').trim();
+  git(d, 'checkout', '-q', '-b', 'f');
+  commit(d, [cur, old], 'F1: re-pin');
+  commit(d, [cur], 'F2: re-pin reverted before review');
+  git(d, 'checkout', '-q', main);
+  git(d, 'merge', '-q', '--no-ff', '-m', 'merge f', 'f');
+  const r = run(d);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, new RegExp(`lock template KobLockAuto ${oldHash} was issued.*withdrawn_locks`));
+  // The record accounts for it: listed by F1, never issued by any build.
+  const w = { name: 'KobLockAuto', hash: oldHash, why: 'listed by F1 on branch f, reverted by F2 before the merge; no release was built from f' };
+  commit(d, [cur], 'withdraw the never-issued lock', { withdrawn_locks: [w] });
+  const ok = run(d);
+  assert.equal(ok.status, 0, ok.stderr);
+  const rec = JSON.parse(readFileSync(join(d, 'out/deployment.json'), 'utf8'));
+  assert.deepEqual(rec.locks.map((l) => l.hash), [cur.hash]);
+  assert.deepEqual(rec.withdrawn_locks, [w], 'carried over');
+  assert.match(readFileSync(join(d, 'out/DEPLOYMENT.md'), 'utf8'), /Withdrawn lock templates/);
+  // Deleting the entry later refuses again; so does withdrawing a template that is listed.
+  commit(d, [cur], 'drop the withdrawal');
+  assert.equal(run(d).status, 1);
+  commit(d, [cur, old], 'both', { withdrawn_locks: [w] });
+  const both = run(d);
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, /both in locks and in withdrawn_locks/);
+  commit(d, [cur], 'the current one', { withdrawn_locks: [w, { ...w, hash: cur.hash }] });
+  assert.match(run(d).stderr, /both in locks and in withdrawn_locks/);
+  commit(d, [cur], 'no reason', { withdrawn_locks: [{ name: 'KobLockAuto', hash: oldHash }] });
+  assert.match(run(d).stderr, /each entry is/);
+});

@@ -77,6 +77,20 @@ for (const name of LOCKS) {
   const t = templateOf(name, `contracts/artifacts/${name}.json`);
   if (!locks.some((l) => l.hash === t.hash)) locks.push(t);
 }
+// Withdrawn lock templates (audit 2026-11-24 R6T-5): templates a committed record listed but no
+// build ever issued (a re-pin committed on a branch and dropped before any deployment). The history
+// check below takes them as accounted for. They are entered by hand in the committed record, each
+// with why, and carried over like `locks`; an entry may never name a template that is in `locks`
+// (the current one included). docs/spec/template-retirement.md, "Withdrawn lock templates".
+const withdrawn = (fs.existsSync(recordFile) ? JSON.parse(readLf(recordFile)).withdrawn_locks ?? [] : []).map((w) => {
+  if (typeof w?.name !== 'string' || !/^[0-9a-f]{64}$/.test(w.hash ?? '') || typeof w.why !== 'string' || !w.why.trim()) {
+    die(`withdrawn_locks in ${recordFile}: each entry is { "name", "hash" (64 lower-case hex), "why" (the commits that listed it and the proof that no build issued it) }`);
+  }
+  if (locks.some((l) => l.hash === w.hash)) {
+    die(`lock template ${w.name} ${w.hash} is both in locks and in withdrawn_locks: a template a build issues, or that this build issues, is never withdrawn`);
+  }
+  return { name: w.name, hash: w.hash, why: w.why };
+});
 // A hand edit that deletes an entry would pass the checks above: every lock template any committed
 // record of this network listed must still be listed (audit 2026-11-23 R2A-3). The check needs the
 // whole history of the record: a shallow clone (actions/checkout's default, depth 1) holds only the
@@ -112,8 +126,8 @@ if (process.env.KOB_DEPLOY_NO_HISTORY === '1') {
     }
     const issued = JSON.parse(git(`git show ${c}:${recordFile}`)).locks ?? [];
     for (const l of issued) {
-      if (!locks.some((x) => x.hash === l.hash)) {
-        die(`lock template ${l.name} ${l.hash} was issued (${recordFile} at ${c} lists it) and is missing from locks: an issued lock stays readable for up to 10 years, so its entry and its artifact stay`);
+      if (!locks.some((x) => x.hash === l.hash) && !withdrawn.some((w) => w.hash === l.hash)) {
+        die(`lock template ${l.name} ${l.hash} was issued (${recordFile} at ${c} lists it) and is missing from locks: an issued lock stays readable for up to 10 years, so its entry and its artifact stay. Only if no build was ever deployed with it (listed on a branch and dropped before any release) may it go to withdrawn_locks (docs/spec/template-retirement.md, "Withdrawn lock templates")`);
       }
     }
   }
@@ -163,6 +177,7 @@ const manifest = {
   indexer_url: indexerUrl,
   templates,
   locks,
+  ...(withdrawn.length ? { withdrawn_locks: withdrawn } : {}),
   ...(registry ? { registry } : {}),
 };
 fs.mkdirSync(out, { recursive: true });
@@ -196,7 +211,13 @@ so this list only grows, and every build reads and releases each one (docs/spec/
 
 | Lock template | Template hash | prefix / suffix |
 |---|---|---|
-${locks.map((t) => `| ${t.name} | \`${t.hash}\` | ${t.prefix_len} / ${t.suffix_len} |`).join('\n')}
+${locks.map((t) => `| ${t.name} | \`${t.hash}\` | ${t.prefix_len} / ${t.suffix_len} |`).join('\n')}${withdrawn.length ? `
+
+Withdrawn lock templates: listed by an earlier record, never issued by a build (docs/spec/template-retirement.md).
+
+| Withdrawn lock template | Template hash | Why |
+|---|---|---|
+${withdrawn.map((w) => `| ${w.name} | \`${w.hash}\` | ${w.why.replace(/\|/g, '\\|')} |`).join('\n')}` : ''}
 
 The token programs are the reference artifacts too. Binaries embedding this record: see "Deployment
 records" in contracts/README.md.
