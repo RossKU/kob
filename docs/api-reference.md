@@ -45,7 +45,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 
 ### Routes
 
-The list below is the router (`api/mod.rs`, `build()`), in registration order: 24 routes (1-23 and 9b), plus `GET /v1/metrics` as the 24th
+The list below is the router (`api/mod.rs`, `build()`), in registration order: 25 routes (1-23, 4b and 9b), plus `GET /v1/metrics` as the 24th
 only when `[api] metrics = true` (the default), the KAS price route (25) only when `[api] usd_price = true` (default false), the two logo routes (26, 27) only when `[logo_reports] enabled = true` (default false), and the two vote routes (29, 30) only when `[logo_votes] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
 (`heavy_route_cost`, default 5). "Cached" marks the reads kept in the response cache (section 5.6).
 
@@ -54,6 +54,7 @@ only when `[api] metrics = true` (the default), the KAS price route (25) only wh
 | 1 | `GET /v1/health` | [3.1](#31-get-v1health) | 1 | no |
 | 2 | `GET /v1/health/ready` | [3.2](#32-get-v1healthready) | 1 | no |
 | 3 | `GET /v1/tokens` | [3.4](#34-get-v1tokens) | 1 | yes |
+| 4b | `GET /v1/tokens/{covenant_id}` | [3.4](#34-get-v1tokens) | 1 | no |
 | 4 | `GET /v1/tokens/{covenant_id}/declaration` | [3.5](#35-get-v1tokenscovenant_iddeclaration) | 1 | no |
 | 5 | `GET /v1/books/{token}` | [3.6](#36-get-v1bookstoken) | H | yes |
 | 6 | `GET /v1/pairs` | [3.7](#37-pairs) | H | yes |
@@ -396,9 +397,16 @@ on a listener the public reaches ([ops/chart-server.md](ops/chart-server.md), se
 ### 3.4 `GET /v1/tokens`
 
 Tokens the indexer lists: the registry/allowlist entries plus, when a program allowlist is loaded, every token of a supported
-program that an order placement named (at most 5000 such rows). No parameters. Cached. Response `{"tokens": [TokenView], "truncated": bool}`.
-`truncated` is true when the open part was cut at 5000 rows: the tokens the chain proves (a holding exists) are kept first, and the
-list never fails for its size (each token costs a fixed number of index seeks, `docs/ops/api-bounds.md`).
+program that an order placement named. No parameters. Cached. Response `{"tokens": [TokenView], "truncated": bool}`.
+The open part is read in two passes. The first takes the tokens the chain proves (a holding of the token exists, under the
+program a placement names), oldest first, at most 2000: no number of placements on other covenant ids can push one out. The
+second takes the tokens placements alone name, at most 5000 rows and a budget of work of its own. `truncated` is true when
+either is cut; the list never fails for its size (`docs/ops/api-bounds.md`).
+
+**`GET /v1/tokens/{covenant_id}`**: the one token's `TokenView`, as the list gives it, whether or not the list's cut reaches
+it (a registry token, or an open token the chain proves or placements name). `404 not_found` ("unknown token") for a token
+the list would never hold, `400` for an id that is not 32 bytes of hex. A few index seeks on the light lane, uncached. A client
+that knows a token's id reads it here when `/v1/tokens` says `truncated` and lacks it.
 
 ```
 curl -s $API/v1/tokens
@@ -598,7 +606,7 @@ a pair fill is volume only and never sets a price. `volume_24h` counts each tran
 time the indexer has recorded and its wall clock (as `/v1/stats/{token}`); `window_truncated` is true when the day held more than 20,000 pair-fill rows and the figures cover the newest ones (whole transactions only). `amount_b`, `price`, `price_num`, `price_den`, `tip_kas` may be null.
 
 **`GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`** (`limit` default 50, at most `max_page_size`; `cursor` as `/v1/orders`):
-the live orders of the pair (base A, quote B, as the pair book reads them), newest first, keyset paged. It reads only the
+the listed live orders of the pair (base A, quote B, as the pair book reads them; an unlisted order, which no executor fills, is only in `GET /v1/orders?maker=`), newest first, keyset paged. It reads only the
 pair's own live rows (`pair_live`), whatever other orders either token has: fillable or not yet, past their window, not
 fillable as they stand, past a day-order deadline. Each item is the order view of `GET /v1/orders` (section 3.8); an order
 under a template this build does not pin is left out. The reverse direction is the same route with the tokens swapped.

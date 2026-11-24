@@ -290,6 +290,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/health", get(rest::health))
         .route("/v1/health/ready", get(rest::ready))
         .route("/v1/tokens", get(rest::tokens))
+        .route("/v1/tokens/{covenant_id}", get(rest::token))
         .route("/v1/tokens/{covenant_id}/declaration", get(rest::token_declaration))
         .route("/v1/books/{token}", get(rest::book))
         .route("/v1/pairs", get(rest::pairs))

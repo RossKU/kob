@@ -1114,6 +1114,31 @@ impl ReadBudget {
     }
 }
 
+thread_local! {
+    /// The VM steps the read running on this thread has spent so far, when it runs under a budget ([`with_step_meter`]).
+    static STEP_METER: std::cell::RefCell<Option<Box<dyn Fn() -> u64>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The VM steps the read on this thread has spent so far (its request's, in the read pool), or `None` outside a budgeted
+/// read. A read that is a list of what outsiders write checks it between rows, to stop at a budget of its own and say
+/// `truncated` before the request's budget fails it whole (R9C2b-1, `reads::OPEN_LIST_STEPS_MAX`).
+pub fn steps_spent() -> Option<u64> {
+    STEP_METER.with(|m| m.borrow().as_ref().map(|f| f()))
+}
+
+/// Runs `f` with `meter` as this thread's [`steps_spent`], and restores the previous one after it (also on a panic).
+pub fn with_step_meter<T>(meter: impl Fn() -> u64 + 'static, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Box<dyn Fn() -> u64>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            STEP_METER.with(|m| *m.borrow_mut() = prev);
+        }
+    }
+    let _restore = Restore(STEP_METER.with(|m| m.replace(Some(Box::new(meter)))));
+    f()
+}
+
 /// What the progress handler of a budgeted read checks.
 struct BudgetTick {
     budget: Arc<ReadBudget>,
@@ -1420,7 +1445,8 @@ impl ReadPool {
                 let r = if budget.over(max_steps, max_wall, std::time::Duration::ZERO) {
                     Ok(Err(DbError::ReadBudget))
                 } else {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&conn)))
+                    let meter = budget.clone();
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| with_step_meter(move || meter.steps(), || f(&conn))))
                 };
                 // SAFETY: removes the handler set above.
                 unsafe { rusqlite::ffi::sqlite3_progress_handler(conn.handle(), 0, None, std::ptr::null_mut()) };

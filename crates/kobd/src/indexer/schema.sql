@@ -452,6 +452,9 @@ CREATE INDEX IF NOT EXISTS orders_token_tpl ON orders (token_id, token_tpl_id) W
 -- The distinct (token, program, family) of the listed orders (the open token list): read one index seek per distinct row.
 CREATE INDEX IF NOT EXISTS orders_listed_tokens ON orders (token_id, token_tpl_id, family)
     WHERE listed = 1 AND token_id IS NOT NULL AND token_tpl_id IS NOT NULL;
+-- A token's listed orders oldest first (`reads::market_scale`, R9C2b-3): its earliest listed order is one seek, whatever
+-- unlisted orders anyone placed before it.
+CREATE INDEX IF NOT EXISTS orders_listed_genesis ON orders (token_id, genesis_block, covenant_id) WHERE listed = 1;
 
 -- Pair-order fills (KobPair, KobCondPair, KobIfdPair): volume of the pair (A, B), never a KAS price. Prices, trades, candles and
 -- last prices come ONLY from KAS-book order fills (`order_events` fills with a price); a pair fill records its event (price

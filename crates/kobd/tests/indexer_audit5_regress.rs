@@ -273,7 +273,8 @@ fn i17_a_token_with_a_holding_is_not_evicted_by_junk_tokens() {
     let tokens = TokenAllowlist::from_entries([]).with_strict_templates([strict]);
     let list = reads::token_list(&conn, &tokens).unwrap();
     let real_hex: String = real.iter().map(|b| format!("{b:02x}")).collect();
-    assert!(list.len() <= reads::OPEN_TOKEN_ROWS_MAX as usize, "{} tokens", list.len());
+    // the proven tokens have a pass and a cap of their own, the others at most the open cap (R9C2b-2)
+    assert!(list.len() <= reads::OPEN_TOKEN_ROWS_MAX as usize + reads::PROVEN_TOKENS_MAX, "{} tokens", list.len());
     assert!(list.iter().any(|t| t.covenant_id == real_hex), "the token with a holding is in the list");
 }
 

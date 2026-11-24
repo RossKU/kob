@@ -33,11 +33,13 @@ pub(crate) fn steps<T>(conn: &Connection, f: impl FnOnce() -> T) -> (T, u64) {
         unsafe { (*(p as *const AtomicU64)).fetch_add(1, Ordering::Relaxed) };
         0
     }
-    let n = Box::new(AtomicU64::new(0));
+    let n = std::sync::Arc::new(AtomicU64::new(0));
     let t = std::time::Instant::now();
     // SAFETY: the handle is this connection's, and the handler is removed before the counter goes.
     unsafe { rusqlite::ffi::sqlite3_progress_handler(conn.handle(), 1, Some(tick), &*n as *const AtomicU64 as *mut std::ffi::c_void) };
-    let r = f();
+    // the read sees the steps as a pooled read sees its request's (`db::steps_spent`)
+    let meter = n.clone();
+    let r = crate::indexer::db::with_step_meter(move || meter.load(Ordering::Relaxed), f);
     // SAFETY: as above.
     unsafe { rusqlite::ffi::sqlite3_progress_handler(conn.handle(), 0, None, std::ptr::null_mut()) };
     let n = n.load(Ordering::Relaxed);
@@ -2474,4 +2476,180 @@ fn a_sideless_fill_is_unpriced_and_the_actor_counts_are_kept() {
     let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
     let (m, mc, e, ec) = count(&conn);
     assert_eq!((m, e), (mc, ec), "recounted at the open");
+}
+
+/// Fake open tokens of the token-list tests: covenant ids `prefix` and the number, `from..to`, named by placements under
+/// the strict program `hh`. `Events`: one event row each (any placement records one). `Listed`: one listed order each.
+/// `Proven`: one event row and a holding under the program (`holding_programs`), as a token the chain proves.
+#[derive(Clone, Copy, PartialEq)]
+enum Fake {
+    Events,
+    Listed,
+    Proven,
+}
+
+fn fake_tokens(conn: &Connection, prefix: &str, from: i64, to: i64, kind: Fake) {
+    let (hh, ..) = tok_fields(T3);
+    let n = "WITH RECURSIVE n(t) AS (SELECT ?1 UNION ALL SELECT t + 1 FROM n WHERE t < ?2 - 1)";
+    let tok = "CAST(printf('%s%031d', ?3, t) AS BLOB)";
+    conn.execute(&format!("{n} INSERT OR IGNORE INTO ids (h) SELECT {tok} FROM n"), params![from, to, prefix]).unwrap();
+    if kind != Fake::Listed {
+        conn.execute(
+            &format!("{n} INSERT INTO token_events (token_cov_id, tpl_hash, kind, txid, block_seq, daa) SELECT {tok}, ?4, 'seen', x'00', 1, 1 FROM n"),
+            params![from, to, prefix, hh.to_vec()],
+        )
+        .unwrap();
+    }
+    match kind {
+        Fake::Listed => {
+            let (template, maker, tpl) =
+                (id(conn, &kob_protocol::artifacts::pinned_hash(TemplateId::KobBid)), id(conn, &pk(7)), id(conn, &hh));
+            conn.execute(
+                &format!(
+                    "{n} INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, \
+                     min_fill, price, tip, in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed) \
+                     SELECT CAST(printf('o%s%030d', ?3, t) AS BLOB), 'KobBid', ?4, 1, 2, ?5, (SELECT id FROM ids WHERE h = {tok}), ?6, \
+                     1000, 1, 1, 0, 0, 1, x'00', 1 + t, 1 + t, 1 FROM n"
+                ),
+                params![from, to, prefix, template, maker, tpl],
+            )
+            .unwrap();
+        }
+        Fake::Proven => {
+            conn.execute(
+                &format!(
+                    "{n} INSERT INTO holding_programs (token_id, program, n) SELECT (SELECT id FROM ids WHERE h = {tok}), ?4, 1 FROM n"
+                ),
+                params![from, to, prefix, T3.name()],
+            )
+            .unwrap();
+        }
+        Fake::Events => {}
+    }
+}
+
+fn open_list() -> TokenAllowlist {
+    let (hh, ..) = tok_fields(T3);
+    allowlist().with_strict_templates([(
+        Hash32(hh),
+        crate::tokens::StrictTemplate { id: "t3".into(), family: kob_protocol::Family::Kcc20, powers: vec![] },
+    )])
+}
+
+/// R9C2b-1: the token list at every cap at once answers, under its own step budget and well under the read budget: the
+/// second pass's two scans past full (event rows of 20,001 tokens with 16 orders each, listed orders of 20,001 more) and the
+/// first pass at its cap (2,000 proven tokens). The registry's token and every proven token are in the answer, and it
+/// says `truncated`. A token the cut left out is still answered by its id (`token_view`).
+#[test]
+fn the_token_list_at_every_cap_answers_with_the_proven_tokens() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let list = open_list();
+    // past both of the second pass's scan caps (twice the rows it lists, of each kind) and the previous build's (four times)
+    let rows = 4 * OPEN_TOKEN_ROWS_MAX + 1;
+    fake_tokens(&conn, "e", 0, rows, Fake::Events);
+    fake_tokens(&conn, "l", 0, rows, Fake::Listed);
+    // and 16 unlisted orders of each event token, the most a market scale read takes (the per-token view's worst)
+    {
+        let (template, maker) = (id(&conn, &kob_protocol::artifacts::pinned_hash(TemplateId::KobBid)), id(&conn, &pk(7)));
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1) \
+             INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, min_fill, price, tip, \
+             in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed) \
+             SELECT CAST(printf('u%031d', i) AS BLOB), 'KobBid', ?2, 1, 2, ?3, \
+             (SELECT id FROM ids WHERE h = CAST(printf('e%031d', i / 16) AS BLOB)), 1000, 1, 1, 0, 0, 1, x'00', 1 + i, 1 + i, 0 FROM n",
+            params![rows * 16, template, maker],
+        )
+        .unwrap();
+    }
+    fake_tokens(&conn, "p", 0, PROVEN_TOKENS_MAX as i64, Fake::Proven);
+    let t0 = std::time::Instant::now();
+    let ((tokens, truncated), n) = steps(&conn, || token_list_page(&conn, &list).unwrap());
+    eprintln!("tokens at every cap: {n} VM steps, {} tokens, wall {:?} (counter on)", tokens.len(), t0.elapsed());
+    assert!(truncated, "cut, and says so");
+    assert_eq!(tokens[0].covenant_id, Hash32(TOKEN_COV).to_hex(), "the registry's token first");
+    let have: std::collections::BTreeSet<&str> = tokens.iter().map(|t| t.covenant_id.as_str()).collect();
+    let cov = |p: &str, i: i64| hex::encode(format!("{p}{i:031}").as_bytes());
+    let proven = (0..PROVEN_TOKENS_MAX as i64).filter(|i| have.contains(cov("p", *i).as_str())).count();
+    assert_eq!(proven, PROVEN_TOKENS_MAX, "every proven token is in the answer");
+    // well under the read budget, with the first pass full and the second at its own budget
+    assert!(n < crate::indexer::db::READ_BUDGET_STEPS * 4 / 5, "{n} VM steps");
+    // a token the cut left out is answered by its id; an unknown one is not
+    let left_out = (0..rows).map(|i| cov("l", i)).find(|c| !have.contains(c.as_str())).expect("some listed token is cut");
+    let v = token_view(&conn, &list, &Hash32::parse(&left_out).unwrap()).unwrap().expect("its own view");
+    assert_eq!(v.covenant_id, left_out);
+    assert!(token_view(&conn, &list, &Hash32([0x3c; 32])).unwrap().is_none());
+}
+
+/// R9C2b-2: a token the chain proves is in the list whatever placements came before it: 25,000 listed fake tokens interned
+/// before it and 25,000 fake event rows whose covenant ids sort below it fill the second pass; the proven token, interned
+/// last, is in the answer (before, the scans stopped before reaching it).
+#[test]
+fn a_proven_token_survives_an_open_list_flood() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let list = open_list();
+    fake_tokens(&conn, "\u{1}", 0, 25_000, Fake::Events);
+    fake_tokens(&conn, "l", 0, 25_000, Fake::Listed);
+    fake_tokens(&conn, "z", 0, 1, Fake::Proven);
+    let (tokens, truncated) = token_list_page(&conn, &list).unwrap();
+    let real = hex::encode(format!("z{:031}", 0).as_bytes());
+    assert!(tokens.iter().any(|t| t.covenant_id == real), "the proven token is listed");
+    assert!(truncated);
+}
+
+/// R9C2b-5: the quote side of a maker's status list of one token (a pair order with the token as its quote) walks
+/// `orders_maker_quote_genesis` only: 2,000 cancelled pair orders of maker M quoting token T lie behind N, then 2 N,
+/// cancelled pair orders that share one of the two filters (other makers quoting T, and M quoting another token).
+#[test]
+fn a_maker_token_status_read_is_bounded_on_the_quote_side() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let (base, other) = ([0x5b; 32], [0x5c; 32]);
+    let s = Seed {
+        prefix: "z",
+        contract: "KobPair",
+        side: 1,
+        token: base,
+        quote: Some(TOKEN_COV),
+        parent: None,
+        state: None,
+        price0: None,
+        remaining: 10,
+        custody: false,
+        listed: false,
+        maker: pk(1),
+    };
+    seed(&conn, &s, 0, 2_000);
+    let n = 10_000;
+    let more = |from: i64, a: &'static str, b: &'static str| {
+        seed(&conn, &Seed { prefix: a, maker: pk(2), ..s.clone() }, from, from + n);
+        seed(&conn, &Seed { prefix: b, quote: Some(other), ..s.clone() }, from + n, from + 2 * n);
+        conn.execute("UPDATE order_state SET status = 'cancelled' WHERE status = 'open'", []).unwrap();
+    };
+    conn.execute("UPDATE order_state SET status = 'cancelled' WHERE status = 'open'", []).unwrap();
+    let ctx = ctx();
+    let f = OrderFilter { maker: Some(pk(1).to_vec()), token: Some(Hash32(TOKEN_COV)), status: Some("cancelled".into()) };
+    let read_all = || {
+        let (mut cursor, mut found, mut pages) = (None, 0, 0);
+        loop {
+            let page = orders(&conn, &ctx, &f, 200, cursor.take()).unwrap();
+            found += page.items.len();
+            pages += 1;
+            assert!(pages <= 2_000 / 200 + 3, "{pages} pages and not done ({found} found)");
+            match page.next_cursor {
+                Some(c) => cursor = parse_order_cursor(&c),
+                None => break,
+            }
+        }
+        found
+    };
+    more(2_000, "y", "x");
+    let (found, few) = steps(&conn, read_all);
+    assert_eq!(found, 2_000);
+    more(2_000 + 2 * n, "w", "v");
+    let (found, many) = steps(&conn, read_all);
+    assert_eq!(found, 2_000);
+    flat("orders?maker&token&status, quote side, history order", few, many);
 }
