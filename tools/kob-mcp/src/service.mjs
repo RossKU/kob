@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Audit } from './audit.mjs';
-import { DEFAULT_REF_DEPTH_KAS, Ledger, allowListed, bandCheck, bandReference, bookReference, capRefusals, killSwitchOn, sideOfKind, statePrice, tipRefusals, today, tokenCapRefusals, tokenOutflows } from './guard.mjs';
+import { DEFAULT_REF_DEPTH_KAS, Ledger, REF_BOOK_ROWS, allowListed, bandCheck, bandReference, bookReference, capRefusals, killSwitchOn, sideOfKind, statePrice, tipRefusals, today, tokenCapRefusals, tokenOutflows } from './guard.mjs';
 import { Indexer } from './indexer.mjs';
 import { Kob } from './kob.mjs';
 import { big, kas, toSompi } from './units.mjs';
@@ -609,7 +609,7 @@ export class KobService {
     // The book's reference needs refDepthKas on its fills and on its resting side (R2-T2): one fill
     // two keys print, or a few KAS of orders, cannot set it.
     const [rows, fills, maker] = cov ? await Promise.all([
-      this.indexer.tryGet(`/v1/books/${cov}?depth=200&aggregate=false`),
+      this.indexer.tryGet(`/v1/books/${cov}?depth=${REF_BOOK_ROWS}&aggregate=false`),
       this.indexer.tryGet(`/v1/fills?token=${cov}&limit=200`),
       this.makerKey().catch(() => null),
     ]) : [null, null, null];

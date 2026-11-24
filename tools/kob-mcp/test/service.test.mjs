@@ -629,3 +629,29 @@ test('a long stderr keeps its last line, where the CLI says what failed (T-13)',
   assert.ok(cut.endsWith('error: submit: socket closed'));
   assert.equal(cutMiddle('short', 1500), 'short');
 });
+
+// R6T-4: an older kobd mixes up to 200 dust orders into its best book rows. The read leaves room
+// for them, and they count as nothing.
+test('200 dust bids above one real level do not empty the book reference (R6T-4)', async () => {
+  const { t, svc } = bookService();
+  // The indexer returns the best `depth` rows, as kobd does, up to its max_page_size.
+  let cap = 1000;
+  const asked = [];
+  svc.indexer.tryGet = async (path) => {
+    if (path.startsWith('/v1/fills')) return svc.book$.fills;
+    if (!path.startsWith('/v1/books/')) return null;
+    const depth = Math.min(Number(new URL(`http://x${path}`).searchParams.get('depth')), cap);
+    asked.push(depth);
+    return rows(svc.book$.rows.bids.slice(0, depth));
+  };
+  // 200 bids of 0.9 KAS each just above the real 1,200 KAS at 0.24.
+  const dust = Array.from({ length: 200 }, (_, i) => row(30000000 - i, 3e8, { min_fill: '1' }));
+  svc.book$ = { rows: rows([...dust, row(24000000, 5000e8)]), fills: fills(25000000, 1000e8, 5) };
+  assert.equal((await svc.write('kob_place_limit', { ...place, price: '0.3KAS' })).status, 'submitted', 'judged against the real 0.24');
+  assert.match((await svc.write('kob_place_limit', { ...place, price: '0.31KAS' })).reason, /^PRICE_BAND: a buy at 0\.31 KAS .*0\.24 KAS per whole token/);
+  assert.ok(asked.every((d) => d >= 400));
+  // At an indexer's default cap of 200 the dust fills the read: refused, and the reason says why.
+  cap = 200;
+  assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: no usable reference .*200 row\(s\) worth under 1 KAS \(dust\).*refPrice/);
+  assert.equal(t.yesCalls().length, 1);
+});

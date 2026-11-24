@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { checkConfig, loadConfig, publicConfig } from '../src/config.mjs';
-import { Ledger, bandCheck, bandReference, bookReference, capRefusals, tipRefusals } from '../src/guard.mjs';
+import { DUST_BELOW_SOMPI, Ledger, REF_BOOK_ROWS, bandCheck, bandReference, bookReference, capRefusals, tipRefusals } from '../src/guard.mjs';
 import { kas, toSompi } from '../src/units.mjs';
 import { PRIMARY } from './helpers.mjs';
 
@@ -262,4 +262,24 @@ test('config: KOB_MCP_* variables (the extension form) override the file; placeh
   assert.equal(c.caps.perDay, 70n * KAS);
   assert.deepEqual(c.withdrawTo, [PRIMARY]);
   assert.throws(() => loadConfig(null, {}), /no config/);
+});
+
+test('book reference: 200 dust rows above one real level neither count nor hide it (R6T-4)', () => {
+  const scale = 100_000_000;
+  const depth = 1000n * 100_000_000n;
+  const row = (price, amount, maker = 'aa'.repeat(32)) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '1', scale, maker, ...live(price) });
+  const fills = [{ price: String(25e6), amount: String(6000e8) }];
+  // 200 bids just above the real one, each 3 tokens at 0.3 KAS (0.9 KAS, under the 1 KAS minimum).
+  const dust = Array.from({ length: 200 }, (_, i) => row(30e6 + i, 3e8, (i % 256).toString(16).padStart(2, '0').repeat(32)));
+  const bids = [...dust.reverse(), row(24e6, 5000e8)];
+  const r = bookReference({ side: 'buy', rows: { bids }, fills, scale, depth });
+  assert.ok(r.ref, r.why);
+  assert.equal(r.ref.num, 24_000_000n, 'the real level sets it');
+  // Dust alone is no reference, and the reason says why.
+  const only = bookReference({ side: 'buy', rows: { bids: dust }, fills, scale, depth });
+  assert.equal(only.ref, null);
+  assert.match(only.why, /200 row\(s\) worth under 1 KAS \(dust\) count as nothing: they may crowd the real orders out/);
+  // One row of exactly 1 KAS counts.
+  assert.equal(DUST_BELOW_SOMPI, 100_000_000n);
+  assert.ok(REF_BOOK_ROWS >= 400, 'the read leaves room for the 200 dust rows of an older kobd');
 });
