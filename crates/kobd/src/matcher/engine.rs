@@ -928,11 +928,13 @@ impl<'a> Tick<'a> {
                     .then_some((l, a))
             };
             let (plan, lowered, acct) = self.earliest_ticks((plan, lowered, acct), &planned_ex, max_bytes, planner, &build);
-            // The fee bound of every signing path (R8FX2-1): `max_tx_fee` at every rate. A folded change
-            // shows in the batch's profit, which the gate above already holds it to.
-            let signed = crate::fee::check_fee_bound(&lowered.built, cfg.fees.max_tx_fee, false)
-                .and_then(|_| sign_and_validate(&lowered, self.signer, cfg.validate, self.validator));
-            match signed {
+            // The fee bound of every signing path (R8FX2-1): `max_tx_fee` at every rate, the floor included.
+            // A batch above it is not signed: its orders wait for the next tick (a folded change shows in
+            // the batch's profit, which the gate above already holds it to).
+            if let Err(why) = crate::fee::check_fee_bound(&lowered.built, cfg.fees.max_tx_fee, false) {
+                return Batch::Failed(key, why, plan.fills.iter().map(|f| f.cand.id).collect());
+            }
+            match sign_and_validate(&lowered, self.signer, cfg.validate, self.validator) {
                 Ok((signed, validation)) => {
                     report.cleared.extend(plan.fills.iter().map(|f| f.cand.id));
                     let parent = Self::parent_of(&signed, report);
