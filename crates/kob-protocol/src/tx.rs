@@ -1001,11 +1001,28 @@ pub fn pubkey_of(secret_key: &[u8; 32]) -> Result<[u8; 32]> {
 
 /// Signs every request of a built transaction with local keys (x-only pubkey -> secret key).
 pub fn sign_locally(built: &BuiltTx, keys: &BTreeMap<[u8; 32], [u8; 32]>) -> Result<Vec<InputSignature>> {
+    // The digest is recomputed from the transaction it signs, never taken from the request on trust
+    // (R8F1c-4): a request whose stored digest is another transaction's is refused before a
+    // signature exists.
+    let (tx, entries) = built.tx.to_tx()?;
     built
         .sign
         .iter()
         .map(|r| {
             let sk = keys.get(&r.pubkey).ok_or_else(|| Error::Invalid(format!("no local key for {}", to_hex(&r.pubkey))))?;
+            if r.input_index >= tx.inputs.len() {
+                return invalid(format!(
+                    "sign request for input {} but the transaction has {} inputs",
+                    r.input_index,
+                    tx.inputs.len()
+                ));
+            }
+            if sighash(&tx, &entries, r.input_index) != r.sighash {
+                return Err(Error::Signature {
+                    input: r.input_index,
+                    reason: "the stored digest is not this transaction's: nothing signed".into(),
+                });
+            }
             Ok(InputSignature { input_index: r.input_index, signature: sign_digest(sk, &r.sighash)? })
         })
         .collect()
@@ -1671,8 +1688,15 @@ impl Draft {
             let sigscript = plan.sigscript(plan.signer().map(|_| dummy_sig.as_slice()))?;
             inputs.push(TransactionInput::new_with_compute_budget(inp.utxo.outpoint(), sigscript, inp.sequence, *budget_value));
         }
-        let total_in: u64 = entries.iter().map(|e| e.amount).sum();
-        let fixed_out: u64 = outputs.iter().map(|o| o.value).sum();
+        // checked: input amounts are the node's and the counterparties' (R8F1c-3)
+        let total_in = entries
+            .iter()
+            .try_fold(0u64, |a, e| a.checked_add(e.amount))
+            .ok_or_else(|| Error::Invalid("the input amounts overflow".into()))?;
+        let fixed_out = outputs
+            .iter()
+            .try_fold(0u64, |a, o| a.checked_add(o.value))
+            .ok_or_else(|| Error::Invalid("the output values overflow".into()))?;
         if fixed_out > total_in {
             return Err(Error::InsufficientFunds { need: fixed_out, have: total_in });
         }
@@ -1722,6 +1746,7 @@ impl Draft {
             let spk = p2pk_spk(&pk);
             let mut c = slack.saturating_sub(fee_without);
             let mut ok = false;
+            let mut placed = false;
             for _ in 0..32 {
                 if c == 0 {
                     break;
@@ -1744,7 +1769,7 @@ impl Draft {
             if ok && c > 0 {
                 // The relay floor does not price storage mass, so nothing else keeps a small change
                 // output (storage mass ~ 10^12 / value) from pushing the transaction over the block
-                // storage limit. Such a change is folded into the fee instead.
+                // storage limit. Only a dust change is folded into the fee (below).
                 let mut outs = outputs.clone();
                 with_change(&mut outs, TransactionOutput { value: c, script_public_key: spk.clone(), covenant: None });
                 let mass_report = masses(&build_tx(outs), &entries);
@@ -1769,10 +1794,20 @@ impl Draft {
                         return draft.seal(budgets);
                     }
                     outputs = o;
+                    placed = true;
                 } else if mass_report.within_block_limits() {
                     let at = with_change(&mut outputs, TransactionOutput { value: c, script_public_key: spk, covenant: None });
                     change_output = Some(at as u32);
+                    placed = true;
                 }
+            }
+            // A change that is not placed goes to the fee. That is meant only for a change below
+            // DUST_OUTPUT_MIN, whose own storage mass (KIP-9, about 10^12 / value) would weigh more
+            // than it is worth; a larger one is never folded unseen (R8F1c-1): a counterparty's output
+            // values can push the storage mass toward the block limit.
+            let lost = slack.saturating_sub(fee_without);
+            if !placed && lost >= DUST_OUTPUT_MIN {
+                return Err(Error::ChangeDoesNotFit { change: lost });
             }
         }
         if let (Some(k), None) = (gap, change_output) {
@@ -1937,5 +1972,39 @@ mod tests {
         assert!(output_storage_mass(&out(DUST_OUTPUT_MIN, false)) <= BLOCK_STORAGE_LIMIT);
         assert!(output_storage_mass(&out(DUST_OUTPUT_MIN - 4, false)) > BLOCK_STORAGE_LIMIT);
         assert_eq!(output_storage_mass(&out(0, true)), u64::MAX);
+    }
+
+    /// R8F1c-1: a change whose output would put the transaction over the block storage limit is refused, never
+    /// folded into the fee; a change below DUST_OUTPUT_MIN still is (its own storage mass outweighs it).
+    #[test]
+    fn a_large_change_is_never_folded_into_the_fee() {
+        let fee = FeeOptions::default();
+        let sk = [0x41u8; 32];
+        let key = pubkey_of(&sk).unwrap();
+        let spk = p2pk_spk(&[0x22; 32]);
+        // an output whose own storage mass is just under the block limit, as a counterparty's values can make it
+        let near = DUST_OUTPUT_MIN + 100;
+        let build = |total: u64| {
+            let mut d = Draft::new(0, &fee, Some(key)).unwrap();
+            d.add_p2pk(&KeyUtxo {
+                utxo: Utxo { transaction_id: [3; 32], index: 0, amount: total, block_daa_score: 1, covenant_id: None },
+                pubkey: key,
+            });
+            d.add_output(near, spk.clone(), None);
+            d.add_output(98 * 100_000_000, spk.clone(), None);
+            d.seal(&|_: &str| Ok(1))
+        };
+        // one KAS of change does not fit next to it: refused
+        let e = build(near + 99 * 100_000_000).unwrap_err();
+        assert!(matches!(e, Error::ChangeDoesNotFit { change } if change > 99_000_000), "{e}");
+        // a dust change goes to the fee, as before
+        let b = build(near + 98 * 100_000_000 + 1_000_000).unwrap();
+        assert_eq!((b.fee.change_output, b.fee.fee), (None, 1_000_000));
+        // R8F1c-4: the digest a local signature signs is this transaction's, recomputed; a stored one of another is refused
+        let keys: BTreeMap<[u8; 32], [u8; 32]> = [(key, sk)].into_iter().collect();
+        assert_eq!(sign_locally(&b, &keys).unwrap().len(), 1);
+        let mut bad = b.clone();
+        bad.sign[0].sighash[0] ^= 1;
+        assert!(matches!(sign_locally(&bad, &keys), Err(Error::Signature { .. })));
     }
 }

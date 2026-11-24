@@ -11,6 +11,10 @@ pub enum Error {
     /// The inputs cannot pay the outputs plus the minimum fee.
     #[error("insufficient funds: need {need} sompi, have {have} sompi")]
     InsufficientFunds { need: u64, have: u64 },
+    /// The change output would push the transaction over a block mass limit, and the change is too
+    /// large to go to the fee unseen (R8F1c-1). More funding does not help: fill fewer legs.
+    #[error("the change does not fit: {change} sompi of change would put the transaction over a block mass limit (fill fewer legs or orders in one transaction)")]
+    ChangeDoesNotFit { change: u64 },
     /// No compute-budget entry for an input role (regenerate the budget table).
     #[error("no compute budget for input role `{0}`")]
     MissingBudget(String),
