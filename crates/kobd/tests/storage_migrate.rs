@@ -132,7 +132,9 @@ fn table_digests(conn: &Connection) -> Vec<(String, u64, String)> {
             "token_holdings",
             "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings_named h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx".to_string(),
         ),
-        ("counters", "SELECT name, n FROM counters WHERE n != 0 ORDER BY name".to_string()),
+        // the actor counts follow `actors`, which this comparison leaves out: a migration rebuilds it from what the old
+        // store held (a pre-schema-11 store names no executors), and the counts equal the table (`bounds::a_sideless_fill_is_unpriced_and_the_actor_counts_are_kept`)
+        ("counters", "SELECT name, n FROM counters WHERE n != 0 AND name NOT LIKE 'actors:%' ORDER BY name".to_string()),
         (
             "holding_programs",
             "SELECT t.h, p.program, p.n FROM holding_programs p JOIN ids t ON t.id = p.token_id ORDER BY t.h, p.program".to_string(),

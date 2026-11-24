@@ -8,6 +8,13 @@
 //! - show a price a taker can trade at: never better than what the fill gets (an ask's shown price is at least the
 //!   fill's, a bid's at most; a curve's first shown level covers its smallest valid fill at that fill's mean price).
 //!
+//! The oracle is independent of the reader under test (R8C2a-1). For every kind it is the matcher's candidate code (what
+//! an executor builds from); a curve's smallest valid fill is the smallest `n` its `CurveLeg::fill_ok` accepts, and each
+//! shown step must be one. For a sample of the placed curves and plain asks of each run (the first
+//! [`ENGINE_SAMPLE`] of each kind), the fill is also built with the protocol builder as an executor builds it and run
+//! through the script engine against the order's real contract script: a curve's every shown step at the state after the
+//! steps before it (and one unit less must fail: the step is the smallest), an ask's smallest and largest fill.
+//!
 //! `KOB_BOOK_PROPS_CASES` sets the cases per kind (default 1,500) and `KOB_BOOK_PROPS_SEED` the seed; a failure prints
 //! both, the kind, the case and the time.
 
@@ -19,6 +26,71 @@ use crate::testkit::{ask, bid, ifd_ask, ifd_bid, kron, pk, tok_fields, EXT, T3, 
 use kob_protocol::state::{CurveAskState, IfdPairState, PairState, SIDE_ASK, SIDE_BID};
 
 const DUST_BELOW: i64 = 50_000_000; // half the default listing minimum (1 KAS)
+/// Placed rows per kind whose fills are also built and run through the script engine (curves and plain asks).
+const ENGINE_SAMPLE: usize = 60;
+
+/// Fills the builder refuses for KIP-9's storage mass (or a dust payout) that the matcher's per-output rule admits: an
+/// open finding of the matcher's quantity rules (`candidate::kip9_limits` bounds each output alone, the block limit binds
+/// their sum), counted and reported, not failed here. The first one, for the report.
+static MASS_REFUSED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static MASS_EXAMPLE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Whether an engine or builder refusal is the storage-mass class of [`MASS_REFUSED`]; counts it.
+fn mass_refusal(e: &str, what: &str) -> bool {
+    let mass = e.contains("storage mass") || e.contains("dust payout");
+    if mass {
+        MASS_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut x) = MASS_EXAMPLE.lock() {
+            x.get_or_insert_with(|| format!("{what}: {e}"));
+        }
+    }
+    mass
+}
+
+/// Builds a fill of `leg` as an executor would (one batch, the operator's funding and change), signs it, and runs it
+/// through the script engine against the order's contract script. `Err` when the builder refuses or the engine rejects.
+fn engine_fill(leg: kob_protocol::build::Leg, lock_time: i64, need: i128) -> Result<(), String> {
+    use kob_protocol::build::{Action, Batch};
+    use kob_protocol::tx::{finalize, sign_locally, FinalizeOptions, KeyUtxo, Utxo};
+    let fund = need.saturating_add(100 * 100_000_000);
+    let fund = u64::try_from(fund).map_err(|_| "unfundable".to_string())?;
+    let b = Batch {
+        lock_time: lock_time.max(0) as u64,
+        legs: vec![leg],
+        updates: vec![],
+        taker_tokens: vec![],
+        taker: None,
+        taker_token_carrier: crate::matcher::engine::EngineConfig::default().token_carrier,
+        keep_surplus: vec![],
+        keep_carrier: None,
+        receivers: vec![],
+        payments: vec![],
+        funding: vec![KeyUtxo {
+            utxo: Utxo { transaction_id: [0x5f; 32], index: 0, amount: fund, block_daa_score: 1, covenant_id: None },
+            pubkey: pk(5),
+        }],
+        change: Some(pk(5)),
+        records: vec![],
+        fee: Default::default(),
+    };
+    let built = kob_protocol::build::build(&Action::Batch(b)).map_err(|e| format!("builder: {e}"))?;
+    let sigs = sign_locally(&built, &crate::testkit::keys()).map_err(|e| format!("sign: {e}"))?;
+    let signed = finalize(&built, &sigs, FinalizeOptions::default()).map_err(|e| format!("finalize: {e}"))?;
+    kob_protocol::verify::validate_signed(&signed).map(|_| ()).map_err(|e| format!("engine: {e}"))
+}
+
+/// A curve leg taking `n` from `o` (the order as the matcher lists it at state `st`).
+fn curve_leg(o: &crate::matcher::book::ListedOrder, st: &CurveAskState, n: i64) -> Option<kob_protocol::build::Leg> {
+    let order = kob_protocol::tx::OrderUtxo { utxo: o.order.utxo.clone(), state: st.clone() };
+    Some(kob_protocol::build::Leg::CurveAsk { order, custody: o.custody.clone()?, amount: n })
+}
+
+/// The smallest `n` the matcher's curve rule accepts (`CurveLeg::fill_ok`), found from the rule itself: `None` when
+/// none does.
+fn smallest_ok(leg: &crate::matcher::candidate::CurveLeg) -> Option<i64> {
+    let r = &leg.rules;
+    [r.min_fill.max(1), r.rest_from].into_iter().filter(|n| leg.fill_ok(*n)).min()
+}
 const A: [u8; 32] = [0x21; 32];
 const B: [u8; 32] = [0x22; 32];
 
@@ -130,12 +202,21 @@ fn insert(c: &Connection, k: u32, d: &Drawn, udaa: i64) -> i64 {
     } else {
         s.custody_amount().filter(|a| *a > 0).map(|a| (s.token_cov_id(), a)).into_iter().collect()
     };
+    // the custody's KAS: mostly a usual carrier, else around the covenant output minimum (R8C2a-3)
+    let floor = crate::matcher::candidate::COV_OUTPUT_MIN;
+    let cust_value = match k % 6 {
+        0 => floor,
+        1 => floor - 1,
+        2 => floor + 1,
+        // the default order carrier (1 KAS), as an honest builder sets it
+        _ => 100_000_000,
+    };
     for (j, (token, amount)) in custodies.into_iter().filter(|c| c.1 != 0).enumerate() {
         let amount = if d.exact { amount } else { amount.saturating_add(1) };
         c.execute(
             "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 10000000, 'custody', 1, ?6)",
-            rusqlite::params![utxo.to_vec(), j as i64 + 1, intern(c, &token).unwrap(), id, amount, udaa],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?7, 'custody', 1, ?6)",
+            rusqlite::params![utxo.to_vec(), j as i64 + 1, intern(c, &token).unwrap(), id, amount, udaa, cust_value],
         )
         .unwrap();
     }
@@ -187,8 +268,17 @@ fn draw_bid(r: &mut Rng) -> Drawn {
         expiry_daa: if r.chance(2) { 1_000 + r.log(1, 100_000_000) } else { crate::testkit::EXPIRY },
         ..bid(7, price)
     };
+    let mode = r.range(0, 2);
+    let s = match mode {
+        1 => kob_protocol::state::BidState { mode: 1, ..s },
+        2 => {
+            kob_protocol::state::BidState { mode: 2, recv_threshold: r.log(1, 1_000_000_000_000), topup_tip: r.log(0, 1_000_000), ..s }
+        }
+        _ => s,
+    };
     let state = AnyState::KobBid(s);
-    Drawn { state: if r.chance(2) { kron(state) } else { state }, value: r.log(100_000, 10_000_000_000_000), exact: true }
+    // a KRON delivery is mode 0 only
+    Drawn { state: if mode == 0 && r.chance(2) { kron(state) } else { state }, value: r.log(100_000, 10_000_000_000_000), exact: true }
 }
 
 fn draw_curve(r: &mut Rng) -> Drawn {
@@ -211,7 +301,11 @@ fn draw_curve(r: &mut Rng) -> Drawn {
         tpl_suffix_len: s,
         scale: crate::testkit::SCALE,
         min_fill: if r.chance(2) { 1 } else { r.log(1, amount_left) },
-        tip: if r.chance(2) { 0 } else { r.log(0, *table.iter().min().unwrap()) },
+        tip: match r.range(0, 4) {
+            0 | 1 => 0,
+            2 => r.log(0, *table.iter().min().unwrap()),
+            _ => r.log(0, *table.iter().max().unwrap()),
+        },
         active_from: if r.chance(4) { r.log(0, 2_000) } else { 0 },
         level_size,
         total,
@@ -237,6 +331,8 @@ fn draw_ifd_bid(r: &mut Rng) -> Drawn {
         delivery_carrier: r.log(0, 1_000_000_000),
         exit_carrier: r.log(0, 1_000_000_000),
         expiry_daa: if r.chance(2) { 1_000 + r.log(1, 100_000_000) } else { crate::testkit::EXPIRY },
+        active_from: if r.chance(4) { r.log(0, 2_000) } else { 0 },
+        rpt_amount: if r.chance(4) { r.log(2, amount.saturating_mul(4).max(2)) } else { 0 },
         ..ifd_bid(7, 10)
     };
     // the escrow from nothing to more than enough, around what the protocol computes
@@ -265,6 +361,8 @@ fn draw_ifd_ask(r: &mut Rng) -> Drawn {
         prefund: r.log(0, 10_000_000_000),
         exit_carrier: r.log(0, 1_000_000_000),
         expiry_daa: if r.chance(2) { 1_000 + r.log(1, 100_000_000) } else { crate::testkit::EXPIRY },
+        active_from: if r.chance(4) { r.log(0, 2_000) } else { 0 },
+        rpt_amount: if r.chance(4) { r.log(2, amount.saturating_mul(4).max(2)) } else { 0 },
         ..ifd_ask(7)
     };
     let state = AnyState::KobIfdAsk(s);
@@ -328,6 +426,8 @@ fn draw_pair(r: &mut Rng) -> Drawn {
         expiry_daa: 1_000 + r.log(1, 100_000_000),
         delivery_carrier: r.log(0, 1_000_000_000),
         custody: 0,
+        s_scale: [1, 10, 1_000, 100_000_000][r.range(0, 3) as usize],
+        t_scale: [1, 10, 1_000, 100_000_000][r.range(0, 3) as usize],
         ..pair_base()
     };
     // an ask holds its amount of A; a bid holds B, from nothing to more than enough
@@ -361,7 +461,7 @@ fn draw_ifd_pair(r: &mut Rng) -> Drawn {
         b_ext: EXT,
         price,
         tip: 0,
-        active_from: 0,
+        active_from: if r.chance(4) { r.log(0, 2_000) } else { 0 },
         expiry_daa: 1_000 + r.log(1, 100_000_000),
         refund_tip: crate::testkit::rtip(T3),
         min_fill: r.log(1, amount),
@@ -444,26 +544,47 @@ fn check_curve_sequence(
     cv: &CurveAskState,
     shown: &[(Option<usize>, i64, Option<i64>)],
     cx: &CandCtx,
+    engine: bool,
     fail: &mut dyn FnMut(&str),
-) {
-    let mut taken = 0i64;
+) -> usize {
+    let (mut taken, mut built) = (0i64, 0usize);
     for (k, (_, price, amount)) in shown.iter().enumerate() {
         let amount = amount.unwrap_or(0);
         let (o, st) = curve_after(lo, cv, taken);
         let cands = candidates_of(&[&o], cx);
         let Some(leg) = cands.first().and_then(|c| c.curve.as_ref()) else {
             fail(&format!("curve level {k} ({amount} at {price}) is shown, but no fill can be built after {taken} taken"));
-            return;
+            return built;
         };
-        let m = leg.rules.min_fill.max(1).min(st.amount_left);
+        let Some(m) = smallest_ok(leg) else {
+            fail(&format!("curve level {k} is shown, but the matcher's rule accepts no fill after {taken} taken"));
+            return built;
+        };
         if amount < m {
             fail(&format!("curve level {k} shows {amount} units, the smallest fill then is {m}"));
-            return;
+            return built;
+        }
+        if engine {
+            let need = i128::from(st.proceeds(m).unwrap_or(0));
+            match curve_leg(&o, &st, m).map(|l| engine_fill(l, cx.t, need)) {
+                Some(Ok(())) => built += 1,
+                Some(Err(e)) if e != "unfundable" && !mass_refusal(&e, &format!("curve fill of {m} after {taken}")) => {
+                    fail(&format!("curve level {k}: its smallest fill {m} after {taken} taken fails: {e}"));
+                    return built;
+                }
+                _ => {}
+            }
+            if m > 1 && m <= st.amount_left {
+                if let Some(Ok(())) = curve_leg(&o, &st, m - 1).map(|l| engine_fill(l, cx.t, need)) {
+                    fail(&format!("curve level {k}: a fill of {} after {taken} taken passes the engine, smaller than {m}", m - 1));
+                    return built;
+                }
+            }
         }
         if let Some(mean) = crate::model::curve_fill_price(&st, m) {
             if mean > *price {
                 fail(&format!("curve level {k} shows price {price}, its smallest fill then trades at {mean}"));
-                return;
+                return built;
             }
         }
         taken += amount;
@@ -474,6 +595,7 @@ fn check_curve_sequence(
             fail(&format!("curve shows {taken} of {} units, but a fill can still be built after them", cv.amount_left));
         }
     }
+    built
 }
 
 /// A state's debug form without its hashes and keys, to keep a failure readable.
@@ -517,6 +639,8 @@ fn the_book_rule_holds_for_every_kind_at_every_time_of_its_window() {
         let conn = open_memory("testnet-10").unwrap();
         let mut r = Rng(seed ^ (kind.len() as u64).wrapping_mul(0x1000_0001));
         let (mut sane, mut placed, mut checks) = (0usize, 0usize, 0usize);
+        let (mut engine_rows, mut engine_fills) = (0usize, 0usize);
+        let (mut hidden, mut later) = (0usize, 0usize);
         let mut insane: Option<String> = None;
         for case in 0..cases {
             let d = gen(&mut r);
@@ -536,16 +660,43 @@ fn the_book_rule_holds_for_every_kind_at_every_time_of_its_window() {
             };
             let Some(w) = w else { continue };
             let in_book: bool = conn.query_row("SELECT in_book FROM orders WHERE id = ?1", [id], |r| r.get(0)).unwrap();
-            let open = (pair || in_book) && w.ok && w.open_from <= commit && commit < w.closed_from && (pair || !w.dust);
+            // placed now, or later: a row that opens after the commit (`open_from`) is checked from then on (R8C2a-3)
+            let open = (pair || in_book) && w.ok && w.open_from < w.closed_from && commit < w.closed_from && (pair || !w.dust);
+            // a row hidden as dust is worth less than the dust line at one end of its window at least: hidden rows are
+            // really unusable, not merely unlisted (R8C2a-3, the other direction)
+            if (in_book && !pair) && w.ok && w.dust && w.open_from < w.closed_from && commit < w.closed_from {
+                if let Some(lo) = super::super::book::listed_order_of(&conn, id).unwrap() {
+                    let first = commit.max(w.open_from).max(udaa);
+                    let last = w.closed_from.saturating_sub(1).max(first);
+                    let least =
+                        [first, last].map(|t| crate::indexer::takeable::kas_offer(&lo, t).value).into_iter().min().unwrap_or(0);
+                    hidden += 1;
+                    if least >= DUST_BELOW as i128 {
+                        failures.push(format!(
+                            "{kind} seed {seed} case {case}: hidden as dust, but one fill is worth {least} sompi at both ends of its window; {}",
+                            short(&format!("{:?}", d.state))
+                        ));
+                    }
+                }
+            }
             if !open {
                 continue;
             }
             placed += 1;
+            if w.open_from > commit {
+                later += 1;
+            }
             let Some(lo) = super::super::book::listed_order_of(&conn, id).unwrap() else {
                 failures.push(format!("{kind} seed {seed} case {case}: placed but not a listed order the matcher reads"));
                 continue;
             };
             let last = w.closed_from.saturating_sub(1).min(commit.saturating_add(100_000_000));
+            // the sample run through the script engine: the first placed curves and plain (KCC-20) asks, at their first time
+            let engine_kind = matches!(d.state, AnyState::KobCurveAsk(_) | AnyState::KobAsk(_));
+            let mut engine = engine_kind && engine_rows < ENGINE_SAMPLE;
+            if engine {
+                engine_rows += 1;
+            }
             for t in times(&mut r, commit.max(w.open_from).max(udaa), last.max(commit)) {
                 checks += 1;
                 let at = |what: &str| {
@@ -582,11 +733,17 @@ fn the_book_rule_holds_for_every_kind_at_every_time_of_its_window() {
                 let total: i64 = shown.iter().map(|l| l.2.unwrap_or(0)).sum();
                 let (ex, by) = (std::collections::BTreeSet::new(), std::collections::BTreeMap::new());
                 let cx = CandCtx { t, utc: 0, excluded: &ex, by_id: &by, unaccepted: &ex, pair_ticks: None };
+                if let (AnyState::KobCurveAsk(cv), Some(first), Some(key)) = (&d.state, shown.first(), w.key) {
+                    // the key is per base unit, the level per whole token
+                    if (key * cv.scale as f64 - first.1 as f64).abs() > 1e-6 * (first.1 as f64).abs().max(1.0) {
+                        failures.push(at(&format!("ranked at {key}, its first level shows {}", first.1)));
+                    }
+                }
                 if let AnyState::KobCurveAsk(cv) = &d.state {
                     // a curve's depth is the sequence of its successive smallest fills: each shown level is a fill the
                     // matcher builds once the levels before it are taken, at the shown price or better for the taker, and
                     // when they are all taken the matcher builds none (nothing obtainable in sequence is missing)
-                    check_curve_sequence(&lo, cv, &shown, &cx, &mut |w| failures.push(at(w)));
+                    engine_fills += check_curve_sequence(&lo, cv, &shown, &cx, engine, &mut |w| failures.push(at(w)));
                 } else if total > off.amount {
                     failures.push(at(&format!("shows {total} base units, one fill takes {}", off.amount)));
                 }
@@ -596,7 +753,7 @@ fn the_book_rule_holds_for_every_kind_at_every_time_of_its_window() {
                     let fill_price = match (&d.state, &c0.curve) {
                         // a curve's smallest valid fill is its minimum fill, at the mean of its levels
                         (AnyState::KobCurveAsk(cv), Some(leg)) => {
-                            let m = leg.rules.min_fill.max(1);
+                            let m = smallest_ok(leg).unwrap_or(cv.amount_left);
                             if first.2.unwrap_or(0) < m.min(cv.amount_left) {
                                 failures.push(at(&format!("first level shows {:?} units, the smallest fill is {m}", first.2)));
                             }
@@ -611,16 +768,31 @@ fn the_book_rule_holds_for_every_kind_at_every_time_of_its_window() {
                             }
                         }
                     };
+                    // a plain ask's shown amount, built and run through the engine (its `take_min` is not a claim of the book)
+                    if let (true, AnyState::KobAsk(a), Some(custody)) = (engine, &d.state, lo.custody.as_ref()) {
+                        let order = kob_protocol::tx::OrderUtxo { utxo: lo.order.utxo.clone(), state: a.clone() };
+                        let n = off.amount;
+                        let need = i128::from(n) * i128::from(a.price.saturating_add(a.tip)) / i128::from(a.scale.max(1));
+                        let leg = kob_protocol::build::Leg::Ask { order, custody: custody.clone(), amount: n, t: None };
+                        match engine_fill(leg, t, need.saturating_add(i128::from(off.value.max(0) as i64))) {
+                            Ok(()) => engine_fills += 1,
+                            Err(e) if e == "unfundable" || mass_refusal(&e, &format!("ask fill of {n}")) => {}
+                            Err(e) => failures.push(at(&format!("a fill of {n} (shown: {:?}) fails: {e}", first.2))),
+                        }
+                    }
                     if let Some(fp) = fill_price {
                         if (ask_side && first.1 < fp) || (!ask_side && first.1 > fp) {
                             failures.push(at(&format!("shows price {}, the fill trades at {fp}", first.1)));
                         }
                     }
                 }
+                engine = false;
             }
         }
         eprintln!(
-            "book rule property: {kind}: {cases} drawn, {sane} sane, {placed} placed, {checks} checks; first refused: {insane:?}"
+            "book rule property: {kind}: {cases} drawn, {sane} sane, {placed} placed ({later} opening after the commit), {hidden} \
+             hidden as dust, {checks} checks, {engine_rows} rows and {engine_fills} fills through the script engine; first refused: \
+             {insane:?}"
         );
         if sane * 4 < cases {
             failures.push(format!("{kind}: the generator draws too few sane orders ({sane} of {cases}), first refused: {insane:?}"));
@@ -630,6 +802,12 @@ fn the_book_rule_holds_for_every_kind_at_every_time_of_its_window() {
         }
     }
     eprintln!("book rule property: {:?} in all", started.elapsed());
+    eprintln!(
+        "book rule property: {} fills the matcher's rule admits were refused for KIP-9's storage mass by the builder (open, \
+         not failed); first: {:?}",
+        MASS_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
+        MASS_EXAMPLE.lock().ok().and_then(|x| x.clone())
+    );
     if !failures.is_empty() {
         // the first case of each kind and kind of violation
         let mut seen: std::collections::BTreeMap<String, (usize, String)> = Default::default();
@@ -643,4 +821,52 @@ fn the_book_rule_holds_for_every_kind_at_every_time_of_its_window() {
         let report: Vec<String> = seen.into_iter().map(|(k, (n, f))| format!("{n} x {k}\n    e.g. {f}")).collect();
         panic!("{} violations of the book rule:\n{}", failures.len(), report.join("\n"));
     }
+}
+
+/// R8C2a-2, the hand case: a curve whose 8-level window could run past its table's end (more units than the table
+/// holds) or reach a level below its tip is refused by the protocol's numeric gate (`CurveAskState::check_numbers`:
+/// `total <= nLevels · levelSize`, every price above the tip), so it is never listed, planned or shown, and a listed
+/// curve's walk never meets a missing level or one below its tip. Of 10 levels of 1,000 units, 2 units more than the
+/// table holds; and the same curve with its tip above its fourth level.
+#[test]
+fn a_curve_whose_window_passes_its_table_or_its_tip_is_refused_by_the_gate() {
+    let (hh, p, s) = tok_fields(T3);
+    let curve = |total: i64, tip: i64| {
+        AnyState::KobCurveAsk(CurveAskState {
+            maker: pk(7),
+            token_cov_id: TOKEN_COV,
+            token_tpl_hash: hh,
+            tpl_prefix_len: p,
+            tpl_suffix_len: s,
+            scale: crate::testkit::SCALE,
+            // a whole level: its payout (10 KAS) clears KIP-9's storage mass with the other outputs
+            min_fill: 1_000,
+            tip,
+            active_from: 0,
+            level_size: 1_000,
+            total,
+            amount_left: total,
+            extension_commitment: EXT,
+            table: (0..10).map(|k| 1_000_000_000 + k * 10_000_000).collect(),
+        })
+    };
+    assert!(crate::sanity::check(&curve(10_000, 0)).is_ok(), "the curve that its table holds is sane");
+    assert!(crate::sanity::check(&curve(10_002, 0)).is_err(), "more units than the table holds");
+    assert!(crate::sanity::check(&curve(10_000, 1_035_000_000)).is_err(), "a level below the tip");
+    // and the sane one shows every level, each a fill the matcher builds and the script engine accepts
+    let conn = open_memory("testnet-10").unwrap();
+    let d = Drawn { state: curve(10_000, 0), value: 1_000_000_000, exact: true };
+    let id = insert(&conn, 3, &d, 10); // case 3: a custody of the usual 0.1 KAS
+    let w = book_window(&conn, id, DUST_BELOW, 10).unwrap().expect("a decided row");
+    assert!(w.ok && !w.dust, "placed");
+    let lo = super::super::book::listed_order_of(&conn, id).unwrap().unwrap();
+    let AnyState::KobCurveAsk(cv) = &d.state else { unreachable!() };
+    let shown = shown_levels(&d.state, 10, 1_000_000_000, Some(cv.amount_left), &w, 10);
+    let (ex, by) = (std::collections::BTreeSet::new(), std::collections::BTreeMap::new());
+    let cx = CandCtx { t: 10, utc: 0, excluded: &ex, by_id: &by, unaccepted: &ex, pair_ticks: None };
+    let mut fails = vec![];
+    let built = check_curve_sequence(&lo, cv, &shown, &cx, true, &mut |f| fails.push(f.to_string()));
+    assert!(fails.is_empty(), "{fails:?}; shown {shown:?}");
+    assert_eq!(shown.len(), 10, "every level: {shown:?}");
+    assert_eq!(built, 10, "each shown step passes the script engine: {:?}", MASS_EXAMPLE.lock().ok().and_then(|x| x.clone()));
 }

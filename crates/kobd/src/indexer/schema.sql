@@ -86,6 +86,10 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS orders_book ON orders (token_id, side, price);
 -- a maker's orders newest first (`GET /v1/orders?maker=`, keyset paged): read in index order, one page per request
 CREATE INDEX IF NOT EXISTS orders_maker_genesis ON orders (maker_id, genesis_block, covenant_id);
+-- a maker's orders of one token newest first, as base and as quote (`GET /v1/orders?maker=&token=`, R8C2b-1): with only one of the
+-- two in an index, a status read in history order walks every row of that one filter to find rows of both
+CREATE INDEX IF NOT EXISTS orders_maker_token_genesis ON orders (maker_id, token_id, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS orders_maker_quote_genesis ON orders (maker_id, quote_id, genesis_block, covenant_id) WHERE quote_id IS NOT NULL;
 -- every order newest first (`GET /v1/orders` with no filter, keyset paged): the index is the whole sort order, so a page is read
 -- in order and stops at its end, however many orders share a genesis block
 CREATE INDEX IF NOT EXISTS orders_genesis_page ON orders (genesis_block, covenant_id);

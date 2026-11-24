@@ -20,7 +20,8 @@
 //! - `/v1/pairs?token=`, `/v1/pairs/{base}/{quote}/book?depth=` (pair orders and the implied
 //!   KAS-route quotes), `/v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=` (derived
 //!   from the two KAS series), `/v1/pairs/{base}/{quote}/fills?limit=&before=` (pair-order
-//!   fills: volume and counterparty, never a price)
+//!   fills: volume and counterparty, never a price), `/v1/pairs/{base}/{quote}/orders?limit=&cursor=` (the live orders
+//!   of the pair, newest first)
 //! - `/v1/orders?maker=&token=&status=&limit=&cursor=`, `/v1/orders/{covenant_id}`,
 //!   `/v1/orders/{covenant_id}/events`
 //! - `/v1/fills?token=&side=&limit=&before=`
@@ -143,11 +144,14 @@ impl App {
     pub(crate) fn ctx(&self) -> ReadCtx {
         // The present of every public read: the store's verified cursor advanced by the wall clock, never the node's claim.
         let snap = self.state.health.snapshot();
+        // the present of the whole second (R8C2b-6): the S-cached keys carry it, so honest readers of a key share one
+        // computation a second, as when it was the node's 2 s refresh
         let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let now_ms = now_ms - now_ms % 1_000;
         ReadCtx {
             node_daa: crate::indexer::reads::present_daa(snap.cursor_daa, snap.cursor_time_unix_ms, self.state.daa_per_second, now_ms),
             settle_depth_daa: self.state.settle_depth_daa,
-            now_unix: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()),
+            now_unix: (now_ms > 0).then_some(now_ms / 1_000),
         }
     }
 }
@@ -292,6 +296,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/pairs/{base}/{quote}/book", get(rest::pair_book))
         .route("/v1/pairs/{base}/{quote}/candles", get(rest::pair_candles))
         .route("/v1/pairs/{base}/{quote}/fills", get(rest::pair_fills))
+        .route("/v1/pairs/{base}/{quote}/orders", get(rest::pair_orders))
         .route("/v1/orders", get(rest::orders))
         .route("/v1/orders/{covenant_id}", get(rest::order))
         .route("/v1/orders/{covenant_id}/events", get(rest::order_events))

@@ -263,17 +263,27 @@ pub(crate) const FILL_SELECT: &str =
 /// A fill of a maker with a fill on the other side of the same transaction is skipped, as
 /// [`trade_of`] drops it: otherwise a run of such crosses, one a block, used up the look-back of
 /// [`last_trade_before`] and hid the last price (C2-L1). The other fills of the transaction share
-/// its token and block time, so the check is one seek of `order_events_fill_ts`.
+/// its token, block time and txid, so the check is one seek of `order_events_priced_tx (token_id, txid)` (R8C2b-3).
 const NEWEST_PRICED: &str =
     // At most `NEWEST_PRICED_ROWS` priced fills are looked at (R7C2b-1): a run of one maker's crosses longer than that
     // ends the look-back, as the caps of the other fill reads do.
-    "SELECT n.ts FROM (SELECT e.ts, e.txid, e.side, e.token_id, o.maker_id FROM order_events e JOIN orders o ON o.id = e.order_id \
+    "SELECT n.ts FROM (SELECT e.ts, e.txid, e.side, e.token_id, o.maker_id FROM order_events e INDEXED BY order_events_priced_ts \
+     JOIN orders o ON o.id = e.order_id \
      WHERE e.kind = 'fill' AND e.priced = 1 AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.ts < ?2 \
      ORDER BY e.ts DESC LIMIT 2000) n \
-     WHERE NOT EXISTS (SELECT 1 FROM order_events e2 JOIN orders o2 ON o2.id = e2.order_id \
+     WHERE NOT EXISTS (SELECT 1 FROM order_events e2 INDEXED BY order_events_priced_tx JOIN orders o2 ON o2.id = e2.order_id \
        WHERE e2.kind = 'fill' AND e2.priced = 1 AND e2.token_id = n.token_id AND e2.ts = n.ts AND e2.txid = n.txid AND e2.side = 3 - n.side \
        AND o2.maker_id = n.maker_id) \
      ORDER BY n.ts DESC LIMIT 1";
+
+/// [`FILL_SELECT`] read through the priced fills' time index, for a time window: the planner, left to choose among the
+/// fill indexes, could take `order_events_fill_ts` (every fill of the token, self-takes and pair fills too).
+fn fill_select_by_time() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| {
+        FILL_SELECT.replacen("FROM order_events e JOIN", "FROM order_events e INDEXED BY order_events_priced_ts JOIN", 1)
+    })
+}
 
 /// The priced fills [`NEWEST_PRICED`] looks at, at most.
 pub const NEWEST_PRICED_ROWS: usize = 2_000;
@@ -344,7 +354,7 @@ pub(crate) fn for_each_trade(
     to: i64,
     mut f: impl FnMut(Trade) -> DbResult<()>,
 ) -> DbResult<()> {
-    let sql = format!("{FILL_SELECT} AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts, e.id");
+    let sql = format!("{} AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts, e.id", fill_select_by_time());
     let mut st = conn.prepare(&sql)?;
     let mut rows = st.query(params![token.0.to_vec(), from, to])?;
     // The fills of one transaction share its block time and are stored together, so they arrive
@@ -457,7 +467,7 @@ fn scan_candles_capped(
 /// It returns at most `cap` rows, the NEWEST ones, oldest first. The `(kind, token_cov_id, ts)`
 /// index serves it.
 fn fills_between(conn: &Connection, token: &Hash32, from: i64, to: i64, cap: usize) -> DbResult<(Vec<FillRow>, bool)> {
-    let sql = format!("{FILL_SELECT} AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts DESC, e.id DESC LIMIT ?4");
+    let sql = format!("{} AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts DESC, e.id DESC LIMIT ?4", fill_select_by_time());
     let mut st = conn.prepare(&sql)?;
     let mut v = st.query_map(params![token.0.to_vec(), from, to, cap as i64 + 1], fill_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     let truncated = v.len() > cap;
@@ -483,12 +493,13 @@ fn window_trades(conn: &Connection, token: &Hash32, from: i64, to: i64, basis: i
     Ok((ts, truncated))
 }
 
-/// The newest fill time of the token in ms, if any.
+/// The newest time in ms of a fill of the token that makes a price (the fills a chart shows), if any.
 fn newest_fill_ts(conn: &Connection, token: &Hash32) -> DbResult<Option<i64>> {
     Ok(conn.query_row(
-        // `price IS NOT NULL` leaves out the fill of a pair order, which has no KAS price and is
-        // not a KAS trade of its token.
-        "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1) AND price IS NOT NULL",
+        // one seek of the priced fills' time index (R8C2b-5): a pair order's fill (no KAS price) and a maker's own take are
+        // not in it, so no run of them is walked
+        "SELECT MAX(ts) FROM order_events INDEXED BY order_events_priced_ts WHERE kind = 'fill' AND priced = 1 \
+         AND token_id = (SELECT id FROM ids WHERE h = ?1)",
         params![token.0.to_vec()],
         |r| r.get::<_, Option<i64>>(0),
     )?)
@@ -497,6 +508,18 @@ fn newest_fill_ts(conn: &Connection, token: &Hash32) -> DbResult<Option<i64>> {
 /// The time of the newest fill of `token` before `before` (ms) that makes a price (`priced_fill!`).
 fn newest_priced_ts(conn: &Connection, token: &Hash32, before: i64) -> DbResult<Option<i64>> {
     Ok(conn.prepare_cached(NEWEST_PRICED)?.query_row(params![token.0.to_vec(), before], |r| r.get(0)).optional()?)
+}
+
+/// [`newest_priced_ts`] for the bound tests.
+#[cfg(test)]
+pub(crate) fn last_trade_before_for_tests(conn: &Connection, token: &Hash32, before: i64) -> Option<i64> {
+    newest_priced_ts(conn, token, before).unwrap()
+}
+
+/// [`newest_fill_ts`] for the bound tests.
+#[cfg(test)]
+pub(crate) fn newest_fill_ts_for_tests(conn: &Connection, token: &Hash32) -> Option<i64> {
+    newest_fill_ts(conn, token).unwrap()
 }
 
 /// The newest KAS trade time of the token in ms, if any.

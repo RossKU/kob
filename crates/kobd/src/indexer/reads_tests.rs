@@ -454,8 +454,8 @@ fn the_open_token_list_reads_the_rows_the_union_did() {
                 .unwrap()
                 .collect::<rusqlite::Result<_>>()
                 .unwrap();
-            let got = open_token_rows(&conn, max).unwrap();
-            let all = open_token_rows(&conn, 5_000).unwrap();
+            let got = open_token_rows(&conn, max).unwrap().0;
+            let all = open_token_rows(&conn, 5_000).unwrap().0;
             if max.saturating_mul(4) >= all.len() {
                 // The scan reads every row: exactly the rows the union read.
                 assert_eq!(got, want, "seed {seed} max {max}");
@@ -468,7 +468,7 @@ fn the_open_token_list_reads_the_rows_the_union_did() {
                 assert!(got.iter().all(|r| all.contains(r)), "seed {seed} max {max}: a row the union does not have");
             }
         }
-        assert!(open_token_rows(&conn, 5_000).unwrap().len() > 13);
+        assert!(open_token_rows(&conn, 5_000).unwrap().0.len() > 13);
     }
 }
 

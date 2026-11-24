@@ -345,7 +345,11 @@ pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
 /// `GET /v1/tokens`: the token list.
 pub async fn tokens(State(app): State<Arc<App>>) -> ApiResult {
     let allow = app.state.tokens.clone();
-    cached(&app, "tokens".into(), move |c| Ok(json!({ "tokens": reads::token_list(c, &allow)? }))).await
+    cached(&app, "tokens".into(), move |c| {
+        let (tokens, truncated) = reads::token_list_page(c, &allow)?;
+        Ok(json!({ "tokens": tokens, "truncated": truncated }))
+    })
+    .await
 }
 
 /// `GET /v1/tokens/{covenant_id}/declaration`: the KCC-23 launch proof of the covenant id.
@@ -459,6 +463,26 @@ pub async fn pair_book(State(app): State<Arc<App>>, Path((base, quote)): Path<(S
         .await
 }
 
+/// `GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`: the live orders of the pair, newest first, keyset paged
+/// (`reads::pair_orders`). Each item is the view `GET /v1/orders` gives.
+pub async fn pair_orders(State(app): State<Arc<App>>, Path((base, quote)): Path<(String, String)>, Query(q): Params) -> ApiResult {
+    let (base, quote) = pair_path(&base, &quote)?;
+    let cursor = match q.get("cursor") {
+        None => None,
+        Some(s) => Some(reads::parse_order_cursor(s).ok_or_else(|| ApiError::bad_request("invalid cursor"))?),
+    };
+    let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
+    let ctx = app.ctx();
+    let key = format!("pair-orders {base} {quote} {cursor:?} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    let tokens = app.state.tokens.clone();
+    cached(&app, key, move |c| {
+        let mut v = reads::pair_orders(c, &ctx, &base, &quote, n, cursor)?;
+        v.items = v.items.into_iter().map(|o| o.with_warnings(|t| tokens.warnings_for(t))).collect();
+        Ok(v)
+    })
+    .await
+}
+
 fn pair_path(base: &str, quote: &str) -> Result<(Hash32, Hash32), ApiError> {
     let base = parse_hash("base", base)?;
     let quote = parse_hash("quote", quote)?;
@@ -522,6 +546,27 @@ pub async fn pair_fills(State(app): State<Arc<App>>, Path((base, quote)): Path<(
     json_ok(v)
 }
 
+/// Whether a read error is a fault of the store itself (I/O, corruption, a full disk, memory, permissions), not of the
+/// row it read.
+fn storage_fault(e: &crate::indexer::db::DbError) -> bool {
+    use rusqlite::ErrorCode as C;
+    match e {
+        crate::indexer::db::DbError::Io(_) => true,
+        crate::indexer::db::DbError::Sqlite(rusqlite::Error::SqliteFailure(f, _)) => matches!(
+            f.code,
+            C::SystemIoFailure
+                | C::DatabaseCorrupt
+                | C::NotADatabase
+                | C::DiskFull
+                | C::CannotOpen
+                | C::OutOfMemory
+                | C::PermissionDenied
+                | C::ReadOnly
+        ),
+        _ => false,
+    }
+}
+
 /// `GET /v1/orders/{covenant_id}`: one order.
 pub async fn order(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_hash("covenant_id", &id)?;
@@ -536,6 +581,14 @@ pub async fn order(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiRe
             if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
         {
             return Err(crate::indexer::db::DbError::Sqlite(rusqlite::Error::SqliteFailure(f, m)).into())
+        }
+        // a fault of the store (I/O, corruption, a full disk, memory) is not a fact about the order: 503, so a client
+        // never takes an honest order for unknown while the host has trouble (R8C2b-I3)
+        Err(e) if storage_fault(&e) => {
+            tracing::error!("api: the order view of {id} met a storage fault: {e}");
+            let mut a = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "storage", "the store could not be read, retry shortly");
+            a.retry_after = Some(1);
+            return Err(a);
         }
         Err(e) => {
             tracing::warn!("api: the order view of {id} cannot be rendered, answered as not found: {e}");
