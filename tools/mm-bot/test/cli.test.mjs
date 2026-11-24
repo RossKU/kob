@@ -185,6 +185,20 @@ test('mainnet without quotes.askPartialFills: check, run and once refuse, naming
   assert.equal(run('check', cfgFile({ network: 'testnet-10' })).status, 0, 'testnet-10: partial fills by default');
 });
 
+// R7T-I2: the timers and switches the config left unchecked are checked like the rest.
+test('config: orderVisibleTimeoutSec, backoff, stable age, cross-check and the CLI switches are validated (R7T-I2)', async () => {
+  const { DEFAULTS, validate } = await import('../src/config.mjs');
+  const ok = { ...JSON.parse(JSON.stringify(DEFAULTS)), network: 'testnet-10', token: { ...DEFAULTS.token, covenantId: TOKEN, decimals: 6 } };
+  assert.deepEqual(validate(ok), []);
+  const bad = (f) => { const c = JSON.parse(JSON.stringify(ok)); f(c); return validate(c).join('; '); };
+  assert.match(bad((c) => { c.safety.orderVisibleTimeoutSec = 0; }), /safety.orderVisibleTimeoutSec/);
+  assert.match(bad((c) => { c.safety.orderVisibleTimeoutSec = 'x'; }), /safety.orderVisibleTimeoutSec/);
+  assert.match(bad((c) => { c.safety.backoffMaxSec = 1; }), /safety.backoffMaxSec/);
+  assert.match(bad((c) => { c.reference.stableMaxAgeSec = 1; }), /reference.stableMaxAgeSec/);
+  assert.match(bad((c) => { c.reference.crossCheck.enabled = 'yes'; }), /crossCheck.enabled/);
+  assert.match(bad((c) => { c.cli.preflight = 1; }), /cli.preflight/);
+});
+
 // R7T-1 (d): the CLI's congestion note is not dropped as noise; it reaches the bot's log.
 test('the CLI note that blocks are contended reaches onNote, and is not taken for an error', async () => {
   const { kob } = fake('ok');
