@@ -74,7 +74,12 @@ struct Node {
 
 impl Node {
     fn new(miner: &Arc<Miner>) -> Arc<Node> {
-        Arc::new(Node { miner: miner.clone(), sink_delay: AtomicU64::new(0), vspc_delay: AtomicU64::new(0), last_start: AtomicU64::new(0) })
+        Arc::new(Node {
+            miner: miner.clone(),
+            sink_delay: AtomicU64::new(0),
+            vspc_delay: AtomicU64::new(0),
+            last_start: AtomicU64::new(0),
+        })
     }
     fn chain(&self) -> &Arc<MockNode> {
         &self.miner.node

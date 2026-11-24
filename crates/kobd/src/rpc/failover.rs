@@ -142,10 +142,6 @@ struct State {
     /// What this source deposed last, until the follower says it was to blame
     /// (`ChainSource::deposal_confirmed`).
     deposed: Option<Deposed>,
-    /// The primary's strikes: deposals soon after it began at the tip, and the last one
-    /// (`resolver::strike` for public nodes).
-    strikes: u32,
-    last_strike: Option<Instant>,
 }
 
 /// A deposal of [`Failover::authority_failing`].
@@ -208,8 +204,6 @@ impl<S: ChainSource> Failover<S> {
             refused: 0,
             last_refusal: None,
             deposed: None,
-            strikes: 0,
-            last_strike: None,
         };
         let inner = Inner {
             tiers: [primary, fallback],
@@ -578,31 +572,16 @@ impl<S: ChainSource> ChainSource for Failover<S> {
         let t = self.active();
         format!("{t} {}", self.inner.tiers[t].authority_node())
     }
-    /// The configured node, deposed for the fallback, held back chain the fallback then served: it
-    /// is probed again only after a hold that doubles with each such deposal
-    /// (`resolver::STRIKE_AWAY` to `STRIKE_AWAY_MAX`, forgiven after `STRIKE_FORGET`). A deposal
-    /// within a tier is that tier's to judge. A halted network confirms nothing, so the configured
-    /// node comes back within the probes once blocks come again.
+    /// A deposal the follower found was to blame. Within a tier it is that tier's to act on (a
+    /// public node is struck there). The configured node is the operator's own: it is never held
+    /// off the probes for it, so a wrong blame cannot keep a trusted setup on the public nodes; it
+    /// comes back after the usual probes.
     fn deposal_confirmed(&self) {
         match self.inner.with(|s| s.deposed.take()) {
             Some(Deposed::Within(t)) => self.inner.tiers[t].deposal_confirmed(),
-            Some(Deposed::Primary) => self.inner.with(|s| {
-                if s.active != 1 {
-                    return;
-                }
-                let now = Instant::now();
-                if s.last_strike.is_some_and(|t| now.saturating_duration_since(t) >= super::resolver::STRIKE_FORGET) {
-                    s.strikes = 0;
-                }
-                s.strikes = s.strikes.saturating_add(1);
-                s.last_strike = Some(now);
-                let hold = super::resolver::STRIKE_AWAY
-                    .saturating_mul(1u32 << (s.strikes - 1).min(10))
-                    .min(super::resolver::STRIKE_AWAY_MAX);
-                s.next_check = s.next_check.max(now + hold);
-                s.probes_ok = 0;
-                tracing::warn!(primary = %self.inner.shown[0], strikes = s.strikes, hold_secs = hold.as_secs(), "node failover: the configured node held back chain the fallback then served; it is probed again only after the hold");
-            }),
+            Some(Deposed::Primary) => {
+                tracing::info!(primary = %self.inner.shown[0], "node failover: the configured node held back chain the fallback then served; it is probed back as usual (a node of the operator's is never held off)")
+            }
             None => {}
         }
     }
