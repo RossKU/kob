@@ -199,6 +199,15 @@ pub const AUTHORITY_LAG_TOLERANCE: Duration = Duration::from_secs(90);
 /// The follower's running time advances by at most this between two of its ticks (one a
 /// second while a step or the pause after it runs). A longer gap is a pause of the follower
 /// itself, which starts the progress rule's period again (module documentation, *Progress*).
+///
+/// No node can stretch a gap that long: every wait on a node is an await, during which the ticks
+/// go on. What the follower's task does without yielding between two ticks is the decode of one
+/// answer, at most `rpc::WINDOW_MAX_BYTES` (256 MiB); the TN10 catch-up measured 48 ms to parse a
+/// 997-block batch of 9,890 transactions (`docs/ops/executor.md`, about 4 ms per MB), so about a
+/// second at the cap. The store's work (a commit with `maintain_live_books`, a reorg or rewind
+/// of the deepest window, lean pruning) runs on the blocking pool through `Follower::blocking`
+/// and is the follower's own: it does not count, and one longer than this starts the period
+/// again. The migrations of a store run at its open, before the loop.
 pub const PAUSE_CAP: Duration = Duration::from_secs(30);
 
 /// An authority that has kept up may spend at most this much of the follower's running time with
