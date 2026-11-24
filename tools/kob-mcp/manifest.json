@@ -170,6 +170,10 @@
       "description": "Cancel an order (plan, then confirm)"
     },
     {
+      "name": "kob_sweep",
+      "description": "Return the strays an order owns to the wallet (plan, then confirm)"
+    },
+    {
       "name": "kob_take",
       "description": "Take a resting order of a named token within a required price bound"
     },
