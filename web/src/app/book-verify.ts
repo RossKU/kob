@@ -65,6 +65,13 @@ export const BOOK_CHECK_ROUNDS = BOOK_CHECK_MAX_ROWS / BOOK_CHECK_PER_SIDE;
 /** The check of one round gets this long. A node that has not answered by then is `unavailable`. */
 export const BOOK_CHECK_TIMEOUT_MS = 5_000;
 /**
+ * An order read of the indexer is given up on (and cancelled) this long after it was asked. Its
+ * own timeout (the client's, 10 s) starts only once it has a place in the page's queue, so a slow
+ * but honest indexer (answers of several seconds) is waited for: a read given up on leaves its
+ * side unread, and the order waits (R6B-L1). This bounds the wait for a place and the retries.
+ */
+export const BOOK_ORDER_READ_TIMEOUT_MS = 20_000;
+/**
  * An order read from the indexer is reused this long while its book row (price, amount, value) is
  * unchanged. A stale one only fails the node check below, so the order leaves the book and never
  * enters it.
@@ -87,6 +94,8 @@ export interface BookVerifyDeps {
   /** Token base units a side must offer in confirmed orders before it counts as verified. */
   depth?: bigint;
   timeoutMs?: number;
+  /** Default BOOK_ORDER_READ_TIMEOUT_MS. */
+  orderTimeoutMs?: number;
 }
 
 /** What an order of the market commits: the token it sells or buys. */
@@ -254,12 +263,12 @@ export type OrderKey = Pick<BookOrderView, 'covenant_id' | 'price' | 'amount_lef
  * of each key whose order read failed or timed out. Rejects only when the node cannot be asked.
  */
 export async function confirmOrders(
-  deps: Pick<BookVerifyDeps, 'kob' | 'node' | 'indexer' | 'toAddress' | 'timeoutMs'>,
+  deps: Pick<BookVerifyDeps, 'kob' | 'node' | 'indexer' | 'toAddress' | 'timeoutMs' | 'orderTimeoutMs'>,
   keys: readonly OrderKey[],
   unread?: Set<number>,
 ): Promise<({ claimed: OrderSnapshot; confirmed: OrderSnapshot | SnapshotError } | null)[]> {
   const ms = deps.timeoutMs ?? BOOK_CHECK_TIMEOUT_MS;
-  const views = await Promise.all(keys.map((k) => readOrder(deps.indexer, k, ms)));
+  const views = await Promise.all(keys.map((k) => readOrder(deps.indexer, k, deps.orderTimeoutMs ?? BOOK_ORDER_READ_TIMEOUT_MS)));
   views.forEach((v, i) => v === undefined && unread?.add(i));
   const claimed = views.map((v, i): OrderSnapshot | null => {
     if (!v || v.covenant_id !== keys[i]!.covenant_id) return null;

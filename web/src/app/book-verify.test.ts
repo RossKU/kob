@@ -192,7 +192,7 @@ describe('verifyBook: the orders of the book must exist on the node as the index
   it('an order read goes first in the indexer queue, and one that times out is cancelled and marks its side unread (R6B-L1)', async () => {
     const w = world();
     const asked: { priority?: string; signal?: AbortSignal }[] = [];
-    const deps: BookVerifyDeps = { ...w.deps, timeoutMs: 30, indexer: { order: (_id, o) => (asked.push(o ?? {}), new Promise(() => undefined)) } };
+    const deps: BookVerifyDeps = { ...w.deps, orderTimeoutMs: 30, indexer: { order: (_id, o) => (asked.push(o ?? {}), new Promise(() => undefined)) } };
     const out = await verifyBook(deps, book([rowOf(w.real)]));
     expect(out.view.asks).toEqual([]);
     expect(out.unread).toEqual(['sell']);
