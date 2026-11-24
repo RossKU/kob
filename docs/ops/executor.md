@@ -3385,7 +3385,13 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   30 minutes (`PERIOD_WALL_GAIN`: the cursor advanced less than 31.5 minutes of chain), fails whoever's time it was: the
   authority is handed over, or with no other node `/v1/health` says `failing` (and no step is given up for it). It
   judges progress, so an honest catch-up on a slow host, which gains on real time however much of the time is kobd's
-  own, passes it (R8C1-L1). A gap of more than 30 s (`PAUSE_CAP`), on
+  own, passes it (R8C1-L1). **The chain's own proving load is no failure of the node** (R9C1-H1): a period in which
+  the lane proofs the node answered rose by at least 48 (what 8 calls in flight answer at the 30 s per-call bound) and
+  no lane-proof call failed or timed out is progress although the cursor waits for them, and every proof fetched is
+  kept across steps, so a step given up resumes where it stopped. A node slower than the per-call bound times its calls
+  out and is judged as before; the 30-minute backstop still applies. The sustained rate of new lanes an index keeps up
+  with is about `8 / (2 × call time)` a second (13 at 0.3 s, 4 at 1 s); a burst of more falls behind (`catching_up`,
+  the true age shown) and recovers at that rate, within the node's pruning depth (30 h). A gap of more than 30 s (`PAUSE_CAP`), on
   the monotonic clock or between it and the wall clock (the process stopped, the host suspended, a step of the wall
   clock), starts the period again from the lag at that moment, the backstop's clock too; a database task that took that
   long (a disk that hung) starts the period again but not the backstop's clock. A new authority (a handover, a failover
