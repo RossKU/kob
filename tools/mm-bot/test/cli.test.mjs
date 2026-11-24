@@ -211,3 +211,11 @@ test('the CLI note that blocks are contended reaches onNote, and is not taken fo
     delete kob.env.FAKE_KOB_NOTE;
   }
 });
+
+// R8T-I1: on mainnet the indexer is read over TLS only.
+test('config: an http:// indexer is refused on mainnet (R8T-I1)', () => {
+  const ok = { ...JSON.parse(JSON.stringify(DEFAULTS)), network: 'mainnet', token: { ...DEFAULTS.token, covenantId: TOKEN, decimals: 6 } };
+  assert.match(validate({ ...ok, indexer: 'http://idx.example' }).join('; '), /https:\/\/ URL on mainnet/);
+  assert.deepEqual(validate({ ...ok, indexer: 'https://idx.example' }), []);
+  assert.deepEqual(validate({ ...ok, network: 'testnet-10', indexer: 'http://127.0.0.1:8080' }), []);
+});

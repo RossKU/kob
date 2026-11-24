@@ -1799,7 +1799,7 @@ fn assert_clean(what: &str, out: &str) {
     }
     // a signing command does not use such a ticker at all; a listing shows it escaped, on its own line
     if what == "tokens" {
-        assert!(out.contains(r"TST\u{d}  you pay"), "{what}: shown escaped: {out:?}");
+        assert!(out.contains(r"TST\u000d  you pay"), "{what}: shown escaped: {out:?}");
     } else {
         assert!(!out.contains("0.5 KAS per TST"), "{what}: the hostile text reached the terminal: {out:?}");
     }
@@ -1897,4 +1897,84 @@ fn a_take_of_another_class_is_refused() {
     // the market buy finds no ask of the token's class to start at
     assert_eq!(run(crate::trade::place::run, w.args(0x22, "market --token TST --side buy --amount 1TST --yes --decimals 3")), 1);
     assert_eq!(w.submitted(), 0);
+}
+
+/// R8DF-3: `kob orders --json` and `kob book --json` stay valid JSON when the indexer's strings (a ticker, an order's
+/// contract and status) hold ESC, DEL, U+202E and a zero-width joiner. The strings parse back to the indexer's bytes
+/// exactly, and no raw control byte is printed; the human lines show them escaped and add no line.
+#[test]
+fn json_views_stay_exact_with_hostile_strings() {
+    const ODD: &str = "K\u{1b}[2K\u{7f}\u{202e}a\u{200d}b\nfake line";
+    let maker = pk(0x11);
+    let cov = [0xa1; 32];
+    let order = AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000));
+    let w = world_x("jsonviews", &[(order, cov, 0x10, 2 * KAS)], |_, routes| {
+        routes.insert(
+            "/v1/tokens".into(),
+            json!({"tokens": [{"ticker": ODD, "covenant_id": to_hex(&TOKEN), "template_hash": to_hex(&token_template(P).hash),
+                               "extension_commitment": to_hex(&EXT), "decimals": 3, "open_asks": 1, "open_bids": 0}]}),
+        );
+        routes.insert(
+            format!("/v1/books/{}", to_hex(&TOKEN)),
+            json!({"token": to_hex(&TOKEN), "aggregated": true,
+                   "asks": [{"price": "300000000", "amount": "10000", "amount_estimated": false, "orders": 1, "scale": 1000}], "bids": []}),
+        );
+        let mut view = routes[&format!("/v1/orders/{}", to_hex(&cov))].clone();
+        view["contract"] = json!(ODD);
+        view["status"] = json!(ODD);
+        routes.insert(
+            format!("/v1/orders?maker={}&status=active&limit=200", to_hex(&maker)),
+            json!({"items": [view], "next_cursor": null}),
+        );
+    });
+    let clean = |what: &str, text: &str| {
+        for bad in ['\u{1b}', '\u{7f}', '\u{202e}', '\u{200d}'] {
+            assert!(!text.contains(bad), "{what}: {bad:?} in {text:?}");
+        }
+    };
+    let mut a = w.args(0x11, "--json");
+    let (code, out, err) = crate::text::capture_split(|| crate::trade::views::run_orders(&a));
+    assert_eq!(code, 0, "{err}");
+    clean("orders --json", &(out.clone() + &err));
+    let doc: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    let row = &doc["orders"][0];
+    assert_eq!((row["contract"].as_str(), row["status"].as_str()), (Some(ODD), Some(ODD)), "exact: {row}");
+    assert_eq!((row["covenant_id"].as_str(), doc["incomplete"].as_bool()), (Some(to_hex(&cov).as_str()), Some(false)));
+    a = w.args(0x11, &format!("{TOKEN_HEX} --json"));
+    let (code, out, err) = crate::text::capture_split(|| crate::trade::views::run_book(&a));
+    assert_eq!(code, 0, "{err}");
+    clean("book --json", &(out.clone() + &err));
+    let doc: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+    assert_eq!(doc["token"].as_str(), Some(TOKEN_HEX));
+    // human lines: escaped, and the indexer's line break adds no line of its own
+    let (_, out, _) = crate::text::capture_split(|| crate::trade::views::run_orders(&w.args(0x11, "")));
+    clean("orders", &out);
+    assert!(!out.lines().any(|l| l.starts_with("fake line")), "{out}");
+    assert!(out.contains(&to_hex(&cov)), "the covenant id passes unchanged: {out}");
+}
+
+/// R8DF-2: an order list the indexer does not let `kob` read to its end (a cursor that repeats) is never shown as whole:
+/// `kob orders` and `kob balances` mark it `incomplete`, and `kob sweep --all` exits 1 instead of reporting it swept all.
+#[test]
+fn an_unfinished_order_list_is_marked_incomplete() {
+    let maker = pk(0x11);
+    let cursor = format!("5:{}", "ab".repeat(32));
+    let w = world_x("incomplete", &[], |_, routes| {
+        let base = format!("/v1/orders?maker={}&status=active&limit=200", to_hex(&maker));
+        routes.insert(base.clone(), json!({"items": [], "next_cursor": cursor}));
+        routes.insert(format!("{base}&cursor={cursor}"), json!({"items": [], "next_cursor": cursor}));
+        routes.insert(format!("/v1/token-utxos?owner={}&limit=500", to_hex(&maker)), json!({"items": [], "next_cursor": null}));
+    });
+    let a = w.args(0x11, "--json");
+    let (code, out, err) = crate::text::capture_split(|| crate::trade::views::run_orders(&a));
+    assert_eq!(code, 0, "{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(doc["incomplete"], true, "{doc}");
+    let a = w.args(0x11, "--json");
+    let (_, out, _) = crate::text::capture_split(|| crate::trade::views::run_balances(&a));
+    assert_eq!(serde_json::from_str::<Value>(&out).unwrap()["incomplete"], true, "{out}");
+    let a = w.args(0x11, "--all --yes");
+    let (code, all) = crate::text::capture(|| crate::trade::actions::run_sweep(&a));
+    assert_eq!(code, 1, "{all}");
+    assert!(all.contains("incomplete"), "{all}");
 }

@@ -231,6 +231,7 @@ export default {
   'issues.refund.strays-stay': 'A refund leaves the {count} stray token UTXO(s) behind; cancel instead to recover them.',
   'issues.sweep.in-place': 'Swept in place: only the stray tokens move; the order is unchanged.',
   'issues.sweep.later-extension': "{count} stray token UTXO(s) ({amount}) with another extension commitment stay: sweep again.",
+  'issues.sweep.twin-stays': "{count} stray token UTXO(s) ({amount}) identical to the custody stay with the order: a cancel takes them back.",
   'issues.sweep.later-slots': "{count} stray token UTXO(s) ({amount}) do not fit this transaction: sweep again.",
   'issues.cancel.bought-missing': 'The token UTXO holding what this order bought is unknown. Refresh and try again.',
   'issues.claim.nothing': 'This order holds no bought tokens.',

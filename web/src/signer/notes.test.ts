@@ -27,3 +27,12 @@ describe('the note of token UTXOs a closing order leaves behind (R8F4-2)', () =>
     expect(noteSentences([{ kind: 'straysLost', utxos: 2 }])).toEqual(['This closes an order that owns 2 token UTXO(s) its maker cannot move. They stay behind and cannot be recovered.']);
   });
 });
+
+describe('the note of a closing order whose strays could not be checked (R8B-M1)', () => {
+  it('passes the protocol with no payload and is worded by the frame', async () => {
+    const { sanitizeNotes } = await import('./protocol');
+    expect(sanitizeNotes([{ kind: 'straysUnchecked' }])).toEqual([{ kind: 'straysUnchecked' }]);
+    expect(sanitizeNotes([{ kind: 'straysUnchecked', text: 'x' }])).toEqual([]);
+    expect(noteSentences([{ kind: 'straysUnchecked' }])[0]).toMatch(/could not be checked/);
+  });
+});

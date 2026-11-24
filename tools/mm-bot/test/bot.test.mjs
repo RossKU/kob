@@ -11,6 +11,7 @@ import { Bot, PROVEN_KEEP_AFTER_EXPIRY_MS, PROVEN_LOOKUPS, PROVEN_MAX, PROVEN_PA
 import { DEFAULTS } from '../src/config.mjs';
 import { cutMiddle, Kob } from '../src/kob.mjs';
 import { paths } from '../src/store.mjs';
+import { VERSION_LINE } from './cli-docs.mjs';
 
 const TOKEN = '01'.repeat(32);
 const MAKER = 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb'; // an address vector of cli.test.mjs
@@ -2003,11 +2004,79 @@ test('a kob binary swapped under the running bot: no whole-fill end for the earl
     again.kob = bot.kob;
     again.nodeOutputs = async () => [];
     again.state.templates = bot.state.templates;
-    again.state.templates.cli = 'kob 0.0.0 (fake build)';
+    again.state.templates.cli = VERSION_LINE;
     again.state.templates.kinds = { KobAsk: { hash: TPL.KobAsk, verified: true }, KobBid: { hash: TPL.KobBid, verified: true } };
     const r = await again.operatorDrop(a);
     assert.equal(r.ok, true, r.message);
   } finally {
     reset();
   }
+});
+
+// R8T-1: a stray on an order makes kob replace refuse for good; the bot cancels that order through
+// the node after AMEND_REFUSALS refusals, with an alert, and places its level again.
+test('a_refused_amend_with_strays_cancels_and_requotes (R8T-1)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const a = askIds(bot).sort()[0];
+    const level = bot.state.orders[a].level;
+    bot.kob.env.FAKE_KOB_STRAYS = a;
+    const placed = places(calls).length;
+    kasUsd = 0.025 / 1.004; // a move past repriceThreshold: every quote is amended
+    for (let i = 0; i < 4 && chain().orders[a]; i++) await bot.cycle();
+    assert.equal(chain().ended[a], 'cancelled', 'cancelled through the node, strays or not');
+    const recovers = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x[0] === 'recover' && x.includes('--cancel'));
+    assert.ok(recovers.length >= 1);
+    const al = alertsOf(dir).filter((x) => x.reason === 'amend-refused');
+    assert.equal(al.length, 1, 'one alert');
+    assert.match(al[0].message, /kob sweep/, 'it names the strays (the CLI\'s words)');
+    for (let i = 0; i < 2; i++) {
+      age(bot);
+      await bot.cycle();
+    }
+    assert.equal(bot.state.orders[a], undefined, 'the old order ended on its confirmed cancel');
+    assert.ok(places(calls).length > placed, 'its level is placed again');
+    const c = chain();
+    assert.ok(Object.entries(bot.state.orders).some(([k, s]) => k !== a && s.side === 'sell' && s.level === level && c.orders[k]), 'a new ask holds the level');
+  } finally {
+    delete bot.kob.env.FAKE_KOB_STRAYS;
+    reset();
+  }
+});
+
+// R8T-2: the real kob replace names the replacement's state in plan.replacement only.
+test('cancel_replace_record_carries_the_replacement_state (R8T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    bot.kob.env.FAKE_KOB_REPLACE_NEW = 'ok';
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle();
+    const repl = askIds(bot).map((k) => bot.state.orders[k].replacedBy).filter(Boolean);
+    assert.ok(repl.length > 0);
+    for (const n of repl) {
+      assert.equal(bot.state.orders[n].own?.state?.kind, 'KobAsk', 'its own state, from plan.replacement');
+      assert.ok(!bot.state.orders[n].own.fromIndexer);
+    }
+  } finally {
+    delete bot.kob.env.FAKE_KOB_REPLACE_NEW;
+    reset();
+  }
+});
+
+// R8T-4: an amend's two states are read in two node calls, and it can confirm between them, so
+// "gone" at both never settles it: only a live sighting or an output of its transaction does.
+test('an exact amend not found at either state stays in flight (R8T-4)', () => {
+  reset();
+  const { bot } = setup();
+  const s = { inflight: [{ kind: 'amend', txid: 'f1'.repeat(32), state: { kind: 'KobAsk', state: { price: '2' } }, from: { kind: 'KobAsk', state: { price: '1' } }, input: 'f0'.repeat(32), exact: true }] };
+  bot.resolveInflight(s, { status: 'gone', verified: true, spent: false });
+  assert.equal(s.inflight.length, 1);
+  bot.resolveInflight(s, { status: 'live', txid: 'f1'.repeat(32) });
+  assert.equal(s.inflight.length, 0, 'the node holds it at its own outpoint');
 });

@@ -133,19 +133,13 @@ pub fn indexer_rows(v: &Value) -> Result<Vec<Row>, String> {
             _ => "-".into(),
         };
         rows.push(Row {
-            // the indexer's and kascov's words: through the one sanitiser (R8F3c-2)
-            ticker: crate::text::clean(t.get("ticker").and_then(Value::as_str).unwrap_or("")),
+            ticker: t.get("ticker").and_then(Value::as_str).unwrap_or("").to_string(),
             cov: to_hex(&cov),
             decimals: t.get("decimals").and_then(Value::as_u64).map(|d| d as u32),
             program,
             asks: t.get("open_asks").and_then(Value::as_u64),
             bids: t.get("open_bids").and_then(Value::as_u64),
-            warn: strings("warnings")
-                .into_iter()
-                .filter(|w| w != "genesis_unverified")
-                .chain(strings("powers"))
-                .map(|w| crate::text::clean(&w))
-                .collect(),
+            warn: strings("warnings").into_iter().filter(|w| w != "genesis_unverified").chain(strings("powers")).collect(),
             source: "indexer",
         });
     }
@@ -164,7 +158,7 @@ pub fn kascov_rows(list: &Value, have: &std::collections::BTreeSet<String>) -> R
                 return None;
             }
             Some(Row {
-                ticker: crate::text::clean(t.get("claimed_ticker").and_then(Value::as_str).unwrap_or("")),
+                ticker: t.get("claimed_ticker").and_then(Value::as_str).unwrap_or("").to_string(),
                 cov,
                 decimals: t.get("claimed_decimals").and_then(Value::as_u64).map(|d| d as u32),
                 program: kascov_program(t),
@@ -185,15 +179,18 @@ pub fn matches(row: &Row, search: &str) -> bool {
 
 /// The table: a header and one line per row, columns aligned, the covenant id whole.
 pub fn table(rows: &[Row]) -> Vec<String> {
+    // The rows hold the lists' words as they came (the --json document carries them exactly); the
+    // table shows them through the one sanitiser, line breaks included (R8F3c-2, R8DF-3).
+    let c = crate::text::clean;
     let cell = |r: &Row| {
         [
-            if r.ticker.is_empty() { String::new() } else { r.ticker.clone() },
-            r.cov.clone(),
+            c(&r.ticker),
+            c(&r.cov),
             r.decimals.map_or("-".into(), |d| d.to_string()),
-            r.program.clone(),
+            c(&r.program),
             r.asks.map_or("-".into(), |n| n.to_string()),
             r.bids.map_or("-".into(), |n| n.to_string()),
-            r.warn.join(","),
+            c(&r.warn.join(",")),
         ]
     };
     let head = ["TICKER", "COVENANT ID", "DEC", "PROGRAM", "ASKS", "BIDS", "WARN"].map(String::from);
@@ -383,7 +380,7 @@ pub fn run(args: &[String]) -> i32 {
     {
         Ok((doc, lines)) => {
             if c.json {
-                println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+                println!("{}", crate::text::json(&doc));
             } else {
                 for l in lines {
                     println!("{l}");
@@ -428,7 +425,7 @@ pub fn view(
         if r.ticker.is_empty() && held.contains(&r.cov) && asked < DECLARATION_BUDGET {
             asked += 1;
             if let Ok(Some(d)) = data::declaration(indexer, &cov) {
-                r.ticker = crate::text::clean(&d.symbol.unwrap_or_default());
+                r.ticker = d.symbol.unwrap_or_default();
                 if r.decimals.is_none() {
                     r.decimals = d.decimals;
                 }

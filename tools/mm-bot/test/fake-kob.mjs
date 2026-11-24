@@ -1,6 +1,8 @@
 // A stand-in kob CLI: FAKE_KOB_MODE ok | plan-error | submit-fail | usage | chain (a ledger in
 // FAKE_KOB_CHAIN). Calls go to FAKE_KOB_LOG.
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+// Every document is the real CLI's, field for field (R8T-2): cli-docs.mjs, pinned by cli-shapes.test.mjs.
+import { balancesDoc, mergeDoc, orderState, placePlan, recoverCancel, recoverEntry, recoverReport, replacePlan, signDoc, VERSION_LINE } from './cli-docs.mjs';
 
 const args = process.argv.slice(2);
 appendFileSync(process.env.FAKE_KOB_LOG, JSON.stringify(args) + '\n');
@@ -11,10 +13,16 @@ const dry = args.includes('--dry-run');
 const tx = 'ab'.repeat(32);
 // The template hash of each order kind in this build (the indexer names it in its views).
 export const TPL = { KobAsk: 'a5'.repeat(32), KobBid: 'b5'.repeat(32) };
-const doc = (extra) => JSON.stringify({ action: 'place limit sell', network: 'testnet-10', plan: {}, issues: [], transaction: { txid: tx, fee: '427000' }, new_covenant_ids: ['cd'.repeat(32)], result: null, ...extra }, null, 2);
+const doc = ({ issues = [], submitted = false } = {}) => JSON.stringify(signDoc({ action: 'place limit sell', plan: placePlan(orderState({ side: 1, price: 4e9, amount: 1e6 }), 1e8),
+  txid: tx, fee: 427000, ids: ['cd'.repeat(32)], submitted, issues }), null, 2);
+// FAKE_KOB_SAMPLE=file: print that document as it is, exit FAKE_KOB_SAMPLE_CODE (cli-shapes.test.mjs).
+if (process.env.FAKE_KOB_SAMPLE) {
+  process.stdout.write(readFileSync(process.env.FAKE_KOB_SAMPLE, 'utf8'));
+  process.exit(Number(process.env.FAKE_KOB_SAMPLE_CODE ?? 0));
+}
 
 // FAKE_KOB_VERSION: another build swapped in under the running bot (R7T-5).
-if (args[0] === '--version') { process.stdout.write(`${process.env.FAKE_KOB_VERSION ?? 'kob 0.0.0 (fake build)'}\n`); process.exit(0); }
+if (args[0] === '--version') { process.stdout.write(`${process.env.FAKE_KOB_VERSION ?? VERSION_LINE}\n`); process.exit(0); }
 if (mode === 'usage') {
   process.stderr.write('error: the amount needs a unit\n');
   process.exit(2);
@@ -43,15 +51,13 @@ if (args[0] === 'cancel' && args.includes('--view')) {
         writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify(c));
       }
     }
-    process.stdout.write(JSON.stringify({ action: `cancel ${v.covenant_id}`, network: 'testnet-10', plan: {}, issues: [], transaction: { txid: tx, fee: '427000' }, new_covenant_ids: [],
-      result: dry ? null : { status: 'submitted', txid: tx, fee: '427000', covenant_ids: [], file: null, engine_validated: true } }));
+    process.stdout.write(JSON.stringify(signDoc({ action: `cancel ${v.covenant_id}`, plan: {}, txid: tx, fee: 427000, submitted: !dry })));
   }
   process.exit(code);
 }
 if (mode === 'chain') chain();
 if (args[0] === 'balances') {
-  process.stdout.write(JSON.stringify({ maker: 'ef'.repeat(32), kas: { free: '100000000000', locked: '0', total: '100000000000' },
-    tokens: [{ token: '01'.repeat(32), decimals: 6, free: '5000000', in_orders: '0', free_utxos: 2, free_verified: true }], skipped: [] }));
+  process.stdout.write(JSON.stringify(balancesDoc({ maker: 'ef'.repeat(32), kasFree: 100000000000, token: '01'.repeat(32), free: 5000000, freeUtxos: 2 })));
   process.exit(0);
 }
 if (mode === 'plan-error') {
@@ -60,7 +66,7 @@ if (mode === 'plan-error') {
   process.exit(1);
 }
 if (dry) {
-  process.stdout.write(doc({}));
+  process.stdout.write(doc());
   process.stderr.write('dry run: nothing signed or submitted\n');
   process.exit(0);
 }
@@ -68,7 +74,7 @@ if (mode === 'submit-fail') {
   process.stderr.write('error: submission failed: orphan\n');
   process.exit(1);
 }
-process.stdout.write(doc({ result: { status: 'submitted', txid: tx, fee: '427000', covenant_ids: ['cd'.repeat(32)], file: null, engine_validated: true } }));
+process.stdout.write(doc({ submitted: true }));
 process.exit(0);
 
 function chain() {
@@ -79,17 +85,27 @@ function chain() {
   const out = (o) => { process.stdout.write(JSON.stringify(o)); process.exit(0); };
   const fee = 500000;
   if (args[0] === 'balances') {
-    out({ maker: c.maker, kas: { free: String(c.kasFree), locked: '0', total: String(c.kasFree) },
-      tokens: [{ token: c.token, decimals: 6, free: String(c.tokenFree), in_orders: '0', free_utxos: c.tokenUtxos, free_verified: true }], skipped: [] });
+    out(balancesDoc({ maker: c.maker, kasFree: c.kasFree, token: c.token, free: c.tokenFree, freeUtxos: c.tokenUtxos }));
   }
   const txid = (c.n + 1).toString(16).padStart(64, '0');
   const submit = (extra = {}) => {
-    if (dry) out({ issues: [], transaction: { txid, fee: String(fee) }, new_covenant_ids: extra.ids ?? [], plan: extra.plan ?? {}, result: null });
+    const d = (submitted) => signDoc({ action: `${args[0]} ${args[1] ?? ''}`.trim(), plan: extra.plan ?? {}, txid, fee, ids: extra.ids ?? [], submitted });
+    if (args[0] === 'merge') {
+      // kob merge prints its summary with one link per transaction (merge.rs:347-356, 440).
+      if (dry) out(mergeDoc({ token: args[1], before: c.tokenUtxos, txids: [], fee }));
+      const before = c.tokenUtxos;
+      c.n += 1;
+      c.kasFree -= fee;
+      extra.apply?.();
+      writeFileSync(file, JSON.stringify(c));
+      out(mergeDoc({ token: args[1], before, txids: [txid], fee }));
+    }
+    if (dry) out(d(false));
     c.n += 1;
     c.kasFree -= fee;
     extra.apply?.();
     writeFileSync(file, JSON.stringify(c));
-    out({ issues: [], transaction: { txid, fee: String(fee) }, new_covenant_ids: extra.ids ?? [], plan: extra.plan ?? {}, result: { status: 'submitted', txid, fee: String(fee), covenant_ids: extra.ids ?? [] } });
+    out(d(true));
   };
   if (args[0] === 'place') {
     // FAKE_KOB_REFUSE_PLACE: every placement is refused before signing (R2-T3).
@@ -103,7 +119,7 @@ function chain() {
     // --min-fill: kept in the order's state (a whole-fill ask has it equal to its amount).
     const minFill = args.includes('--min-fill') ? Number(val('--min-fill').replace('base', '')) : null;
     const st = stateOf(side === 'sell' ? 1 : 2, price, amount, minFill, txid);
-    submit({ ids: [id], plan: { states: [st], request: { value: String(side === 'sell' ? 1e8 : escrow + 1e8) } }, apply: () => {
+    submit({ ids: [id], plan: placePlan(st, side === 'sell' ? 1e8 : escrow + 1e8), apply: () => {
       // FAKE_KOB_PENDING: submitted, but it waits in the mempool until the test mines it (R7T-1).
       const book = process.env.FAKE_KOB_PENDING ? ((c.mempool ??= {}).place ??= {}) : c.orders;
       if (side === 'sell') { c.tokenFree -= amount; c.kasFree -= 1e8; book[id] = { side: 1, price, amount, value: 1e8, txid, expiryDaa: txid, expiresAt: gtd(), ...(minFill != null ? { minFill } : {}) }; }
@@ -114,6 +130,12 @@ function chain() {
     const id = args[1];
     const o = c.orders[id];
     if (!o) { process.stderr.write('error: unknown order'); process.exit(1); }
+    // FAKE_KOB_STRAYS=id,...: those orders own a stray of another token, and kob replace refuses
+    // them, dry run or not, as the real CLI does (actions.rs:538-544, run_replace's exit 1).
+    if ((process.env.FAKE_KOB_STRAYS ?? '').split(',').includes(id)) {
+      process.stderr.write(`error: the order's covenant id owns 1 stray UTXO(s) of other tokens, which a cancel-replace would leave locked for ever: run \`kob sweep ${id}\` first (the order stays live and they come back to you), then replace\n`);
+      process.exit(1);
+    }
     const np = args.includes('--price') ? Number(val('--price').replace('sompi', '')) : o.price;
     // FAKE_KOB_REPLACE_NEW: a cancel-replace (strays on the order); `lost`: a fill of 1,500,007
     // lands first and the replace never confirms (R6T-2). No change comes back: it rides on the
@@ -121,7 +143,8 @@ function chain() {
     const how = process.env.FAKE_KOB_REPLACE_NEW;
     if (how) {
       const nid = ('d' + (c.n + 1).toString(16)).padStart(64, '0');
-      submit({ ids: [nid], plan: { inPlace: false, current: stateOf(o.side, o.price, o.amount, o.minFill, o.expiryDaa), states: [stateOf(o.side, np, o.amount, o.minFill, txid)], value: String(o.value - fee) }, apply: () => {
+      // As the real CLI: plan.replacement, and no plan.states (actions.rs:746).
+      submit({ ids: [nid], plan: replacePlan(id, false, stateOf(o.side, o.price, o.amount, o.minFill, o.expiryDaa), stateOf(o.side, np, o.amount, o.minFill, txid), o.value - fee), apply: () => {
         // The fill moves the order to a new outpoint, which the replace does not spend.
         if (how === 'lost') { o.amount -= 1_500_007; o.txid = `f${txid.slice(1)}`; return; }
         c.orders[nid] = { ...o, price: np, txid, expiryDaa: txid, expiresAt: gtd(), value: o.value - fee };
@@ -130,7 +153,7 @@ function chain() {
         c.kasFree += fee;
       } });
     }
-    submit({ plan: { inPlace: true, current: stateOf(o.side, o.price, o.amount, o.minFill, o.expiryDaa), replacement: stateOf(o.side, np, o.amount, o.minFill, txid), value: String(o.value - fee) }, apply:() => {
+    submit({ plan: replacePlan(id, true, stateOf(o.side, o.price, o.amount, o.minFill, o.expiryDaa), stateOf(o.side, np, o.amount, o.minFill, txid), o.value - fee), apply:() => {
       // FAKE_KOB_PENDING: the amend waits in the mempool, spending the order's outpoint (R7T-1).
       if (process.env.FAKE_KOB_PENDING) { ((c.mempool ??= {}).amend ??= []).push({ id, input: o.txid, txid, expiryDaa: txid, price: np, expiresAt: args.includes('--gtd') ? gtd() : o.expiresAt }); return; }
       if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.expiryDaa = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
@@ -156,9 +179,7 @@ function chain() {
 // the expiry each send computes from --gtd (R7T-I6): here the sending transaction's id, so that
 // two amends to one price are two scripts, as on chain.
 function stateOf(side, price, amount, minFill = null, expiryDaa = null) {
-  const st = { maker: 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb', tokenCovId: '01'.repeat(32), scale: '1000000', price: String(price), extensionCommitment: '00'.repeat(32), ...(expiryDaa ? { expiryDaa } : {}) };
-  const mf = minFill == null ? {} : { minFill: String(Math.min(minFill, amount)) };
-  return side === 1 ? { kind: 'KobAsk', state: { ...st, ...mf, amountLeft: String(amount) } } : { kind: 'KobBid', state: st };
+  return orderState({ side, price, amount, minFill: minFill == null ? null : Math.min(minFill, amount), expiryDaa: expiryDaa ?? '0' });
 }
 
 /**
@@ -182,13 +203,13 @@ function recover(c, fee) {
     // ask's amount may have moved to one the search did not reach.
     const note = kind === 'KobBid' ? "spent: no unspent output at the order's script (1 candidate)"
       : "spent, or partly filled to an amount the search did not reach (3 candidates: the known states, the --amount-left hints, then amountLeft - k x minFill; that search is not exhaustive: pass the order's amount left from an indexer view with --amount-left)";
-    const e = { covenant_id: id, kind, template_hash: it.template_hash, status: 'not_found', note };
+    const e = recoverEntry({ id, kind, tpl: it.template_hash, status: 'not_found', note });
     const st = it.state.state;
     if (it.template_hash === TPL[kind] && o && (o.side === 1) === (kind === 'KobAsk') && o.price === Number(st.price)
-      && (st.expiryDaa == null || o.expiryDaa == null || st.expiryDaa === o.expiryDaa)
+      && (st.expiryDaa == null || st.expiryDaa === '0' || o.expiryDaa == null || st.expiryDaa === o.expiryDaa)
       && (o.side === 2 || o.amount === Number(st.amountLeft) || (hints[id] ?? []).includes(o.amount))) {
       const left = o.side === 1 ? o.amount : Math.floor(((o.value - 1e8) * 1e6) / o.price);
-      Object.assign(e, { status: 'live', note: '', outpoint: `${o.txid}:0`, value: String(o.value), amount_left: String(left) });
+      Object.assign(e, recoverEntry({ id, kind, tpl: it.template_hash, status: 'live', live: { txid: o.txid, value: o.value, amountLeft: left, minFill: o.minFill } }));
     }
     byId.set(id, e);
   }
@@ -212,10 +233,10 @@ function recover(c, fee) {
         c.ended[e.covenant_id] = 'cancelled';
         delete c.orders[e.covenant_id];
       }
-      e.cancel = { status: args.includes('--yes') ? 'submitted' : 'signed', txid, fee: String(fee) };
+      e.cancel = recoverCancel(txid, fee, args.includes('--yes'));
     }
   }
   writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify(c));
-  process.stdout.write(JSON.stringify({ network: 'testnet-10', orders: [...byId.values()], rejected: [], summary: {} }, null, 2));
+  process.stdout.write(JSON.stringify(recoverReport([...byId.values()]), null, 2));
   process.exit(code);
 }

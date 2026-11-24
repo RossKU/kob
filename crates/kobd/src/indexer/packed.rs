@@ -412,10 +412,6 @@ fn text_arg<'a>(ctx: &'a Context<'_>, i: usize) -> rusqlite::Result<Option<&'a s
     }
 }
 
-fn user_err(e: PackError) -> rusqlite::Error {
-    rusqlite::Error::UserFunctionError(Box::new(e))
-}
-
 /// A blob or text argument, with NULL as `None`. Any other type is an error, never a silent NULL.
 fn blob_arg<'a>(ctx: &'a Context<'_>, i: usize) -> rusqlite::Result<Option<&'a [u8]>> {
     match ctx.get_raw(i) {
@@ -462,7 +458,9 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
     })?;
     conn.create_scalar_function("kob_ustate", 2, flags, |ctx| {
         let Some(stored) = blob_arg(ctx, 0)? else { return Ok(Value::Null) };
-        Ok(blob_value(unpack(stored, blob_arg(ctx, 1)?).map_err(user_err)?.into_owned()))
+        // stored bytes that do not unpack are an unknown state (NULL), never an error out of the statement: a read or a
+        // commit must not fail on them (R8)
+        Ok(unpack(stored, blob_arg(ctx, 1)?).map_or(Value::Null, |v| blob_value(v.into_owned())))
     })?;
     conn.create_scalar_function("kob_hpack", 5, flags, |ctx| {
         let Some(state) = blob_arg(ctx, 0)? else { return Ok(Value::Null) };
@@ -490,7 +488,7 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
             blob_arg(ctx, 3)?.unwrap_or(&[]),
             blob_arg(ctx, 4)?.unwrap_or(&[]),
         ];
-        Ok(blob_value(zunpack(stored, &extras).map_err(user_err)?.into_owned()))
+        Ok(zunpack(stored, &extras).map_or(Value::Null, |v| blob_value(v.into_owned())))
     })?;
     // `kob_dpack(text, kind)` returns the text itself unless a dictionary makes it shorter.
     // `kob_dtext(stored)` returns the text.
@@ -506,8 +504,8 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
         ValueRef::Null => Ok(Value::Null),
         ValueRef::Text(t) => Ok(Value::Text(String::from_utf8_lossy(t).into_owned())),
         ValueRef::Blob(b) => {
-            let span = zunpack(b, &[]).map_err(user_err)?;
-            Ok(Value::Text(String::from_utf8(span.into_owned()).map_err(|_| user_err(PackError::Corrupt("detail is not UTF-8")))?))
+            // a detail that does not unpack reads as NULL (R8)
+            Ok(zunpack(b, &[]).ok().and_then(|span| String::from_utf8(span.into_owned()).ok()).map_or(Value::Null, Value::Text))
         }
         other => Err(rusqlite::Error::InvalidFunctionParameterType(0, other.data_type())),
     })?;
@@ -518,7 +516,7 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
             return Ok(blob_value(stored.to_vec()));
         }
         let base = holding_base_args(ctx, 1)?;
-        Ok(blob_value(unpack(stored, base.as_deref()).map_err(user_err)?.into_owned()))
+        Ok(unpack(stored, base.as_deref()).map_or(Value::Null, |v| blob_value(v.into_owned())))
     })?;
     Ok(())
 }
@@ -624,8 +622,14 @@ mod tests {
         assert_eq!(none, None);
         let none: Option<Vec<u8>> = conn.query_row("SELECT kob_pack(NULL, NULL)", [], |r| r.get(0)).unwrap();
         assert_eq!(none, None);
-        // A delta whose base is NULL is an error, not a wrong answer.
-        assert!(conn.query_row("SELECT kob_ustate(?1, NULL)", [&packed[..]], |r| r.get::<_, Vec<u8>>(0)).is_err());
+        // A delta whose base is NULL, or bytes of an unknown mode, are an unknown state (NULL), never a wrong answer and never
+        // an error that would fail the statement (R8).
+        let none: Option<Vec<u8>> = conn.query_row("SELECT kob_ustate(?1, NULL)", [&packed[..]], |r| r.get(0)).unwrap();
+        assert_eq!(none, None);
+        let mut junk = packed.clone();
+        junk[1] = 0xfe;
+        let none: Option<Vec<u8>> = conn.query_row("SELECT kob_ustate(?1, ?2)", rusqlite::params![junk, base], |r| r.get(0)).unwrap();
+        assert_eq!(none, None);
         // Holdings.
         let owner = [3u8; 32];
         let span = holding_base(1, &owner, 0, 42).unwrap();

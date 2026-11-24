@@ -39,6 +39,9 @@ pub struct Opts {
     pub network: String,
     /// The fee options of the command.
     pub fee: FeeOptions,
+    /// `kob cancel --abandon-strays`: cancel although strays the transaction cannot take are lost for
+    /// ever, after naming each (R8FX-2). Off by default: then such a cancel is refused.
+    pub abandon_strays: bool,
 }
 
 /// A stray that the node confirmed, with its program.
@@ -315,6 +318,8 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
         twins.extend(all.into_iter().map(|u| TokenUtxo { utxo: u, state: st.clone() }));
     }
     let taken: Vec<([u8; 32], u32)> = held.iter().chain(twins.iter()).map(|t| (t.utxo.transaction_id, t.utxo.index)).collect();
+    // what a sweep leaves where it is: the order's custodies, next to which a twin may go (R8FX-1)
+    let kept: Vec<TokenUtxo> = if a.op == Op::Sweep { held.clone() } else { vec![] };
     let (custody, prefund, bought) = match a.op {
         Op::Cancel => {
             let n = targets.len();
@@ -395,10 +400,19 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
     }
     // After a cancel the order's covenant id is gone, and nothing can ever spend a token it owns
     // (R8F3c-4): a cancel that cannot take every one the node shows is not built.
-    if !stranded.is_empty() {
+    if !stranded.is_empty() && !a.abandon_strays {
         let mut o = refuse(stranded_text(&stranded, &cov));
         o.json["left_behind"] = json!(stranded);
         return Ok(Err(o));
+    }
+    // abandoned on the maker's explicit word: each unit is named, and it is lost for ever
+    let abandoned: Vec<String> = stranded
+        .iter()
+        .map(|e| format!("{} of token {}", e["outpoint"].as_str().unwrap_or(""), e["token"].as_str().unwrap_or("")))
+        .collect();
+    for mut e in stranded {
+        e["reason"] = json!(format!("{}: abandoned (--abandon-strays), lost for ever", e["reason"].as_str().unwrap_or("")));
+        left.push(e);
     }
     let is_own = |s: &Stray| s.utxo.utxo.covenant_id == Some(own) || b_token.is_some_and(|b| s.utxo.utxo.covenant_id == Some(b.0));
     let strays: Vec<TokenUtxo> = chosen.iter().filter(|s| is_own(s)).map(|s| s.utxo.clone()).collect();
@@ -434,6 +448,7 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
             build(&Action::SweepOrder(SweepOrder {
                 order: OrderUtxo { utxo: order_utxo.clone(), state: state.clone() },
                 strays: strays.clone(),
+                kept: kept.clone(),
                 foreign: foreign.clone(),
                 funding,
                 change: None,
@@ -510,6 +525,16 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
         format!("{disclosure}; note: {LATE_STRAY_NOTE}")
     } else {
         disclosure
+    };
+    let disclosure = if abandoned.is_empty() {
+        disclosure
+    } else {
+        format!(
+            "{disclosure}; ABANDONED (--abandon-strays): {} token UTXO{} owned by this order stay owned by its ended covenant id and are lost for ever: {}",
+            abandoned.len(),
+            if abandoned.len() == 1 { "" } else { "s" },
+            abandoned.join(", ")
+        )
     };
     let info = json!({"action": if a.op == Op::Sweep { "sweep" } else { "cancel" }, "covenant_id": covh, "kind": state.template_id().name(), "template": script.describe(), "returned": returned});
     Ok(Ok(Prepared { built, name, info, disclosure, funding, returned, left }))

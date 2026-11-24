@@ -438,7 +438,7 @@ pub fn run(args: &[String]) -> i32 {
     })();
     if let Some(mut doc) = held.into_inner() {
         doc["links"] = serde_json::Value::Array(links_done.into_inner());
-        println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+        println!("{}", crate::text::json(&doc));
     }
     match r {
         Ok(code) => code,

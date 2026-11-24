@@ -27,6 +27,7 @@ kaspa-consensus-core.workspace = true
 kaspa-txscript.workspace = true
 secp256k1.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 ctrlc = "3.5"
 # https:// indexers and wss:// feeds: rustls with the ring provider and the webpki roots, as kobd uses them
@@ -45,7 +46,6 @@ libc = "0.2"
 
 [dev-dependencies]
 kaspa-hashes.workspace = true
-serde.workspace = true
 
 [features]
 # The testnet-10 deployment templates (kob-protocol/deploy-tn10, see contracts/README.md).

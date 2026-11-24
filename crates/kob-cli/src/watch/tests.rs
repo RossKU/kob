@@ -520,5 +520,32 @@ fn hostile_feed_text_never_reaches_the_terminal() {
         }
         assert!(!text.contains("X\n"), "{what}: a line break of the feed's text: {text:?}");
     }
-    assert!(r.out.contains(r"order X\u{d}"), "the feed's text is shown escaped: {}", r.out);
+    assert!(r.out.contains(r"order X\u000d"), "the feed's text is shown escaped: {}", r.out);
+}
+
+/// R8DF-3: `kob watch --json` stays one valid JSON document per line when the feed's strings hold ESC, DEL, U+202E and a
+/// zero-width joiner; each frame parses back to exactly what the server sent, and no raw control byte is printed.
+#[test]
+fn hostile_feed_text_keeps_the_json_lines_exact() {
+    const HOSTILE: &str = "X\u{1b}[2K\u{7f}\u{202e}a\u{200d}b";
+    let mut sent = fill("2500");
+    sent["data"]["order"] = json!(HOSTILE);
+    sent["data"]["txid"] = json!(HOSTILE);
+    let frame = sent.clone();
+    let script: Script = Arc::new(move |_, ws| {
+        send(ws, subscribed(&["reorg".to_string(), "fills".to_string()]));
+        send(ws, frame.clone());
+        send(ws, json!({"type": "error", "data": {"message": HOSTILE}}));
+        After::Hold
+    });
+    let server = start(routes(), false, script);
+    let r = watch(&server, &["fills"], true, |o, _| o.contains("\"fill\""));
+    for text in [&r.out, &r.err] {
+        for bad in ['\u{1b}', '\u{7f}', '\u{202e}', '\u{200d}'] {
+            assert!(!text.contains(bad), "{bad:?} in {text:?}");
+        }
+    }
+    let lines: Vec<Value> = r.out.lines().map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}"))).collect();
+    let got = lines.iter().find(|l| l["type"] == "fill").expect("the fill frame");
+    assert_eq!(got, &sent, "the frame parses back to exactly what the server sent");
 }

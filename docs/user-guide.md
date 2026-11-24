@@ -317,6 +317,15 @@ Status words: open, partly filled, filled, cancelled, refunded, expired (IOC/FOK
   a cancel returns them too. Once an order closes, its strays are lost for good. Only the order's own token sent to the order
   itself is kept for you this way; another token, or a send to the order's script (P2SH) address, can be taken by whoever next
   fills or refunds it. Never send tokens to an order or a lock address.
+* **With the command line (`kob`).** `kob cancel <id>` returns the custody the order's state pins (whatever an indexer
+  names), a collected buy's bought tokens and every stray the node shows. When a stray cannot go in the same transaction
+  (another extension commitment, or more than the token program's inputs), the cancel is refused and says to run
+  `kob sweep <id>` first: the order stays open and the strays come back. `kob cancel <id> --abandon-strays` cancels anyway
+  after naming each stray it leaves behind, which is then lost for good. `kob replace` refuses the same way while the order
+  owns strays of other tokens or of another extension commitment. `kob recover --from FILE --cancel` cancels from the node
+  alone; the node cannot list strays, so the ones it does not know of are lost with the order. An order whose custody is gone
+  (the node shows none at the custody script its terms pin) is ended by `kob recover --from FILE --cancel --custody-gone`,
+  which returns the order's KAS only.
 * **Older contract versions.** A contract change gives new orders a new contract version; an order you placed before keeps its own
   until it ends. Nothing fills it any more, arms or trails its stop or runs its exits. An order of a version this app still knows is
   marked "older contract version — cancel only": its terms are shown, **Cancel** (and "Cancel all") returns its tokens, carriers,
@@ -374,6 +383,7 @@ price is the one you typed. If you do not want to rely on someone else's indexer
 | "Switching to your node…" | The indexer just stopped answering. With the standalone fallback on (the default) the page switches to standalone mode at once (below); the ticket says the same for that moment. |
 | "Trading through your node since hh:mm" | The indexer cannot be used (down, more than 2 minutes behind the chain, without its node or on another network), or you switched standalone mode on in Settings. The page follows your Kaspa node itself; see "Standalone mode" below. The bell also has one notification when the page switches to the node, and one when it is back on the indexer. |
 | "Order book data may be out of date" with "The indexer cannot be reached" | Only with the standalone fallback off: books and order status may be old or missing, and placing new orders waits until an indexer answers. **Cancelling your orders still works** (from your records and the node). |
+| (command line) `kob cancel` says "the order's covenant id owns N token UTXOs this cancel cannot take" | Run `kob sweep <id>` first, then cancel; or `kob cancel <id> --abandon-strays` to give those UTXOs up for good. With no indexer, `kob recover --from <backup or export file> --cancel` cancels from your file and the node. |
 | "The indexer is behind the chain by ..." | Prices and status may be older than the chain. |
 | "The indexer is ... behind the chain. Do not trust the book shown" | Orders may already be filled or cancelled. Wait or use another indexer (Settings). |
 | "The indexer is catching up" / "starting" | Data is incomplete for a while. |

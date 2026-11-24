@@ -24,6 +24,11 @@ export interface HealthAssessment {
    * the indexer reports none.
    */
   lagEstimate?: number | null;
+  /**
+   * The indexer sends `lag_seconds` but does not know it yet (its cursor block's time). An automatic
+   * standalone mode neither starts nor ends on it.
+   */
+  lagUnknown?: boolean;
   /** The trading data can be trusted as current. */
   fresh: boolean;
 }
@@ -50,8 +55,15 @@ export interface HealthInput {
 }
 
 export function assessIndexerHealth(i: HealthInput): HealthAssessment {
-  const est = !i.error && i.health ? (typeof i.health.lag_seconds === 'number' ? i.health.lag_seconds : typeof i.health.lag_daa === 'number' ? i.health.lag_daa / 10 : null) : null;
-  const mk = (level: HealthLevel, code: HealthCode, lagSeconds: number | null = null): HealthAssessment => ({ level, code, lagSeconds, lagEstimate: est, fresh: level === 'ok' });
+  // `lag_seconds` is the age of the indexer's verified cursor block. An indexer that sends the field
+  // as null does not know that time yet: the lag is unknown, and the DAA lag, which is its node's
+  // claim, is not read in its place. Only an older indexer that sends no `lag_seconds` at all is
+  // judged by `lag_daa` (R8B-L1).
+  const h0 = !i.error ? i.health : null;
+  const sendsSeconds = !!h0 && Object.prototype.hasOwnProperty.call(h0, 'lag_seconds');
+  const est = h0 ? (typeof h0.lag_seconds === 'number' ? h0.lag_seconds : !sendsSeconds && typeof h0.lag_daa === 'number' ? h0.lag_daa / 10 : null) : null;
+  const lagUnknown = sendsSeconds && h0!.lag_seconds == null;
+  const mk = (level: HealthLevel, code: HealthCode, lagSeconds: number | null = null): HealthAssessment => ({ level, code, lagSeconds, lagEstimate: est, ...(lagUnknown ? { lagUnknown: true } : {}), fresh: level === 'ok' });
   if (!i.configured) return mk('unknown', 'not-configured');
   if (i.error) return mk('bad', 'unreachable');
   const h = i.health;
@@ -60,7 +72,7 @@ export function assessIndexerHealth(i: HealthInput): HealthAssessment {
   const lag = typeof h.lag_seconds === 'number' ? h.lag_seconds : null;
   // The lag the thresholds read: seconds, else the DAA lag (about 10 DAA per second). Null means
   // unknown.
-  const lagKnown = lag ?? (typeof h.lag_daa === 'number' ? h.lag_daa / 10 : null);
+  const lagKnown = lag ?? (!sendsSeconds && typeof h.lag_daa === 'number' ? h.lag_daa / 10 : null);
   const withinTolerance = lagKnown !== null && lagKnown <= LAG_WARN_SECONDS;
   // A follower that died, or one that still says following but has not moved for 10 minutes, is
   // as unusable as an indexer that does not answer. An older indexer sends no `stale`: false.

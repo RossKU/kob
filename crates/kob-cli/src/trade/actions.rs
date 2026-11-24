@@ -229,7 +229,9 @@ USAGE
   up), --renew (a fresh 90-day expiry) or --gtd WHEN (a new expiry). A sell that keeps its amount, or a buy, is amended
   IN PLACE: same covenant id, the custody stays where it is, the order's own KAS pays the fee. Otherwise the order is
   cancelled and the replacement placed in the same transaction (custody, strays and any top-up tokens move to the new
-  order).
+  order). A cancel-replace ends the old covenant id, so it is refused while the order owns strays of other tokens or of
+  another extension commitment: run `kob sweep <id>` first. Every changed term is listed, old and new; a re-planned order
+  whose price scale is not its market's is refused (cancel it and place anew).
   conditional orders (stop / take-profit / OCO): --price (the take-profit), --stop, --stop-limit, --amount, --tip, --renew,
   --gtd; always a cancel-replace, an armed stop restarts unarmed.
   trailing stops, if-done entries (IFD / IFO, stop entries) and every pair order (limits, TWAP / DCA, Dutch,
@@ -905,12 +907,18 @@ pub const CANCEL_USAGE: &str = "\
 kob cancel: the maker's cancel of live orders by covenant id (the indexer's view, every UTXO checked on the node), or from saved views
 
 USAGE
-  kob cancel <COVENANT_ID>... [options]
-  kob cancel --view <FILE>... [options]
+  kob cancel <COVENANT_ID>... [--abandon-strays] [options]
+  kob cancel --view <FILE>... [--abandon-strays] [options]
 
   The order's KAS, its custody, a collected buy's bought tokens, the strays of its own token(s) and foreign strays (other tokens sent to it) return to
-  the maker in one transaction per order; strays one transaction cannot take are reported. Fee from the released KAS,
-  else the smallest sufficient KAS UTXO of the key.
+  the maker in one transaction per order. The custody is the one the order's state pins (token, amount, extension
+  commitment), at any outpoint of its script on the node; a view naming another one is not trusted. A cancel ends the
+  order's covenant id, after which nothing can move a token it owns: when the node shows strays one transaction cannot
+  take (another extension commitment, or more than the program's token inputs), the cancel is refused and says to run
+  `kob sweep <id>` first (the order stays live and they come back). Fee from the released KAS, else the smallest
+  sufficient KAS UTXO of the key.
+  --abandon-strays  cancel anyway: each stray that cannot be taken is named in the plan, and it is lost for ever. Without
+                it (with or without --yes) such a cancel is refused.
   An order under an older contract version (a retired template of this build's cancel-only table, which the indexer's
   single-order view marks `cancel_only`) is cancelled through that template's own cancel entry; nothing else is built
   for it.
@@ -971,7 +979,7 @@ pub fn run_sweep(args: &[String]) -> i32 {
 fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
     let sweep = op == crate::order::Op::Sweep;
     let name = if sweep { "sweep" } else { "cancel" };
-    let bools: &[&str] = if sweep { &["--all"] } else { &[] };
+    let bools: &[&str] = if sweep { &["--all"] } else { &["--abandon-strays"] };
     let (p, c, signer) = match ctx_checked(args, &["--view"], bools, usage_text, |p| {
         if p.pos.is_empty() && p.get("--view").is_none() && !p.has("--all") {
             return Err(format!("give at least one covenant id or --view FILE{}", if sweep { " (or --all)" } else { "" }));
@@ -1006,8 +1014,15 @@ fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
     if p.has("--all") {
         let listed = c.need_indexer().and_then(|ix| super::views::fetch_orders(ix, &signer.pubkey, None, false));
         match listed {
-            Ok(items) => {
-                sources.extend(items.iter().filter_map(|o| o["covenant_id"].as_str()).map(|id| Source::Id(id.to_string(), false)))
+            Ok((items, cut)) => {
+                sources.extend(items.iter().filter_map(|o| o["covenant_id"].as_str()).map(|id| Source::Id(id.to_string(), false)));
+                // never "swept everything" from a list not read to its end (R8DF-2)
+                if let Some(why) = cut {
+                    eprintln!(
+                        "error: the indexer's list of your live orders is incomplete ({why}): the orders it shows are swept, others may remain"
+                    );
+                    code = 1;
+                }
             }
             Err(e) => {
                 eprintln!("error: {e}");
@@ -1015,12 +1030,13 @@ fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
             }
         }
     }
+    let abandon = !sweep && p.has("--abandon-strays");
     // An order the person named by id that is skipped is an error. From a file or from --all,
     // skipping another maker's order or an order with nothing to do is the normal case.
     for src in sources {
         let (named, r) = match src {
-            Source::Id(id, named) => (named, order_of_id(&c, &signer, op, &id)),
-            Source::View(v) => (false, order_of_view(&c, &signer, op, &v, None)),
+            Source::Id(id, named) => (named, order_of_id(&c, &signer, op, &id, abandon)),
+            Source::View(v) => (false, order_of_view(&c, &signer, op, &v, None, abandon)),
         };
         let c2 = match r {
             Ok(Ok(ready)) => finish_or(&c, &signer, Ok(ready), &format!("this {name}")),
@@ -1038,7 +1054,7 @@ fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
 }
 
 /// The order of a covenant id, read from the indexer.
-fn order_of_id(c: &Common, signer: &Signer, op: crate::order::Op, id: &str) -> Result<Prepared, Fail> {
+fn order_of_id(c: &Common, signer: &Signer, op: crate::order::Op, id: &str, abandon: bool) -> Result<Prepared, Fail> {
     let cov = cov_arg(id).map_err(usage)?;
     // A cancel needs no indexer: say how, when it cannot be asked (R3A-1).
     let no_indexer = |e: String| -> Fail {
@@ -1055,7 +1071,7 @@ fn order_of_id(c: &Common, signer: &Signer, op: crate::order::Op, id: &str) -> R
     let v = super::http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(&cov)), data::INDEXER_TIMEOUT).map_err(no_indexer)?;
     let parsed = crate::inputs::parse(&v, &format!("indexer order {}", to_hex(&cov)), &c.network)?;
     let view = parsed.views.into_iter().next().ok_or("the indexer's view of the order is not usable")?;
-    order_of_view(c, signer, op, &view, Some(indexer))
+    order_of_view(c, signer, op, &view, Some(indexer), abandon)
 }
 
 /// The sweep or cancel of one view: shown and built, or why it is skipped or refused.
@@ -1067,9 +1083,10 @@ fn order_of_view(
     op: crate::order::Op,
     view: &crate::inputs::View,
     indexer: Option<&str>,
+    abandon: bool,
 ) -> Result<Prepared, Fail> {
     let node = c.need_node()?.to_string();
-    let o = crate::order::Opts { op, node: node.clone(), network: c.network.clone(), fee: c.fee_options() };
+    let o = crate::order::Opts { op, node: node.clone(), network: c.network.clone(), fee: c.fee_options(), abandon_strays: abandon };
     let prepared = match crate::order::prepare(view, &o, signer.pubkey)? {
         Ok(x) => x,
         Err(out) => return Ok(Err(out)),
@@ -1442,6 +1459,11 @@ USAGE
   its price plus its tip in KAS. The fill must respect the order's minimum fill, its slices and its activation; a
   decaying or rising order is filled at its price at the transaction's lock time (now - 10 DAA, from the node's DAA
   clock). Pair orders and stops are not taken here.
+  An order whose token program or extension commitment (class) is not the market's is refused before signing: units
+  of another class under the same covenant id are another token. When no list names the token's class, the plan says
+  that the class is the order's own. A token whose ticker the indexer alone names, and that does not follow the
+  declared-symbol rule (an ASCII letter first, then letters and digits, at most 16, not a unit word), has no ticker:
+  name it by covenant id and give amounts in base units (`1250base`).
 
 PRICE BOUND
   --max-price P   a fill that buys (taking a sell order) pays at most P per whole token

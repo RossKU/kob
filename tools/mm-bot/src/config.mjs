@@ -117,6 +117,8 @@ export function validate(cfg) {
   if (!['mainnet', 'testnet-10'].includes(cfg.network)) p.push('network must be "mainnet" or "testnet-10"');
   if (cfg.node != null && !/^wss?:\/\//.test(cfg.node)) p.push('node must be a ws:// or wss:// URL, or null');
   if (cfg.indexer != null && !/^https?:\/\//.test(cfg.indexer)) p.push('indexer must be an http:// or https:// URL, or null');
+  // The indexer says where to look: on mainnet it is read over TLS only (R8T-I1).
+  else if (cfg.network === 'mainnet' && cfg.indexer != null && !/^https:\/\//.test(cfg.indexer)) p.push('indexer must be an https:// URL on mainnet');
   if (!cfg.kobCli) p.push('kobCli is required');
   if (cfg.keyFile != null && typeof cfg.keyFile !== 'string') p.push('keyFile must be a path or null');
   const t = cfg.token;

@@ -95,3 +95,38 @@ describe('the fee ceiling of the private-key frame does not follow the builder l
     expect(codes(decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null }))).toContain('fee-excessive');
   });
 });
+
+describe('a spend that keeps the order alive must leave its custody (R8FX-1)', () => {
+  /** The golden sweep of an ask with its custody added as one more stray: what a hostile app could hand the frame. */
+  it('a sweep that moves the custody blocks in the app decode, the frame decode and the frame summary; the honest sweep passes', async () => {
+    const { planSweep } = await import('./cancel');
+    const { strayFor } = await import('../testing/chain-fixtures');
+    const snap = snapOf('create.ask');
+    const stray = strayFor(snap, 4n, 92);
+    const honest = planSweep(env(), { ...snap, strays: [stray] });
+    expect(honest.ok).toBe(true);
+    expect(codes(decodeSigning({ kob, built: honest.built!, maker: MAKER.pk, registry: null }))).toEqual([]);
+    // the builder is asked to sweep the custody as a stray (the request the web planner never makes now)
+    const req = { ...honest.request!, strays: [stray, snap.custody!] };
+    const evil = kob.build(req as never);
+    expect(codes(decodeSigning({ kob, built: evil, maker: MAKER.pk, registry, nodeInputs: nodeFactsOf(evil) }))).toContain('sweep-custody-spent');
+    expect(codes(decodeSigning({ kob, built: evil, maker: MAKER.pk, registry: null }))).toContain('sweep-custody-spent');
+    const frame = summarize(kob, evil, MAKER.pk, []);
+    expect(frame.problemCodes).toContain('sweep-custody-spent');
+    // the "keeps its id, terms and custody" line is not said for it
+    expect(decodeSigning({ kob, built: evil, maker: MAKER.pk, registry: null }).info.map((i) => i.code)).not.toContain('swept-in-place');
+  });
+
+  it('an amend in place that spends the custody and returns it to the maker blocks', () => {
+    const snap = snapOf('create.ask');
+    const plan = planCancel(env(), snap);
+    // a cancel turned into an "amend": the order output kept, the custody to the maker
+    const b = clone(plan.built!);
+    const order = b.tx.inputs[0]!;
+    b.tx.outputs.unshift({ value: order.utxo.amount, scriptPublicKey: order.utxo.scriptPublicKey, covenant: { authorizingInput: 0, covenantId: snap.covenantId } } as never);
+    const change = b.tx.outputs.find((o) => !o.covenant)!;
+    change.value = (BigInt(change.value) - BigInt(order.utxo.amount)).toString();
+    const s = decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null });
+    expect(codes(s)).toContain('sweep-custody-spent');
+  });
+});

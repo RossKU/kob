@@ -2511,6 +2511,13 @@ impl AnyState {
                 format!("{}: KRON tokens have no extension commitment (must be zero)", self.template_id().name()),
             ));
         }
+        // An 8-byte script number has no form for i64::MIN, so a state holding it in a block or curve
+        // field could not be encoded: refused here rather than met as a panic (R8FX-I1).
+        let block_min = self.block_fields().is_some_and(|d| [d.mode, d.recv_threshold, d.topup_tip, d.bought].contains(&i64::MIN));
+        let curve_min = matches!(self, AnyState::KobCurveAsk(c) if [c.tpl_prefix_len, c.tpl_suffix_len, c.scale, c.min_fill, c.tip, c.active_from, c.level_size, c.total, c.amount_left].contains(&i64::MIN) || c.table.contains(&i64::MIN));
+        if block_min || curve_min {
+            return Err(StateError::Codec("AnyState", format!("{name}: a field is i64::MIN, which no 8-byte script number spells")));
+        }
         match self {
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => {
                 // The committed exit is a fixed-width span: any other length makes the state

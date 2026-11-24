@@ -406,7 +406,7 @@ export class StandaloneController {
    * counts as caught up.
    */
   private isCaughtUp(a: HealthAssessment): boolean {
-    return a.level === 'ok' && (typeof a.lagEstimate !== 'number' || a.lagEstimate <= this.lagReturn);
+    return a.level === 'ok' && !a.lagUnknown && (typeof a.lagEstimate !== 'number' || a.lagEstimate <= this.lagReturn);
   }
 
   /**

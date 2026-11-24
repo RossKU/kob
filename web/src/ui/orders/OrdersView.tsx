@@ -62,7 +62,7 @@ import { countText, tCount } from './plural';
 import { downloadText, exportFileName } from '../kit/download';
 import { backupFileText } from './recover';
 import {
-  abandoningOrders, abandonsStrays, describeActionError, lostStrays, strandedCount, liveExitsOfRepeatEntry, markCancelling, mergeFlow, rawActionError, planCancelFor, planCancelMany, planMergeFor,
+  abandoningOrders, abandonsStrays, describeActionError, lostStrays, strandedCount, straysUnchecked, liveExitsOfRepeatEntry, markCancelling, mergeFlow, rawActionError, planCancelFor, planCancelMany, planMergeFor,
   planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, isOwnFill, ownOrderIds, type OrderRowModel } from './orders-model';
@@ -368,7 +368,10 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // confirmation, before anything is signed: they are lost with the order (R8F4-2).
   const stepOf = (title: string, plan: CancelPlan, label?: string): FlowStep => {
     const lost = lostStrays(plan);
-    return { title, plan, spends: plan.cancelIds, ...(label ? { label } : {}), ...(lost ? { notes: [t('orders.strays.lostOnClose', { utxos: lost })], signerNotes: [{ kind: 'straysLost' as const, utxos: lost }] } : {}) };
+    const unchecked = straysUnchecked(plan);
+    const notes = [...(lost ? [t('orders.strays.lostOnClose', { utxos: lost })] : []), ...(unchecked ? [t('orders.strays.uncheckedOnClose')] : [])];
+    const signerNotes = [...(lost ? [{ kind: 'straysLost' as const, utxos: lost }] : []), ...(unchecked ? [{ kind: 'straysUnchecked' as const }] : [])];
+    return { title, plan, spends: plan.cancelIds, ...(label ? { label } : {}), ...(notes.length ? { notes, signerNotes } : {}) };
   };
 
   /**

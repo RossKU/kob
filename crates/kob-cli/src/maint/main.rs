@@ -2,6 +2,27 @@
 //!
 //! Run it from the source tree: `cargo run -p kob-cli --bin kob-maint -- add-program ...`.
 
+// The prints of `kob`: every line through the one sanitiser (`text::clean_out`). This binary prints
+// what it derives from an artifact or redeem file and the errors of reading it (R8FX-3).
+macro_rules! println {
+    () => { $crate::text::emit(false, true, "") };
+    ($($t:tt)*) => { $crate::text::emit(false, true, &::std::format!($($t)*)) };
+}
+macro_rules! eprintln {
+    () => { $crate::text::emit(true, true, "") };
+    ($($t:tt)*) => { $crate::text::emit(true, true, &::std::format!($($t)*)) };
+}
+macro_rules! print {
+    ($($t:tt)*) => { $crate::text::emit(false, false, &::std::format!($($t)*)) };
+}
+macro_rules! eprint {
+    ($($t:tt)*) => { $crate::text::emit(true, false, &::std::format!($($t)*)) };
+}
+
+#[allow(dead_code)]
+#[path = "../text.rs"]
+mod text;
+
 mod add_program;
 
 const USAGE: &str = "\

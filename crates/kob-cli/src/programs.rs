@@ -21,7 +21,7 @@ pub fn run_programs(args: &[&str]) -> i32 {
         _ => return crate::help::print_usage_error(&[USAGE_PROGRAMS]),
     };
     if json {
-        println!("{}", serde_json::to_string_pretty(profiles()).expect("profiles serialise"));
+        println!("{}", crate::text::json(profiles()));
         return 0;
     }
     println!(

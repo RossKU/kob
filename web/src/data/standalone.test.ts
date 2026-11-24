@@ -271,7 +271,11 @@ describe('an indexer that falls behind the chain', () => {
 
   it('a lag given in DAA only counts (10 DAA per second); at the threshold it does not switch', async () => {
     const h = harness();
-    const daaOnly = (sec: number, state = 'following'): HealthView => ({ ...health(state), lag_seconds: null, lag_daa: sec * 10 });
+    // an older indexer: no lag_seconds key at all
+    const daaOnly = (sec: number, state = 'following'): HealthView => {
+      const { lag_seconds: _gone, ...rest } = health(state);
+      return { ...rest, lag_daa: sec * 10 } as HealthView;
+    };
     h.setHealth(daaOnly(LAG_SWITCH_SECONDS));
     h.c.report(assess(daaOnly(LAG_SWITCH_SECONDS)));
     await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS * 3);
@@ -410,6 +414,26 @@ describe('an indexer that falls behind the chain', () => {
     expect(stays[1]).toBeGreaterThanOrEqual(2 * MIN_AUTO_MS);
     expect(stays[2]).toBeLessThan(2 * MIN_AUTO_MS);
     expect(stays[3]).toBeGreaterThanOrEqual(4 * MIN_AUTO_MS);
+  });
+
+  it('lag_seconds sent as null (the cursor time not known yet) neither starts nor ends the mode, whatever the DAA lag claims (R8B-L1)', async () => {
+    const h = harness();
+    const unknown = { ...health('following'), lag_seconds: null, lag_daa: 13_000 } as HealthView;
+    h.setHealth(unknown);
+    h.c.report(assess(unknown));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS * 3);
+    expect(h.c.state.active).toBe(false);
+    // in an automatic mode it does not end on it
+    h.setHealth(lagged(500));
+    h.c.report(assess(lagged(500)));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(true);
+    h.setHealth(unknown);
+    for (let t = 0; t < 120_000; t += 15_000) {
+      h.c.report(assess(unknown));
+      await vi.advanceTimersByTimeAsync(15_000);
+    }
+    expect(h.c.state.active).toBe(true);
   });
 
   it('with automatic fallback off it never switches on lag', async () => {

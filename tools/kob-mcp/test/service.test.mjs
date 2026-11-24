@@ -655,3 +655,17 @@ test('200 dust bids above one real level do not empty the book reference (R6T-4)
   assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: no usable reference .*200 row\(s\) worth under 0.5 KAS \(dust\).*refPrice/);
   assert.equal(t.yesCalls().length, 1);
 });
+
+// R8T-5: strays make kob cancel refuse until swept; kob_sweep returns them, and the cancel goes.
+test('kob_sweep returns the strays an order owns, then kob_cancel goes through (R8T-5)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  await svc.balances();
+  const id = 'ab'.repeat(32);
+  chainSet({ orders: { [id]: { side: 'buy', price: 25000000, tip: 0, amount: 100, value: 26e8, strays: 1 } } });
+  const refused = await svc.write('kob_cancel', { id });
+  assert.notEqual(refused.status, 'submitted');
+  assert.match(JSON.stringify(refused), /kob sweep/);
+  assert.equal((await svc.write('kob_sweep', { id })).status, 'submitted');
+  assert.equal((await svc.write('kob_cancel', { id })).status, 'submitted');
+});
