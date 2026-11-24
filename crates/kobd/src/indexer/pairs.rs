@@ -897,7 +897,7 @@ pub fn pair_rate(pa: i128, pb: i128, basis_b: i128) -> Option<PairRate> {
 }
 
 /// One `pair_fills` row as the volume reads it: `(txid, ts, side, amount_a, amount_b)`.
-type PairFillRow = (Vec<u8>, i64, i64, i64, Option<i64>);
+pub(crate) type PairFillRow = (Vec<u8>, i64, i64, i64, Option<i64>);
 
 /// The pair volume of `pair_fills` rows, one entry per TRANSACTION in the order first seen:
 /// `(ts, A base units, B base units)`.
@@ -907,7 +907,7 @@ type PairFillRow = (Vec<u8>, i64, i64, i64, Option<i64>);
 /// the larger of the sums of its two sides. Each side's rows are summed in 128 bits, and a
 /// negative or missing amount counts as 0. So a netting fill counts once, and the routed rest of
 /// a partly netted order still counts.
-fn tx_volumes(rows: impl IntoIterator<Item = PairFillRow>) -> Vec<(i64, i128, i128)> {
+pub(crate) fn tx_volumes(rows: impl IntoIterator<Item = PairFillRow>) -> Vec<(i64, i128, i128)> {
     // txid -> (ts, [A of asks, A of bids], [B of asks, B of bids]). `order` keeps the first-seen
     // order.
     let mut by: HashMap<Vec<u8>, (i64, [i128; 2], [i128; 2])> = HashMap::new();
@@ -929,58 +929,6 @@ fn pair_fill_rows(conn: &Connection, query: &str, params: impl rusqlite::Params)
     let mut st = conn.prepare_cached(query)?;
     let rows = st.query_map(params, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-/// Pair fills [`pair_volume`] reads at most per call.
-pub(crate) const PAIR_VOLUME_ROWS_MAX: i64 = 200_000;
-
-/// The pair volume of the buckets `buckets` (starts, ascending, `iv` apart or more):
-/// `t -> (A base units, B base units, transactions)`.
-///
-/// Only the fills inside those buckets are read, one range per run of adjacent buckets, at most
-/// [`PAIR_VOLUME_ROWS_MAX`] in all: a window the client chose (`from`) costs the fills of the
-/// candles it gets, not of the whole time between (R3C2-1). A netting fill counts once, see
-/// [`tx_volumes`].
-fn pair_volume(
-    conn: &Connection,
-    a: &Hash32,
-    b: &Hash32,
-    iv: i64,
-    buckets: &BTreeSet<i64>,
-) -> DbResult<BTreeMap<i64, (i128, i128, u64)>> {
-    let mut ranges: Vec<(i64, i64)> = vec![];
-    for &t in buckets {
-        match ranges.last_mut() {
-            Some((_, end)) if *end == t => *end = t.saturating_add(iv),
-            _ => ranges.push((t, t.saturating_add(iv))),
-        }
-    }
-    let mut rows = vec![];
-    for (start, end) in ranges {
-        let left = PAIR_VOLUME_ROWS_MAX - rows.len() as i64;
-        if left <= 0 {
-            break;
-        }
-        rows.extend(pair_fill_rows(
-            conn,
-            concat!(
-                "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_id = ",
-                id_of!("?1"),
-                " AND quote_id = ",
-                id_of!("?2"),
-                " AND ts >= ?3 AND ts < ?4 ORDER BY ts LIMIT ?5"
-            ),
-            params![a.0.to_vec(), b.0.to_vec(), start, end, left],
-        )?);
-    }
-    let mut m: BTreeMap<i64, (i128, i128, u64)> = BTreeMap::new();
-    for (ts, x, y) in tx_volumes(rows) {
-        let e = m.entry(ts.div_euclid(iv) * iv).or_default();
-        e.0 = e.0.saturating_add(x);
-        e.1 = e.1.saturating_add(y);
-        e.2 += 1;
-    }
-    Ok(m)
 }
 
 /// Pair candles of `base / quote`, derived from the two KAS series.
@@ -1039,7 +987,15 @@ pub fn pair_candles(
             ca.retain(|t, _| *t >= first);
             cb.retain(|t, _| *t >= first);
         }
-        let vol = pair_volume(conn, base, quote, iv, &buckets)?;
+        // The pair volume of the buckets shown, one row of the writer's aggregates each, no fills
+        // (`super::pair_volume`, R5C2-6).
+        let id = |h: &Hash32| -> DbResult<Option<i64>> {
+            Ok(conn.prepare_cached("SELECT id FROM ids WHERE h = ?1")?.query_row([&h.0[..]], |r| r.get(0)).optional()?)
+        };
+        let vol = match (id(base)?, id(quote)?) {
+            (Some(x), Some(y)) => super::pair_volume::read(conn, (x, y), iv, &buckets)?,
+            _ => BTreeMap::new(),
+        };
         let mut last_a = market::last_trade_price_before(conn, base, basis_a, first)?;
         let mut last_b = market::last_trade_price_before(conn, quote, basis_b, first)?;
         for t in buckets {

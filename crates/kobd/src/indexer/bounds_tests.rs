@@ -1087,10 +1087,10 @@ fn the_due_creator_locks_do_not_grow_with_released_ones() {
     assert_eq!(live(&conn), 10);
 }
 
-/// The pair candles read the fills of the buckets they show, at most `PAIR_VOLUME_ROWS_MAX` (200,000): with more fills in
-/// those buckets the work stops at the cap.
+/// R5C2-6: the pair candles take each shown bucket's volume from the writer's aggregates (`pair_volume`), one row each and no
+/// fills: 210,000 then 420,000 pair fills in the ten shown minutes cost the same, and the volume is all of them, never cut.
 #[test]
-fn the_pair_candles_stop_at_their_row_cap() {
+fn the_pair_candles_read_one_volume_row_a_bucket() {
     let _heavy = heavy();
     let conn = open_memory("testnet-10").unwrap();
     let (a, b) = ([0x5c; 32], [0x5d; 32]);
@@ -1139,13 +1139,17 @@ fn the_pair_candles_stop_at_their_row_cap() {
     };
     let read =
         || pairs::pair_candles(&conn, &Hash32(a), &Hash32(b), (Some(3), Some(3)), "1m", 60_000, Some(t0), Some(t0 + 600_000), 500);
-    let cap = pairs::PAIR_VOLUME_ROWS_MAX;
-    grow(0, cap + 10_000);
+    let n = 210_000;
+    grow(0, n);
+    crate::indexer::pair_volume::refresh(&conn).unwrap();
     let (v, few) = steps(&conn, || read().unwrap());
     assert_eq!(v.items.len(), 10);
-    grow(cap + 10_000, 2 * cap + 20_000);
-    let many = steps(&conn, || read().unwrap()).1;
-    flat("pair candles at the cap", few, many);
+    grow(n, 2 * n);
+    crate::indexer::pair_volume::refresh(&conn).unwrap();
+    let (v, many) = steps(&conn, || read().unwrap());
+    flat("pair candles", few, many);
+    let total: u64 = v.items.iter().map(|c| c.pair_fills).sum();
+    assert_eq!(total, 2 * n as u64, "every pair fill of the window counts");
 }
 
 /// The logo lists (`GET /v1/logo-votes`, `GET /v1/logo-blocklist`) read one row per token, not one per vote or report:

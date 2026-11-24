@@ -270,6 +270,9 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     // The windows of rows an older build wrote (or the fill above), and of every row when the rules
     // behind them changed (R5C2-4), are set before anything reads. The listing minimum is the one the
     // store last ran with; the writer's first commit applies its own.
+    if let Some(n) = super::pair_volume::backfill(conn)? {
+        tracing::info!(minutes = n, "built the pair volume of the existing pair fills once (kept by triggers from now on)");
+    }
     // One transaction: outside one, every row's update is a commit and a disk sync (R5F-2).
     let daa = super::book::cursor_daa(conn)?.min(i64::MAX as u64) as i64;
     let tx = conn.unchecked_transaction()?;
@@ -281,6 +284,8 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if ensure_book_rules(&tx, dust)? {
         tracing::info!("the live books are decided again: the rules behind them changed with this build");
     }
+    // Fills an earlier build wrote or pruned since (its triggers marked them) before anything reads.
+    super::pair_volume::refresh(&tx)?;
     let set = maintain_live_books(&tx, daa, unix_now())?;
     tx.commit()?;
     if set > 0 {

@@ -552,7 +552,7 @@ never from pair fills.
 
 A rate is B base units per `price_basis` base units of A: `num / den` the exact reduced fraction, `value` its floor.
 `a_traded` / `b_traded` say which side traded in KAS in the bucket (the other side carries its last close forward). `h` and `l`
-are the bounds the two series allow, not observed trades. `pair_volume_*` and `pair_fills` are the pair-order fills of the bucket, each transaction once: a netting fill (an ask and a bid of the pair filling each other) is one trade though both orders record it (its larger side's amounts; `pair_fills` counts transactions).
+are the bounds the two series allow, not observed trades. `pair_volume_*` and `pair_fills` are the pair-order fills of the bucket, each transaction once: a netting fill (an ask and a bid of the pair filling each other) is one trade though both orders record it (its larger side's amounts; `pair_fills` counts transactions). They are every fill of the bucket: the indexer keeps them per pair and bucket as the fills are written and reverted, so a long window is never cut.
 
 **`GET /v1/pairs/{base}/{quote}/fills?limit=&before=`** (`limit` default 50, at most `max_page_size`; `before` a fill id):
 

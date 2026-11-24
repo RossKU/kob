@@ -1867,6 +1867,8 @@ fn seed_pair_fill(c: &Connection, cov: u8, tx: u8, ts: i64, side: i64, amount_a:
         params![ts, cid(tx), cid(cov), cid(BASE), cid(QUOTE), side, amount_a, amount_b, price, counterparty],
     )
     .unwrap();
+    // The writer's commit recomputes the pair volume of the fills it wrote.
+    crate::indexer::pair_volume::refresh(c).unwrap();
 }
 
 #[tokio::test]

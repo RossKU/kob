@@ -24,7 +24,7 @@ client), **M** memory only. Cache: **G** per data generation (the store's commit
 | `/v1/stats?since=` | H | G, P (minute) | the activity buckets of the range | `bounds::the_market_reads_do_not_grow_with_fills` (activity: 211 / 211) |
 | `/v1/pairs?token=` | H | S | the oldest 20,000 fillable `pair_live` rows (`PAIR_SCAN_MAX`; with `token`, that many as base and as quote) | `bounds::the_pair_reads_do_not_grow_with_pair_orders` (rows the writer set: see the wall-time table below; an older build's unset rows, read row by row: 6,380,049 / 6,380,040) |
 | `/v1/pairs/{a}/{b}/book` | H | S, P | 20,001 fillable `pair_live` rows of the pair, at most 2,000 resting, and 200 opened since the last commit; the KAS route of each token as the book's rows | same (unset rows: 6,220,179 / 6,220,179; 20,001 real fillable orders: 62,183, `bounds::worst_case_pair_reads_over_real_pair_orders`); `bounds::the_book_reads_do_not_grow_with_listed_curve_asks` (pair book, KAS route: 605 / 605) |
-| `/v1/pairs/{a}/{b}/candles` | H | P | the two tokens' candle rows of the window (`limit` at most 1,500) and the pair fills of the shown buckets, at most 200,000 (`PAIR_VOLUME_ROWS_MAX`) | `bounds::the_pair_candles_stop_at_their_row_cap` (210,000 / 420,000 fills in the shown buckets: 2,001,469 / 2,001,331) |
+| `/v1/pairs/{a}/{b}/candles` | H | P | the two tokens' candle rows of the window (`limit` at most 1,500) and one `pair_volume` row per shown bucket (the writer's aggregates, R5C2-6); no pair fill | `bounds::the_pair_candles_read_one_volume_row_a_bucket` (210,000 / 420,000 fills in the shown buckets: 1,569 / 1,463) |
 | `/v1/pairs/{a}/{b}/fills` | H | U | a page (`limit` + 1) and at most 20,001 fills of the 24 h window | `bounds::the_pair_reads_do_not_grow_with_pair_orders` (pair fills: 201,253 / 201,210) |
 | `/v1/orders?maker=&token=&status=` | H | S, P | a page of at most `max_page_size` + 1 orders, each with its custody (2 rows), at most 101 strays and a count of at most 10,000 index entries | `bounds::the_order_view_does_not_grow_with_children_strays_or_spent_custody` (orders of a maker: 138,575 / 138,575) |
 | `/v1/orders/{id}` | L | U | the order, at most 101 children and 101 live strays, two counts of at most 10,000 index entries each (`VIEW_COUNT_MAX`, index only), the custody and the bought-custody (2 rows each, live partial indexes) | same (order view: 220,489 / 220,489; bought custody: 91 / 91) |
@@ -64,7 +64,7 @@ distinct computations one client can cause per data generation (and second, for 
 | `/v1/quotes` sampling (once a minute) | the same | 5 ms | 194,509 | none (the writer's) |
 | `/v1/pairs?token=` | 20,001 fillable `KobPair` asks, real states and custodies | 25 ms | 780,122 | 1 per token and second |
 | `/v1/pairs/{a}/{b}/book?depth=` | the same | 1.9 ms | 62,183 | 4 per pair and second (the steps) |
-| `/v1/pairs/{a}/{b}/candles` | 420,000 pair fills in the shown buckets (`PAIR_VOLUME_ROWS_MAX` 200,000 read) | **226 ms** | 2,001,331 | one per `interval`, `from`, `to`, `limit`: not bounded |
+| `/v1/pairs/{a}/{b}/candles` | 420,000 pair fills in the shown buckets | 1.1 ms (was 226 ms) | 1,463 | one per `interval`, `from`, `to`, `limit`; each at most `limit` candle rows of each token and `limit` volume rows |
 | `/v1/pairs/{a}/{b}/fills` | 24 h of fills (20,001 read) | 19 ms | 201,210 | one per request (uncached) |
 | `/v1/orders?maker=` | a maker's page at its bound | 2.6 ms | 138,575 | one per request parameters and second |
 | `/v1/orders/{id}` | 10,000 children and strays | 3.8 ms | 220,489 | one per request (light lane, uncached) |
@@ -81,8 +81,17 @@ range can only tie the worst level kept), the aggregated levels and the statisti
 need, and the pair reads take each order from its `pair_live` row as the writer decided it (side, source, scale, the amount one
 fill can take, its quote as a function of the DAA score) instead of decoding its state and reading its custody.
 
-**Still above 100 ms: `/v1/pairs/{a}/{b}/candles`**, 226 ms at its row cap, with keys a client chooses freely (`from`, `to`,
-`limit`). The 200,000 pair-fill rows of the shown buckets cost their maker one transaction each. Not changed in this round.
+No public route is above 100 ms at its worst case. The pair candles take their volume from `pair_volume`: per pair and candle
+bucket of each interval served (1 m, 5 m, 1 h, 1 d), kept by triggers on `pair_fills` and the writer's commit
+(`indexer::pair_volume`), so a busy pair's volume on a long window is never cut. Each pair fill adds at most 4 rows (its
+bucket of each interval, shared by the fills of that bucket) and one transient mark; the first open over 100,000 pair fills
+builds them in 0.26 s (37,540 rows over 30,834 minutes; `pair_volume::tests::pair_volume_first_open_time`).
+
+The chart routes (`/v1/candles`, `/v1/quotes`, the pair candles) keep `from`, `to` and `limit` in their keys as asked: a
+larger computation cut to the request is not the same answer (a window that ends inside a bucket has that bucket from its
+own trades; without `from` the window is `limit` intervals long; quotes carry the value in force at its start). Each
+computation is at most `limit` (1,500) rows, about a millisecond, so the number of keys only multiplies a cost the rate limit
+and the client's two heavy reads already bound.
 
 A row the writer has not set yet (`ok` NULL: an older build's write to the store) is decided row by row, as the writer would;
 that costs about 90 microseconds a pair order (`bounds::the_pair_reads_do_not_grow_with_pair_orders`, 1.8 s for 20,001). This

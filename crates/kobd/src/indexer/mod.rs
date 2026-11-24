@@ -29,6 +29,7 @@ pub mod market;
 pub mod outputs;
 pub mod packed;
 pub mod packed_dicts;
+pub mod pair_volume;
 pub mod pairs;
 pub mod prefetch;
 pub mod processor;

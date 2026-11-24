@@ -474,6 +474,36 @@ CREATE TABLE IF NOT EXISTS pair_fills (
 CREATE INDEX IF NOT EXISTS pair_fills_pair ON pair_fills (base_id, quote_id, id);
 CREATE INDEX IF NOT EXISTS pair_fills_pair_ts ON pair_fills (base_id, quote_id, ts);
 CREATE INDEX IF NOT EXISTS pair_fills_block ON pair_fills (block_seq);
+-- `pair_volume`: the pair volume per pair and candle bucket of each interval the pair charts serve (`iv` 1 m, 5 m, 1 h, 1 d):
+-- A and B base units (decimal, summed in 128 bits) and transactions, a transaction counted once at the larger of its two sides
+-- (`indexer::pair_volume`, R5C2-6). `pair_volume_dirty`: the 1-minute buckets whose fills changed, recomputed before the
+-- writer's commit. A bucket without fills has no row.
+CREATE TABLE IF NOT EXISTS pair_volume (
+    base_id  INTEGER NOT NULL,
+    quote_id INTEGER NOT NULL,
+    iv       INTEGER NOT NULL,
+    t        INTEGER NOT NULL,
+    vol_a    TEXT NOT NULL,
+    vol_b    TEXT NOT NULL,
+    txs      INTEGER NOT NULL,
+    PRIMARY KEY (base_id, quote_id, iv, t)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS pair_volume_dirty (
+    base_id  INTEGER NOT NULL,
+    quote_id INTEGER NOT NULL,
+    t        INTEGER NOT NULL,
+    PRIMARY KEY (base_id, quote_id, t)
+) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS pair_volume_fill_insert AFTER INSERT ON pair_fills BEGIN
+    INSERT OR IGNORE INTO pair_volume_dirty (base_id, quote_id, t) VALUES (NEW.base_id, NEW.quote_id, NEW.ts - (NEW.ts % 60000));
+END;
+CREATE TRIGGER IF NOT EXISTS pair_volume_fill_delete AFTER DELETE ON pair_fills BEGIN
+    INSERT OR IGNORE INTO pair_volume_dirty (base_id, quote_id, t) VALUES (OLD.base_id, OLD.quote_id, OLD.ts - (OLD.ts % 60000));
+END;
+CREATE TRIGGER IF NOT EXISTS pair_volume_fill_update AFTER UPDATE OF base_id, quote_id, ts, txid, side, amount_a, amount_b ON pair_fills BEGIN
+    INSERT OR IGNORE INTO pair_volume_dirty (base_id, quote_id, t) VALUES (OLD.base_id, OLD.quote_id, OLD.ts - (OLD.ts % 60000));
+    INSERT OR IGNORE INTO pair_volume_dirty (base_id, quote_id, t) VALUES (NEW.base_id, NEW.quote_id, NEW.ts - (NEW.ts % 60000));
+END;
 
 -- KCC-23 declarations (`kcc23.rs`). A candidate preparation: an accepted version 1 transaction whose payload is a declaration
 -- (`0x00` + one strict I-JSON object, at most 16 KiB), its id-relevant fields in the record-log encoding (`kcc23::encode_tx`,
