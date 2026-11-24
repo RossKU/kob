@@ -235,7 +235,9 @@ describe('buildPairPlanEnv hands the planners the node-confirmed pair book (audi
     (failing.indexer as unknown as { order: () => Promise<never> }).order = async () => { throw new Error('The indexer did not answer within 10s.'); };
     const env1 = await buildPairPlanEnv(failing, { pubkey: MAKER.pk }, a, b);
     expect(env1.guardsUnavailable).toContain('book');
-    const cut = services(chain, Object.assign([ask], { truncated: true }) as OrderView[]);
+    // both token lists cut and neither holds the pair order the pair book counts: the book is unknown
+    const kasBid = { ...clone(w.bidView), covenant_id: 'cc'.repeat(32), pair: null, contract: 'KobBid' } as unknown as OrderView;
+    const cut = services(chain, Object.assign([kasBid], { truncated: true }) as OrderView[]);
     const env2 = await buildPairPlanEnv(cut, { pubkey: MAKER.pk }, a, b);
     expect(env2.guardsUnavailable).toContain('book');
     // the plan at the click carries the existing "could not read" error
@@ -245,6 +247,24 @@ describe('buildPairPlanEnv hands the planners the node-confirmed pair book (audi
     // read in full, nothing is unavailable for the book (the phantom is only left out)
     const env3 = await buildPairPlanEnv(services(chain, [ask]), { pubkey: MAKER.pk }, a, b);
     expect(env3.guardsUnavailable ?? []).not.toContain('book');
+  });
+
+  it('thousands of active orders of A do not shut the pair ticket: a complete list of B, or cut lists that hold the pair orders the book counts, are read (R8B-M2)', async () => {
+    const w = world();
+    const ask = clone(w.askView) as OrderView & { pair: { base: string; quote: string } };
+    ask.pair.base = a.covenantId;
+    ask.pair.quote = b.covenantId;
+    const chain = (x: string[]) => new FakeChain().getUtxosByAddresses(x);
+    const kasBids = Array.from({ length: 4_000 }, (_, i) => ({ ...clone(w.bidView), covenant_id: i.toString(16).padStart(64, '0'), pair: null, contract: 'KobBid' }) as unknown as OrderView);
+    const svc = services(chain, []);
+    // A: 4,000 KAS bids, cut; B: complete, with the pair ask
+    (svc.indexer as unknown as { allOrders: (q: { token?: string }) => Promise<unknown> }).allOrders = async (q) =>
+      q.token === a.covenantId ? Object.assign([...kasBids], { truncated: true }) : [ask];
+    const env = await buildPairPlanEnv(svc, { pubkey: MAKER.pk }, a, b);
+    expect(env.guardsUnavailable ?? []).not.toContain('book');
+    // both cut, but what was read holds the one direct ask the pair book counts
+    (svc.indexer as unknown as { allOrders: () => Promise<unknown> }).allOrders = async () => Object.assign([...kasBids.slice(0, 10), ask], { truncated: true });
+    expect((await buildPairPlanEnv(svc, { pubkey: MAKER.pk }, a, b)).guardsUnavailable ?? []).not.toContain('book');
   });
 
   it('a node that cannot be asked for the order check fails the build (the node banner), it is not skipped', async () => {

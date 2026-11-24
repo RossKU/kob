@@ -64,6 +64,13 @@ describe('readHoldingsPart while the indexer goes away', () => {
     expect((await readHoldingsPart(deps(false), { pubkey: MAKER_PK }, token, m)).ownOrders).toBeNull();
   });
 
+  it('the own orders are read 200 a page for up to 50 pages (10,000 of one token) before a cut list counts as not read (R8B-L3)', async () => {
+    const asked: { q: unknown; o: unknown }[] = [];
+    const d = { ...deps(false), indexer: { allOrders: async (q: unknown, o: unknown) => (asked.push({ q, o }), [own]) } } as unknown as Parameters<typeof readHoldingsPart>[0];
+    expect((await readHoldingsPart(d, { pubkey: MAKER_PK }, token, m)).ownOrders).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ q: { limit: 200, status: 'active' }, o: { maxPages: 50 } });
+  });
+
   it('a list of own orders cut at its page bound is not read: self-trade prevention needs all of them (R7C2b-4)', async () => {
     const cut = (truncated: boolean) => ({ ...deps(false), indexer: { allOrders: async () => Object.assign([own], truncated ? { truncated: true } : {}) } }) as unknown as Parameters<typeof readHoldingsPart>[0];
     expect((await readHoldingsPart(cut(true), { pubkey: MAKER_PK }, token, m)).ownOrders).toBeNull();
