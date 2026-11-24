@@ -62,7 +62,7 @@ import { countText, tCount } from './plural';
 import { downloadText, exportFileName } from '../kit/download';
 import { backupFileText } from './recover';
 import {
-  abandoningOrders, abandonsStrays, describeActionError, lostStrays, strandedCount, straysUnchecked, liveExitsOfRepeatEntry, markCancelling, mergeFlow, rawActionError, planCancelFor, planCancelMany, planMergeFor,
+  abandoningOrders, abandonsStrays, describeActionError, lostStrays, refundLeavesStrays, strandedCount, straysCutLeft, straysUnchecked, twinsLeft, liveExitsOfRepeatEntry, markCancelling, mergeFlow, rawActionError, planCancelFor, planCancelMany, planMergeFor,
   planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, isOwnFill, ownOrderIds, type OrderRowModel } from './orders-model';
@@ -367,10 +367,22 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // A step that closes an order owning token UTXOs its maker cannot move says so in the final
   // confirmation, before anything is signed: they are lost with the order (R8F4-2).
   const stepOf = (title: string, plan: CancelPlan, label?: string): FlowStep => {
-    const lost = lostStrays(plan);
+    // strays no sweep can move (another token, twins of the custody), those a cut list does not
+    // show, and those a refund never moves: each is left behind for good, and said (R9B-L1, R9B-L2)
+    const lost = lostStrays(plan) + twinsLeft(plan);
     const unchecked = straysUnchecked(plan);
-    const notes = [...(lost ? [t('orders.strays.lostOnClose', { utxos: lost })] : []), ...(unchecked ? [t('orders.strays.uncheckedOnClose')] : [])];
-    const signerNotes = [...(lost ? [{ kind: 'straysLost' as const, utxos: lost }] : []), ...(unchecked ? [{ kind: 'straysUnchecked' as const }] : [])];
+    const cut = straysCutLeft(plan);
+    const refundLeft = refundLeavesStrays(plan);
+    const notes = [
+      ...(lost ? [t('orders.strays.lostOnClose', { utxos: lost })] : []),
+      ...(unchecked ? [t('orders.strays.uncheckedOnClose')] : []),
+      ...(cut !== null ? [cut > 0 ? t('orders.strays.cutOnClose', { count: cut }) : t('orders.strays.cutSomeOnClose')] : []),
+      ...(refundLeft ? [t('orders.strays.refundLeaves', { utxos: refundLeft })] : []),
+    ];
+    const signerNotes = [
+      ...(lost + (cut ?? 0) + refundLeft ? [{ kind: 'straysLost' as const, utxos: lost + (cut ?? 0) + refundLeft }] : []),
+      ...(unchecked ? [{ kind: 'straysUnchecked' as const }] : []),
+    ];
     return { title, plan, spends: plan.cancelIds, ...(label ? { label } : {}), ...(notes.length ? { notes, signerNotes } : {}) };
   };
 

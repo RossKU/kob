@@ -228,6 +228,7 @@ export default {
   'issues.cancel.replacement-wrong-maker': 'The replacement order must belong to your wallet key.',
   'issues.cancel.replacement-wrong-token': 'The replacement order must trade the same token as the cancelled order.',
   'issues.cancel.stray-other-extension': 'A stray token ({amount}, {outpoint}) has another extension commitment and is left behind.',
+  'issues.cancel.twins-abandoned': '{count} stray token UTXO(s) identical to the custody ({amount}) do not fit into the transaction and are lost when the order closes; no sweep can move them.',
   'issues.cancel.strays-abandoned': '{count} stray token UTXO(s) ({amount}) do not fit into the transaction and are lost when the order closes.',
   'issues.cancel.stray-other-token': 'A stray of another token ({amount}) is not moved by this cancel.',
   'issues.cancel.strays-unknown': 'The stray tokens could not be read: any that exist are not moved and are lost when the order closes.',

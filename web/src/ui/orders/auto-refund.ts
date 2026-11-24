@@ -92,6 +92,9 @@ export async function autoRefundPass(s: Services, pubkey: Hex, store: RecordStor
       // No reclaim. This is a signature-free refund, where the order's own value pays the fee.
       // Funding would need the wallet's signature.
       const plan = planRefund({ ...env, funding: [] }, snap);
+      // A refund moves no stray: an order holding some is left to its maker, whose cancel returns
+      // them, never refunded behind their back (R9B-L2).
+      if (plan.issues.some((i) => i.code === 'refund.strays-stay') || snap.straysUnknown) continue;
       if (!submittableWithoutSignature(s, pubkey, plan)) continue;
       const signed = s.kob.finalize(plan.built!, [], { tightenBudgets: true });
       s.kob.validate(signed);

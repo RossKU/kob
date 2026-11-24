@@ -193,9 +193,27 @@ export const strandedCount = (plans: readonly CancelPlan[]): number =>
  * confirmation states that they could not be checked instead (`straysUnchecked`, R8B-M1).
  */
 export function stopOnUnreadStrays(plan: CancelPlan): CancelPlan {
-  if (!plan.ok || !plan.issues.some((i) => i.code === 'cancel.strays-unknown' && i.params?.cut === 1) || plan.issues.some((i) => i.code.startsWith('cancel.amend-in-place'))) return plan;
-  return { ...plan, ok: false, request: null, built: null, issues: plan.issues.map((i) => (i.code === 'cancel.strays-unknown' ? { ...i, severity: 'error' as const } : i)) };
+  // Nothing an outsider can send to an order may stop its maker from ending it (R9B-L1): a list
+  // the indexer cut goes on like one that could not be asked, and the confirmation states how many
+  // strays are left behind (`straysCutLeft`). A sweep first is offered where a sweep can move some.
+  return plan;
 }
+
+/**
+ * With a stray list the indexer cut: how many strays this plan leaves behind at least (those the
+ * indexer counts beyond its list). Null when the list was not cut.
+ */
+export const straysCutLeft = (p: CancelPlan): number | null => {
+  if (!p.ok || p.issues.some((i) => i.code.startsWith('cancel.amend-in-place'))) return null;
+  const i = p.issues.find((x) => x.code === 'cancel.strays-unknown' && x.params?.cut === 1);
+  return i ? Number(i.params?.beyond ?? 0) : null;
+};
+
+/** Strays identical to the custody a cancel leaves behind (no sweep can move them). */
+export const twinsLeft = (p: CancelPlan): number => (p.ok ? p.issues.filter((i) => i.code === 'cancel.twins-abandoned').reduce((a, i) => a + Number(i.params?.count ?? 0), 0) : 0);
+
+/** The strays a refund leaves behind (a refund moves none; a cancel returns them, R9B-L2). */
+export const refundLeavesStrays = (p: CancelPlan): number => (p.ok ? Number(p.issues.find((i) => i.code === 'refund.strays-stay')?.params?.count ?? 0) : 0);
 
 /**
  * The strays a plan leaves behind that its maker cannot move at all (of another token, without a

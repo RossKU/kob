@@ -265,7 +265,8 @@ export function orderViewOf(e: StreamEntry, ctx: ListingContext): OrderView {
     current: { txid: snap.order.transactionId, index: snap.order.index, value: snap.order.amount }, state_known: true, state: st as AnyState, current_daa: daa,
     deadline: s64(snap.deadline), refund_due_daa: null, quote: d.price.toString(),
     custody: snap.custody ? { expected_amount: snap.custody.state.amount, utxo: tokenUtxoView(snap.custody, snap.covenantId, 'custody'), ok: true } : { expected_amount: null, utxo: null, ok: d.side === 'buy' },
-    strays: [], last_block: 0, last_daa: daa, confirmations: null, settled: false, expired,
+    // the stream book reads no strays: an ending cancel says they could not be checked (R9B-L3)
+    strays: [], strays_unread: true, last_block: 0, last_daa: daa, confirmations: null, settled: false, expired,
     // A Collected bid that has bought: its bought-custody, which a taker's fill spends.
     ...(snap.boughtCustody ? { bought_custody: { expected_amount: snap.boughtCustody.state.amount, utxo: tokenUtxoView(snap.boughtCustody, snap.covenantId, 'bought'), ok: true } } : {}),
   };
