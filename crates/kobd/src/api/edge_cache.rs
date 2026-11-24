@@ -140,6 +140,12 @@ pub fn policy(method: &Method, path: &str, query: &str, now_ms: i64) -> Policy {
             let closed = !has_repeated(query, "to")
                 && query_value(query, "to")
                     .and_then(|v| v.parse::<i64>().ok())
+                    // judged on the window the answer runs to: `to` widened up to its bucket end (R7C2b-5); without a
+                    // readable interval, the widest (1 d)
+                    .map(|to| {
+                        let iv = query_value(query, "interval").and_then(|i| crate::indexer::market::interval_ms(&i)).unwrap_or(86_400_000);
+                        to.div_euclid(iv).saturating_add(i64::from(to.rem_euclid(iv) != 0)).saturating_mul(iv)
+                    })
                     .is_some_and(|to| to <= now_ms.saturating_sub(CLOSED_AFTER_MS));
             public(if closed { CLOSED_SECS } else { 3 })
         }
@@ -217,8 +223,10 @@ mod tests {
                 "ended a minute ago: the newest bucket may change"
             );
             assert_eq!(get(p, &format!("interval=1m&to={}", NOW + 60_000)), open);
-            assert_eq!(get(p, &format!("interval=1m&from=5&to={}", NOW - 3_600_000)), closed);
+            assert_eq!(get(p, &format!("interval=1m&from=5&to={}", NOW - 3_660_000)), closed);
             assert_eq!(get(p, &format!("to={}&interval=1d", NOW - 86_400_000)), closed);
+            // R7C2b-5: `to` an hour old inside the current day: the answer runs to the end of the open day
+            assert_eq!(get(p, &format!("interval=1d&to={}", NOW - 3_660_000)), open, "the snapped window reaches now");
             assert_eq!(get(p, "to=soon"), open, "a `to` that is not a number is the server's 400, never cached long");
             let (old, now) = (NOW - 86_400_000, NOW);
             assert_eq!(get(p, &format!("to={old}&to={now}")), open, "a repeated `to`: the handler reads the last one");
@@ -268,7 +276,7 @@ mod tests {
     /// C2-L5: a closed candle window is kept for an hour only while the store is caught up.
     #[test]
     fn closed_candles_are_short_lived_while_the_store_is_behind() {
-        let q = format!("to={}", NOW - 2 * CLOSED_AFTER_MS);
+        let q = format!("interval=1m&to={}", NOW - 2 * CLOSED_AFTER_MS);
         let cc = |current: bool| {
             let mut r = Response::new(());
             apply(&mut r, &Method::GET, "/v1/candles/ab", &q, NOW, || current);

@@ -67,6 +67,9 @@ fn last(conn: &Connection, token: &[u8]) -> DbResult<Option<(i64, Side, Side)>> 
 /// A row is written only when the bid or the ask differs from the token's last row (no row counts
 /// as two empty sides). Call it in one transaction, at most once a minute.
 pub fn sample(conn: &Connection, ctx: &ReadCtx, now_ms: i64) -> DbResult<usize> {
+    // The books are read at the store's own cursor, never at a DAA score the node only claimed (the sampled quotes are
+    // public): the sampler runs right after the writer's commit.
+    let ctx = &ReadCtx { node_daa: None, ..*ctx };
     let t = now_ms - now_ms.rem_euclid(MINUTE);
     let mut changed = 0;
     for token in candidates(conn)? {

@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// not taken while they load.
 pub(super) static HEAVY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn heavy() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn heavy() -> std::sync::MutexGuard<'static, ()> {
     HEAVY.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -1431,6 +1431,9 @@ fn worst_case_pair_reads_over_real_pair_orders() {
         let t = std::time::Instant::now();
         let n = f();
         eprintln!("{name}: {:?} wall, {n} VM steps", t.elapsed());
+        // a ceiling of twice the measured steps (R7C2b-I4): the table in `api-bounds.md` cites them
+        let ceiling = if name == "pair book" { 2 * 62_183 } else { 2 * 780_122 };
+        assert!(n <= ceiling, "{name}: {n} VM steps, past {ceiling}");
     }
 }
 
@@ -1863,4 +1866,254 @@ fn lean_candles_read_at_most_their_cap_of_fills() {
     let many = steps(&conn, read).1;
     flat("lean candles", few, many);
     assert!(read().truncated, "older fills of the window were left out");
+}
+
+/// R7C2b-2: a status read in history order reaches the old rows of its filter whatever newer orders of other tokens and
+/// makers lie in front: 2,000 old cancelled orders of one token and maker behind 30,000 newer filled ones of another token
+/// and maker, read by token, by maker, by both and by neither. Each filter's pages return its rows within its own budget.
+#[test]
+fn a_status_read_reaches_old_rows_under_every_filter() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let other = [0x5c; 32];
+    let s = Seed {
+        prefix: "z",
+        contract: "KobAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(AnyState::KobAsk(ask(1, 100_000_000)).encode()),
+        price0: Some(100_000_000),
+        remaining: 10 * WHOLE,
+        custody: false,
+        listed: false,
+        maker: pk(1),
+    };
+    seed(&conn, &s, 0, 2_000);
+    conn.execute("UPDATE order_state SET status = 'cancelled'", []).unwrap();
+    seed(&conn, &Seed { prefix: "y", token: other, maker: pk(2), ..s }, 2_000, 32_000);
+    conn.execute("UPDATE order_state SET status = 'filled' WHERE status = 'open'", []).unwrap();
+    let ctx = ctx();
+    let filters = [
+        ("token", OrderFilter { token: Some(Hash32(TOKEN_COV)), status: Some("cancelled".into()), ..Default::default() }, 0),
+        ("maker", OrderFilter { maker: Some(pk(1).to_vec()), status: Some("cancelled".into()), ..Default::default() }, 0),
+        (
+            "maker and token",
+            OrderFilter { maker: Some(pk(1).to_vec()), token: Some(Hash32(TOKEN_COV)), status: Some("cancelled".into()) },
+            0,
+        ),
+        ("none", OrderFilter { status: Some("cancelled".into()), ..Default::default() }, 30_000 / ORDERS_SCAN_MAX + 1),
+    ];
+    for (name, f, extra) in filters {
+        let (mut cursor, mut found, mut pages) = (None, 0, 0);
+        loop {
+            let page = orders(&conn, &ctx, &f, 50, cursor.take()).unwrap();
+            found += page.items.len();
+            pages += 1;
+            assert!(pages <= 2_000 / 50 + 2 + extra, "{name}: {pages} pages and not done ({found} found)");
+            match page.next_cursor {
+                Some(c) => cursor = parse_order_cursor(&c),
+                None => break,
+            }
+        }
+        assert_eq!(found, 2_000, "{name}");
+    }
+}
+
+/// R7C2b-1: a maker's own takes make no price and are never walked: the price reads range over the priced fills through
+/// their index, so N then 2 N self-takes in front of one priced fill cost the same VM steps for the trades, the
+/// statistics, a pair chart's carry (a window after them) and a lean store's chart.
+#[test]
+fn self_takes_do_not_grow_the_market_reads() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let token = Hash32(TOKEN_COV);
+    let (oid, tid): (i64, i64) =
+        (conn.query_row("SELECT id FROM orders WHERE contract = 'KobAsk' LIMIT 1", [], |r| r.get(0)).unwrap(), id(&conn, &TOKEN_COV));
+    let maker: Vec<u8> =
+        conn.query_row("SELECT h FROM ids WHERE id = (SELECT maker_id FROM orders WHERE id = ?1)", [oid], |r| r.get(0)).unwrap();
+    conn.execute("INSERT INTO scripts (id, spk) VALUES (77, ?1)", [[&[0x00, 0x00, 0x20][..], &maker[..], &[0xac][..]].concat()])
+        .unwrap();
+    let t0 = 1_700_006_400_000i64;
+    let fill = |from: i64, to: i64, executor: Option<i64>| {
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1) \
+             INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail, executor_id) \
+             SELECT ?3, 1, 1, ?5 + i, CAST(printf('x%031d', i) AS BLOB), 0, 'fill', ?4, 1, 1000, 100000000, 0, '{}', ?6 FROM n",
+            params![from, to, oid, tid, t0, executor],
+        )
+        .unwrap();
+    };
+    fill(0, 1, None);
+    let priced: i64 =
+        conn.query_row("SELECT COUNT(*) FROM order_events WHERE kind = 'fill' AND priced = 1", [], |r| r.get(0)).unwrap();
+    let other = Hash32([0x5d; 32]);
+    let ctx = ctx();
+    let measure = || -> Vec<(&'static str, u64)> {
+        vec![
+            ("trades", steps(&conn, || market::trades(&conn, &ctx, &token, Some(3), None, 200).unwrap()).1),
+            ("stats", steps(&conn, || market::stats(&conn, &ctx, &token, Some(3)).unwrap()).1),
+            (
+                "pair candles carry",
+                steps(&conn, || {
+                    pairs::pair_candles(&conn, &token, &other, (Some(3), Some(3)), "1m", 60_000, Some(t0 + 1_000_000_000), None, 10)
+                        .unwrap()
+                })
+                .1,
+            ),
+        ]
+    };
+    let n = 30_000;
+    fill(1, 1 + n, Some(77));
+    let few = measure();
+    fill(1 + n, 1 + 2 * n, Some(77));
+    let many = measure();
+    for ((name, a), (_, b)) in few.iter().zip(&many) {
+        flat(name, *a, *b);
+    }
+    let still: i64 = conn.query_row("SELECT COUNT(*) FROM order_events WHERE kind = 'fill' AND priced = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!((priced, still), (1, 1), "a take its maker's own key paid for makes no price");
+    // a lean store charts from the fills: the self-takes are not read either
+    crate::indexer::candles::configure(&conn, true).unwrap();
+    let lean =
+        || steps(&conn, || market::candles(&conn, &token, Some(3), "1h", 3_600_000, Some(t0), Some(t0 + 86_400_000), 1500).unwrap()).1;
+    let a = lean();
+    fill(1 + 2 * n, 1 + 3 * n, Some(77));
+    flat("lean candles", a, lean());
+}
+
+/// R7C2a-1 and R7C2a-2, the findings' own cases: a rising bid worth 1 KAS only at its cap and almost nothing now, and a
+/// curve whose minimum fill bundles seven cheap units with one at an absurd price, never set the touch: the bid is valued
+/// at the start of its window (dust), the curve is ranked at the mean price of its smallest valid fill (the bottom of
+/// the side), and the stats' best bid, best ask, mid and spread are the honest book's.
+#[test]
+fn a_rising_bid_and_a_bundled_curve_do_not_set_the_touch() {
+    use kob_protocol::state::{BidState, CurveAskState};
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let maintain = || crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    maintain();
+    let (token, ctx) = (Hash32(TOKEN_COV), ctx());
+    let honest = serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap();
+    let rising = BidState {
+        price: 990_000_000,
+        price_end: 100_000_000_000,
+        slope: 100_000_000_000 - 990_000_000,
+        decay_step: 300_000_000,
+        min_fill: 1,
+        tip: 0,
+        delivery_carrier: 10_000_000,
+        ..bid(7, 990_000_000)
+    };
+    let s = Seed {
+        prefix: "r",
+        contract: "KobBid",
+        side: 2,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(AnyState::KobBid(rising).encode()),
+        price0: Some(990_000_000),
+        remaining: 1,
+        custody: false,
+        listed: true,
+        maker: pk(7),
+    };
+    seed(&conn, &s, 0, 1);
+    set_value(&conn, "r", 120_000_000);
+    let (hh, p, sf) = tok_fields(T3);
+    let mut table = vec![50_000_000i64; 7];
+    table.push(10_000_000_000_000_000);
+    let bundled = AnyState::KobCurveAsk(CurveAskState {
+        maker: pk(9),
+        token_cov_id: TOKEN_COV,
+        token_tpl_hash: hh,
+        tpl_prefix_len: p,
+        tpl_suffix_len: sf,
+        scale: SCALE,
+        min_fill: 8,
+        tip: 0,
+        active_from: 0,
+        level_size: 1,
+        total: 10 * WHOLE,
+        amount_left: 10 * WHOLE,
+        extension_commitment: EXT,
+        table,
+    });
+    seed(
+        &conn,
+        &Seed {
+            prefix: "q",
+            contract: "KobCurveAsk",
+            side: 1,
+            state: Some(bundled.encode()),
+            price0: Some(50_000_000),
+            remaining: 10 * WHOLE,
+            custody: true,
+            ..s
+        },
+        0,
+        1,
+    );
+    maintain();
+    let bid_row = class_of(&conn, "r");
+    assert!(bid_row.iter().all(|(ok, class)| *ok == 0 || *class == CLASS_DUST), "the rising bid: {bid_row:?}");
+    let now = serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap();
+    for k in ["best_bid", "best_ask", "mid", "spread_bps"] {
+        assert_eq!(now[k], honest[k], "{k}");
+    }
+    assert_eq!(book_side_sorted(&conn, &ctx, &token, 1, Some(1), false).unwrap().0[0].0 .0, 100_000_000, "the honest best ask");
+}
+
+/// R8: a curve keeps its whole depth. An ordinary curve of 50 levels (a minimum fill no larger than a level) shows its 50
+/// levels, each at its own price and size; the book of depth 200 and the levels the statistics count both see them all.
+#[test]
+fn an_ordinary_curve_shows_every_level() {
+    use kob_protocol::state::CurveAskState;
+    let conn = open_memory("testnet-10").unwrap();
+    let (hh, p, sf) = tok_fields(T3);
+    let table: Vec<i64> = (0..50).map(|k| 100_000_000 + k * 1_000_000).collect();
+    let c = CurveAskState {
+        maker: pk(9),
+        token_cov_id: TOKEN_COV,
+        token_tpl_hash: hh,
+        tpl_prefix_len: p,
+        tpl_suffix_len: sf,
+        scale: SCALE,
+        min_fill: 1,
+        tip: 0,
+        active_from: 0,
+        level_size: WHOLE,
+        total: 50 * WHOLE,
+        amount_left: 50 * WHOLE,
+        extension_commitment: EXT,
+        table: table.clone(),
+    };
+    let s = Seed {
+        prefix: "w",
+        contract: "KobCurveAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(AnyState::KobCurveAsk(c).encode()),
+        price0: Some(100_000_000),
+        remaining: 50 * WHOLE,
+        custody: true,
+        listed: true,
+        maker: pk(9),
+    };
+    seed(&conn, &s, 0, 1);
+    crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    let (token, ctx) = (Hash32(TOKEN_COV), ctx());
+    let levels = book_side_sorted(&conn, &ctx, &token, 1, Some(200), false).unwrap().0;
+    let got: Vec<(i64, i128)> = levels.iter().map(|((p, _), (a, ..))| (*p, *a)).collect();
+    assert_eq!(got, table.iter().map(|p| (*p, WHOLE as i128)).collect::<Vec<_>>());
+    let stored: i64 = conn.query_row("SELECT levels FROM book_live", [], |r| r.get(0)).unwrap();
+    assert_eq!(stored, 50, "the statistics count every level");
+    let b = serde_json::to_value(book(&conn, &ctx, &token, 200, false).unwrap()).unwrap();
+    assert_eq!(b["asks"].as_array().unwrap().len(), 50);
 }

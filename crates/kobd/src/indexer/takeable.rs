@@ -76,6 +76,8 @@ pub(crate) struct Offer {
     pub amount: i64,
     /// The sompi the taker pays (an ask) or gets (a bid) for them, at their quotes, rounded down.
     pub value: i128,
+    /// The smallest fill a taker can make (a curve: its minimum fill as KIP-9 raises it, R7C2a-2); 0 when none.
+    pub take_min: i64,
 }
 
 /// The [`Offer`] of a listed order of a KAS book at DAA `t`, by the matcher's own candidate rules
@@ -91,6 +93,9 @@ pub(crate) fn kas_offer(o: &crate::matcher::book::ListedOrder, t: i64) -> Offer 
     let cx = CandCtx { t, utc: 0, excluded: &excluded, by_id: &by_id, unaccepted: &unaccepted, pair_ticks: None };
     let mut out = Offer::default();
     for c in candidates_of(&[o], &cx) {
+        if out.take_min == 0 {
+            out.take_min = c.curve.as_ref().map_or(c.min_fill, |l| l.rules.min_fill).max(1);
+        }
         let v = kob_protocol::state::quote_exact(c.cap, c.quote, c.scale, kob_protocol::state::Round::Down).unwrap_or(0);
         out.amount = out.amount.saturating_add(c.cap);
         out.value = out.value.saturating_add(v.max(0));

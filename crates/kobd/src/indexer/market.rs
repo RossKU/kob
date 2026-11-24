@@ -241,24 +241,22 @@ pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
 ///   rows of a transaction.
 ///
 /// The trades, the candles, the last price and the 24 h statistics leave them out.
-macro_rules! priced_fill {
-    () => {
-        "NOT EXISTS (SELECT 1 FROM scripts sc WHERE sc.id = e.executor_id AND length(sc.spk) = 36 AND substr(sc.spk, 1, 3) = x'000020' \
-           AND substr(sc.spk, 36, 1) = x'ac' AND substr(sc.spk, 4, 32) = (SELECT mk.h FROM ids mk WHERE mk.id = o.maker_id))"
-    };
-}
+///
+/// It is a stored flag of each fill, `order_events.priced`, set by a trigger at the write (`db::ensure_priced_fills`,
+/// `db::PRICED_EXPR`: a positive amount at a price on a side, not a take its own maker's key paid for), so every read of
+/// priced fills ranges over them through `order_events_priced` / `order_events_priced_ts` and its `LIMIT` counts the
+/// rows it reads (R7C2b-1). The crosses of one maker are dropped by [`trade_of`].
+const _PRICED_FILLS: () = ();
 
 /// The select of the fill events of a token (`?1`), with the scale and the terms DAA of each order.
 ///
 /// Only the fills that make prices (`priced_fill!`).
-pub(crate) const FILL_SELECT: &str = concat!(
+pub(crate) const FILL_SELECT: &str =
     "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, COALESCE(o.scale, 1), \
      COALESCE((SELECT a.daa FROM order_events a WHERE a.order_id = e.order_id AND a.kind = 'amend' AND a.id < e.id ORDER BY a.id DESC LIMIT 1), o.genesis_daa), \
      o.maker_id \
      FROM order_events e JOIN orders o ON o.id = e.order_id \
-     WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2) AND ",
-    priced_fill!()
-);
+     WHERE e.kind = 'fill' AND e.priced = 1 AND e.token_id = (SELECT id FROM ids WHERE h = ?1)";
 
 /// The time of the newest fill of a token (`?1`) that makes a price, before `?2`.
 ///
@@ -266,15 +264,19 @@ pub(crate) const FILL_SELECT: &str = concat!(
 /// [`trade_of`] drops it: otherwise a run of such crosses, one a block, used up the look-back of
 /// [`last_trade_before`] and hid the last price (C2-L1). The other fills of the transaction share
 /// its token and block time, so the check is one seek of `order_events_fill_ts`.
-const NEWEST_PRICED: &str = concat!(
-    "SELECT e.ts FROM order_events e JOIN orders o ON o.id = e.order_id \
-     WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.ts < ?2 AND e.amount > 0 AND e.price IS NOT NULL \
-     AND e.side IN (1, 2) AND NOT EXISTS (SELECT 1 FROM order_events e2 JOIN orders o2 ON o2.id = e2.order_id \
-       WHERE e2.kind = 'fill' AND e2.token_id = e.token_id AND e2.ts = e.ts AND e2.txid = e.txid AND e2.side = 3 - e.side \
-       AND e2.amount > 0 AND e2.price IS NOT NULL AND o2.maker_id = o.maker_id) AND ",
-    priced_fill!(),
-    " ORDER BY e.ts DESC LIMIT 1"
-);
+const NEWEST_PRICED: &str =
+    // At most `NEWEST_PRICED_ROWS` priced fills are looked at (R7C2b-1): a run of one maker's crosses longer than that
+    // ends the look-back, as the caps of the other fill reads do.
+    "SELECT n.ts FROM (SELECT e.ts, e.txid, e.side, e.token_id, o.maker_id FROM order_events e JOIN orders o ON o.id = e.order_id \
+     WHERE e.kind = 'fill' AND e.priced = 1 AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.ts < ?2 \
+     ORDER BY e.ts DESC LIMIT 2000) n \
+     WHERE NOT EXISTS (SELECT 1 FROM order_events e2 JOIN orders o2 ON o2.id = e2.order_id \
+       WHERE e2.kind = 'fill' AND e2.priced = 1 AND e2.token_id = n.token_id AND e2.ts = n.ts AND e2.txid = n.txid AND e2.side = 3 - n.side \
+       AND o2.maker_id = n.maker_id) \
+     ORDER BY n.ts DESC LIMIT 1";
+
+/// The priced fills [`NEWEST_PRICED`] looks at, at most.
+pub const NEWEST_PRICED_ROWS: usize = 2_000;
 
 /// Reads a [`FillRow`] from a row of [`FILL_SELECT`].
 pub(crate) fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
@@ -860,7 +862,8 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
         let sign = if side == 2 { -1.0 } else { 1.0 };
         // A row of a ranked range worse than the best so far is not decoded (R5C2-6).
         let enough = |key: f64| best.get().is_some_and(|(bp, bs)| reads::worse(key, sign * bp as f64 / bs as f64));
-        let (cut, n) = reads::for_each_resting(conn, ctx, token, side, false, enough, |levels, scale, _, _| {
+        // the best price of a curve is its first level: one level read of each (the counts come from the stored sequence)
+        let (cut, n) = reads::for_each_resting(conn, ctx, token, side, false, 1, enough, |levels, scale, _, _| {
             let s = scale.max(1);
             for (_, p, _) in levels {
                 let best_now = best.get();
@@ -897,6 +900,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
             token,
             side,
             false,
+            usize::MAX,
             |key| reads::worse(key, edge),
             |levels, scale, _, _| {
                 let s = scale.max(1);
@@ -1088,7 +1092,7 @@ pub fn depth_with(
 ) -> DbResult<DepthView> {
     let basis = price_basis(conn, token, decimals)?;
     // Every scale at the best `levels` prices per base unit (R6C2b-2). Those merge into `levels` per-basis levels unless
-    // the per-basis rounding joins two of them; only then is the book read again generously.
+    // the per-basis rounding joins two of them.
     let (mut b, full) = reads::book_by_unit_price(conn, ctx, token, levels.max(1), include_dust)?;
     let merged = |s: &BookSide| match s {
         BookSide::Levels(ls) => {
@@ -1099,8 +1103,30 @@ pub fn depth_with(
         }
         BookSide::Orders(_) => 0,
     };
-    if (full[0] && merged(&b.asks) < levels) || (full[1] && merged(&b.bids) < levels) {
-        b = reads::book_with(conn, ctx, token, levels.saturating_mul(4).max(1), true, include_dust)?;
+    // When the per-basis rounding joined two of them, the worst per-basis level of a full side may lack rows past the
+    // read: it is left out (and the answer says `truncated`), so no level shows less than it holds. The book is never
+    // read again at a multiple of the levels (R7C2b-3): a read is at most one book read of `levels` prices.
+    let cut_worst = |s: &mut BookSide, ask: bool| {
+        if let BookSide::Levels(ls) = s {
+            let worst = ls.iter().filter_map(|l| Some(per_basis(l.price.parse().ok()?, l.scale, basis))).reduce(|a, b| {
+                if ask {
+                    a.max(b)
+                } else {
+                    a.min(b)
+                }
+            });
+            if let Some(w) = worst {
+                ls.retain(|l| l.price.parse().ok().map(|p| per_basis(p, l.scale, basis)) != Some(w));
+            }
+        }
+    };
+    if full[0] && merged(&b.asks) < levels {
+        cut_worst(&mut b.asks, true);
+        b.truncated = true;
+    }
+    if full[1] && merged(&b.bids) < levels {
+        cut_worst(&mut b.bids, false);
+        b.truncated = true;
     }
     // The per-basis prices where every merged level is dust.
     let dust_at = |s: &BookSide| -> BTreeMap<i128, bool> {

@@ -141,7 +141,11 @@ CREATE TABLE IF NOT EXISTS order_events (
     fee         INTEGER,
     -- (schema 10) a fill: scripts.id of the script that funded its transaction (the record log's payer section: an Executor's
     -- funding key). NULL: not recorded (a frame written before 2026-11-09, or no plain input funded it). NULL for every other kind.
-    executor_id INTEGER
+    executor_id INTEGER,
+    -- (R7C2b-1) a fill: 1 when it makes a price (`market::priced_fill!`: a positive amount at a price, a side, not a take its
+    -- own maker's key paid for), else 0; NULL for every other kind. Set by a trigger at the write, so every price read
+    -- ranges over the priced fills through `order_events_priced` and its caps count the rows it reads (`db::ensure_priced_fills`).
+    priced      INTEGER
 );
 CREATE INDEX IF NOT EXISTS order_events_cov ON order_events (order_id, id);
 CREATE INDEX IF NOT EXISTS order_events_block ON order_events (block_seq);
@@ -891,7 +895,10 @@ CREATE TABLE IF NOT EXISTS book_live (
     -- column at open (`db::migrate`).
     levels        INTEGER,
     -- The base units one fill can take, set by the writer (`takeable::kas_offer`, R6C2a-2): what a read shows at most.
-    offer         INTEGER
+    offer         INTEGER,
+    -- A curve's smallest valid fill (its minimum fill as KIP-9 raises it), set by the writer: a read shows and ranks the
+    -- curve by it (R7C2a-2).
+    take_min      INTEGER
 );
 CREATE INDEX IF NOT EXISTS book_live_key ON book_live (token_id, side, open, auction, key, genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS book_live_pending ON book_live (token_id, side, open, open_from);

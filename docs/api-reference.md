@@ -180,9 +180,13 @@ is `[from, to)`, and `to` must be greater than `from`.
 
 ### 2.6 Confirmations and settlement
 
-Orders, events, fills, trades, holdings and pair fills carry `confirmations` (the node's DAA score minus the DAA of the chain
+Orders, events, fills, trades, holdings and pair fills carry `confirmations` (the present DAA score minus the DAA of the chain
 block, never negative) and `settled` (`confirmations >= settle_depth_daa`; `settle_depth_daa` is a top-level executor setting,
-default 100, reported by `/v1/health`). Both are `null` / `false` while the node's DAA score is unknown. Consumers choose their
+default 100, reported by `/v1/health`). Both are `null` / `false` while the store has no cursor. The present of every public
+read (these, an auction's quote now, which orders a book takes as fillable or expired) is the store's own verified cursor
+advanced by the wall clock since the cursor block's header at the network's DAA rate, at most 90 s of it ahead
+(`reads::present_daa`, `PRESENT_AHEAD_MAX_SECS`): never the node's `virtual_daa_score`, which is a claim nothing verifies.
+The `node_daa` of a book answer is that present. Consumers choose their
 tier: tentative (any accepted event, may still reorg) or settled. Facilitators should default to settled
 ([ops/executor.md](ops/executor.md), section 5).
 
@@ -472,7 +476,13 @@ least favourable quote in its window (a decaying ask at its floor). Dust stays l
 unless `include_dust=true`, so no client needs a dust rule of its own; `dust_orders` (number, omitted when 0, at most 1,400 a
 side) says how many dust orders a taker could fill now, left out or held. `truncated` never comes from dust alone. An order
 no single fill can take (its tip above its price, a minimum fill above its maximum fill, a fill whose outputs KIP-9 refuses)
-is not in the book at all. The amounts are at most what one fill can take (`fillable_now`).
+is not in the book at all. The amounts are at most what one fill can take (`fillable_now`), and an order's worth is the least of
+what it offers at either end of its window (a decaying ask at its floor, a rising bid at its first quote). A TWAP or DCA order
+whose slice is worth less than the line, and a bid whose escrow is mostly its delivery carrier, are dust from the start: they
+are filled by executors but shown only with `include_dust=true`. A curve shows its whole depth as the sequence of its successive smallest valid fills:
+the smallest fill a taker can make now at the mean price it pays (the curve is ranked there), then the smallest fill of
+what that leaves, and so on to the end of its table. An ordinary curve shows every remaining level at its own price; a
+minimum fill that bundles levels shows as one level at its mean price. A shown price is never below an earlier one.
 
 ```
 curl -s "$API/v1/books/$TOKEN?depth=5"
@@ -551,7 +561,8 @@ custody and KAS takes no place (R4C2-2, R5A-1, R5A-2). A level's amount is at mo
 only when true) says that a KAS leg of the route was read in part (its book holds more fillable orders than one read takes), so
 a better route level may be missing.
 
-**`GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`** takes the parameters of `/v1/candles/{token}`
+**`GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`** answers `404 not_found` at once for a token no order
+names (as its token or as a pair's quote), before any read. It takes the parameters of `/v1/candles/{token}`
 (section 3.16: `interval` default `5m`, `limit` default 500, at most 1500). The candles are **derived from the two KAS series**,
 never from pair fills.
 
@@ -1356,6 +1367,7 @@ Every error the handlers and the guard produce is JSON:
 | 500 | `internal` | A database or serialisation error ("internal error"); logged server side. | no |
 | 503 | `overloaded` | `max_concurrent_requests` requests already in flight (rejected at once, not queued), or the client's own requests in flight and waiting are full (section 5.3). | 1 |
 | 503 | `db_busy` | SQLite reported the database busy or locked ("database busy, retry shortly"). | 1 |
+| 503 | `read_budget` | The read ran past its budget of work (5,000,000 SQLite steps or 1.5 s of read time per request, `docs/ops/api-bounds.md`, "The read budget"); a cached key that hit it is refused for a second. No honest read comes near it. | 1 |
 | 503 | `ws_capacity` | WebSocket upgrade over `max_ws_connections`. | 5 |
 | 504 | `timeout` | The request ran longer than `request_timeout_ms` ("request timed out"). | no |
 | 413 | (none) | A `POST /v1/logo-reports` body over 1024 bytes; the framework's own answer, not the envelope. | no |

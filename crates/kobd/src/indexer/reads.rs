@@ -27,10 +27,28 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// Most seconds the present of a public read ([`present_daa`]) runs ahead of the store's cursor: the lag tolerance a
+/// following store keeps (90 s), at the network's DAA rate (900 DAA at 10 per second).
+pub const PRESENT_AHEAD_MAX_SECS: u64 = 90;
+
+/// The DAA score public reads take as the present (R7, the node's claim): the store's own cursor (verified), advanced by
+/// the wall-clock time since the cursor block's header time at the network's rate, never more than
+/// [`PRESENT_AHEAD_MAX_SECS`] of it ahead of the cursor, and never behind it. A node's `virtual_daa_score` is a claim
+/// nothing verifies, so no public answer depends on it: an auction's quote now, the rows a read takes as fillable or
+/// expired, `confirmations` and `settled`. `None` while the store has no cursor (the reads then take the store's).
+pub fn present_daa(cursor_daa: u64, cursor_time_ms: Option<u64>, daa_per_second: u64, now_ms: u64) -> Option<u64> {
+    if cursor_daa == 0 {
+        return None;
+    }
+    let ahead = cursor_time_ms.map_or(0, |t| now_ms.saturating_sub(t).saturating_mul(daa_per_second) / 1_000);
+    Some(cursor_daa.saturating_add(ahead.min(PRESENT_AHEAD_MAX_SECS.saturating_mul(daa_per_second))))
+}
+
 /// Context for deriving `confirmations`, `settled` and `expired`.
 #[derive(Debug, Clone, Copy)]
 pub struct ReadCtx {
-    /// DAA score of the node, when known.
+    /// The present DAA score of the read. Public reads take [`present_daa`] (`api::App::ctx`), never the node's claim;
+    /// the field keeps its name for the internal readers that pass the node's position.
     pub node_daa: Option<u64>,
     /// Confirmations a view needs to count as settled.
     pub settle_depth_daa: u64,
@@ -1035,9 +1053,25 @@ pub(crate) fn resting_levels(
     price: i64,
     remaining: Option<i64>,
     value: Option<i64>,
+    take_min: Option<i64>,
+    limit: usize,
     now: i64,
 ) -> Vec<(Option<usize>, i64, Option<i64>)> {
-    resting_levels_of(tip_state(contract, state).as_ref(), udaa, price, remaining, value, now)
+    resting_levels_of(tip_state(contract, state).as_ref(), udaa, price, remaining, value, take_min, limit, now)
+}
+
+/// The levels a book read shows of a row the writer decided (`w`), at DAA `now`: what the property test of the book rule
+/// checks against the matcher (`book_rule_props`).
+#[cfg(test)]
+pub(crate) fn shown_levels(
+    s: &AnyState,
+    udaa: i64,
+    price: i64,
+    remaining: Option<i64>,
+    w: &LiveWindow,
+    now: i64,
+) -> Vec<(Option<usize>, i64, Option<i64>)> {
+    resting_levels_of(Some(s), udaa, price, remaining, Some(w.offer), w.take_min, usize::MAX, now)
 }
 
 /// [`resting_levels`] of a decoded tip state (`None`: unknown).
@@ -1047,12 +1081,115 @@ fn resting_levels_of(
     price: i64,
     remaining: Option<i64>,
     value: Option<i64>,
+    take_min: Option<i64>,
+    limit: usize,
     now: i64,
 ) -> Vec<(Option<usize>, i64, Option<i64>)> {
+    // a curve expands only the levels the read needs (`limit`: its depth)
     if let Some(AnyState::KobCurveAsk(c)) = s {
-        return crate::model::curve_levels(c).into_iter().map(|(l, p, a)| (Some(l), p, Some(a))).collect();
+        return curve_shown(c, take_min, limit);
     }
     resting_level_of(s, udaa, price, remaining, value, now).map(|(q, a)| (None, q, a)).into_iter().collect()
+}
+
+/// The levels a book shows of a curve (R7C2a-2, R8): the sequence of its successive smallest valid fills. From the curve's
+/// state, the smallest fill a taker can make (`take_min` for the first: the matcher's own, its minimum fill as KIP-9
+/// raises it; [`curve_step_min`] for the states after it) is one level at the mean price a taker pays for it; then the
+/// smallest fill of the state that fill leaves, and so on to the end of the table, a step no fill can take, or `limit`
+/// distinct prices. The steps of one level at its price are one level. An ordinary curve (a minimum fill no larger than a level)
+/// shows every remaining level at its own price; a minimum fill that bundles levels shows the bundle at its mean price,
+/// so no depth shows at a price nobody can trade at. A shown price never falls below one before it (a later level is
+/// reached through the earlier ones). A row the writer has not set (no `take_min`) shows every remaining level.
+pub(crate) fn curve_shown(
+    c: &kob_protocol::state::CurveAskState,
+    take_min: Option<i64>,
+    limit: usize,
+) -> Vec<(Option<usize>, i64, Option<i64>)> {
+    let Some(first) = take_min else {
+        return crate::model::curve_levels(c).into_iter().take(limit).map(|(l, p, a)| (Some(l), p, Some(a))).collect();
+    };
+    let mut out: Vec<(Option<usize>, i64, Option<i64>)> = vec![];
+    let (mut st, mut floor, mut next, mut prices) = (c.clone(), 0i64, Some(first), 0usize);
+    while st.amount_left > 0 && st.level_size > 0 {
+        let (Some(price), level) = (st.price_now(), st.level()) else { break };
+        let in_level = (level.saturating_add(1)).saturating_mul(st.level_size).saturating_sub(st.sold()).min(st.amount_left);
+        // the smallest fill inside the level, in closed form (no walk): the first step's is the matcher's
+        let m = match next.take() {
+            Some(m) => Some(m),
+            None => in_level_min(&st, price).filter(|m| *m <= in_level).or_else(|| curve_step_min(&st)),
+        };
+        let Some(m) = m.filter(|m| *m > 0).map(|m| m.min(st.amount_left)) else { break };
+        // fills of at least `m` take the whole level at its price (the last of them takes the rest of it); a level that
+        // holds less than the smallest fill is reached only by a fill that crosses into the next, at its mean price
+        let (amount, mean) = if m <= in_level {
+            (in_level, price)
+        } else {
+            match crate::model::curve_fill_price(&st, m) {
+                Some(p) if st.proceeds(m).is_some() => (m, p),
+                _ => break,
+            }
+        };
+        floor = floor.max(mean);
+        let l = usize::try_from(level).ok();
+        match out.last_mut() {
+            Some((ll, q, Some(a))) if *q == floor && *ll == l => *a += amount,
+            _ => {
+                // `limit` distinct prices: the levels at the last of them are all read (a book of depth n is exact)
+                if out.last().is_none_or(|e| e.1 != floor) {
+                    if prices >= limit {
+                        break;
+                    }
+                    prices += 1;
+                }
+                out.push((l, floor, Some(amount)));
+            }
+        }
+        st.amount_left -= amount;
+    }
+    out
+}
+
+/// The smallest fill of curve `s` inside its current level (at `price`): its minimum fill, raised to a payout KIP-9
+/// accepts at that price (`proceeds` of `n` units of one level is `ceil(n x (price - tip) / scale)`). `None` when the
+/// level pays nothing (a price at the tip).
+fn in_level_min(s: &kob_protocol::state::CurveAskState, price: i64) -> Option<i64> {
+    let rate = price.checked_sub(s.tip).filter(|r| *r > 0)? as i128;
+    let floor = crate::matcher::candidate::KAS_OUTPUT_MIN as i128;
+    let n = (floor - 1).max(0) * s.scale.max(1) as i128 / rate + 1;
+    let m = i64::try_from(n).ok()?.max(s.min_fill.max(1));
+    // the whole rest is a fill too (it closes the order)
+    Some(m.min(s.amount_left))
+}
+
+/// The smallest fill a taker can make of curve `s` as it stands, by the matcher's rule for a curve
+/// (`matcher::candidate::kip9_limits`): at least its minimum fill (or the whole rest when less is left), a walk the
+/// covenant accepts (at most 8 levels, no level below the tip), and a payout to the maker KIP-9 accepts. `None` when no
+/// fill can be made.
+pub(crate) fn curve_step_min(s: &kob_protocol::state::CurveAskState) -> Option<i64> {
+    let floor = crate::matcher::candidate::KAS_OUTPUT_MIN;
+    let lo = s.min_fill.max(1).min(s.amount_left);
+    let top = s.max_fill();
+    let ok = |n: i64| s.proceeds(n).is_some_and(|p| p >= floor);
+    if lo <= 0 || lo > top {
+        return None;
+    }
+    if ok(lo) {
+        return Some(lo);
+    }
+    if !ok(top) {
+        // the whole rest, within one fill's walk, closes the order: its payout joins the order's value
+        return (top == s.amount_left && s.proceeds(top).is_some()).then_some(top);
+    }
+    let (mut a, mut b) = (lo, top);
+    while a + 1 < b {
+        let mid = a + (b - a) / 2;
+        if ok(mid) {
+            b = mid;
+        } else {
+            a = mid;
+        }
+    }
+    Some(b)
 }
 
 /// Most orders with a fixed quote one read of a book side takes: those a taker can fill now, best
@@ -1093,7 +1230,7 @@ pub(crate) const CLASS_DUST: i64 = 2;
 fn book_rows(now: i64, unix: Option<u64>, dust: bool) -> String {
     book_arms(now, unix, dust)
         .iter()
-        .map(|(arm, cap, code)| format!("SELECT order_id, CASE WHEN ok IS NULL THEN {ARM_PENDING} ELSE {code} END AS arm, key, levels, offer FROM ({arm} LIMIT {cap})"))
+        .map(|(arm, cap, code)| format!("SELECT order_id, CASE WHEN ok IS NULL THEN {ARM_PENDING} ELSE {code} END AS arm, key, levels, offer, auction AS class, take_min FROM ({arm} LIMIT {cap})"))
         .collect::<Vec<_>>()
         .join(" UNION ALL ")
 }
@@ -1112,7 +1249,7 @@ fn book_arms(now: i64, unix: Option<u64>, dust: bool) -> Vec<(String, usize, i64
     let side = "bl.token_id = (SELECT id FROM ids WHERE h = ?1) AND bl.side = ?2";
     let ranked = |auction: i64| {
         format!(
-            "SELECT bl.order_id, bl.key, bl.ok, bl.levels, bl.offer FROM book_live bl INDEXED BY book_live_key WHERE {side} AND bl.open = 1 AND bl.auction = {auction} \
+            "SELECT bl.order_id, bl.key, bl.ok, bl.levels, bl.offer, bl.auction, bl.take_min FROM book_live bl INDEXED BY book_live_key WHERE {side} AND bl.open = 1 AND bl.auction = {auction} \
              AND {window} ORDER BY bl.key, bl.genesis_block, bl.covenant_id"
         )
     };
@@ -1123,7 +1260,7 @@ fn book_arms(now: i64, unix: Option<u64>, dust: bool) -> Vec<(String, usize, i64
     }
     arms.push((
         format!(
-            "SELECT bl.order_id, bl.key, bl.ok, bl.levels, bl.offer FROM book_live bl INDEXED BY book_live_pending WHERE {side} AND bl.open = 0 AND bl.open_from <= {now} AND {window}{pending_dust}"
+            "SELECT bl.order_id, bl.key, bl.ok, bl.levels, bl.offer, bl.auction, bl.take_min FROM book_live bl INDEXED BY book_live_pending WHERE {side} AND bl.open = 0 AND bl.open_from <= {now} AND {window}{pending_dust}"
         ),
         BOOK_MOVING_MAX,
         ARM_PENDING,
@@ -1178,7 +1315,7 @@ fn book_side_orders(
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o_mk.h, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
                 s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, {GENESIS_O}), u.created_daa, s.last_daa, \
-                b.arm, b.offer \
+                b.arm, b.offer, b.class, b.take_min \
          {from} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
          WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} AND {RESTING_TIF}"
@@ -1209,7 +1346,8 @@ fn book_side_orders(
         // A taker in flight or a TWAP order between its slices is not in the book. The aggregated
         // levels leave it out the same way. The state is decoded once.
         let state = tip_state(&contract, raw_state);
-        let mut levels = resting_levels_of(state.as_ref(), utxo_daa.unwrap_or(last_daa), price, remaining, r.get(18)?, now);
+        let mut levels =
+            resting_levels_of(state.as_ref(), utxo_daa.unwrap_or(last_daa), price, remaining, r.get(18)?, r.get(20)?, depth, now);
         if levels.is_empty() {
             return Ok(None);
         }
@@ -1228,7 +1366,7 @@ fn book_side_orders(
         let view = BookOrderView {
             covenant_id: hx(r.get(0)?),
             contract,
-            dust: arm == CLASS_DUST,
+            dust: r.get::<_, Option<i64>>(19)? == Some(CLASS_DUST),
             maker: hxo(r.get(2)?),
             price: price.to_string(),
             quote: Some(auction.as_ref().map(|a| a.current_price.clone()).unwrap_or_else(|| price.to_string())),
@@ -1366,31 +1504,32 @@ pub(crate) fn book_side_sorted(
     let kept: std::cell::RefCell<Vec<f64>> = Default::default();
     let sign = if side == 2 { -1.0 } else { 1.0 };
     let enough = |key: f64| top.is_some_and(|d| kept.borrow().len() >= d && worse(key, *kept.borrow().last().unwrap_or(&f64::MAX)));
-    let (truncated, _) = for_each_resting(conn, ctx, token, side, dust, enough, |mut level, scale, exact, is_dust| {
-        if let Some(d) = top {
-            // a level worse than the best `top` prices so far cannot be among them: not sorted, not kept (R6C2b-2)
-            if let Some(last) = kept.borrow().get(d.saturating_sub(1)).copied() {
-                level.retain(|l| !worse(sign * l.1 as f64 / scale.max(1) as f64, last));
-            }
-            best_prices(&mut level, side, d);
-        }
-        let mut levels = levels.borrow_mut();
-        for (_, price, remaining) in level {
-            let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false, true));
-            l.0 += remaining.unwrap_or(0).max(0) as i128;
-            l.1 += 1;
-            l.2 |= remaining.is_none() || exact == 0;
-            l.3 &= is_dust;
+    let (truncated, _) =
+        for_each_resting(conn, ctx, token, side, dust, top.unwrap_or(usize::MAX), enough, |mut level, scale, exact, is_dust| {
             if let Some(d) = top {
-                let k = sign * price as f64 / scale.max(1) as f64;
-                let mut kept = kept.borrow_mut();
-                if let Err(i) = kept.binary_search_by(|x| x.total_cmp(&k)) {
-                    kept.insert(i, k);
-                    kept.truncate(d);
+                // a level worse than the best `top` prices so far cannot be among them: not sorted, not kept (R6C2b-2)
+                if let Some(last) = kept.borrow().get(d.saturating_sub(1)).copied() {
+                    level.retain(|l| !worse(sign * l.1 as f64 / scale.max(1) as f64, last));
+                }
+                best_prices(&mut level, side, d);
+            }
+            let mut levels = levels.borrow_mut();
+            for (_, price, remaining) in level {
+                let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false, true));
+                l.0 += remaining.unwrap_or(0).max(0) as i128;
+                l.1 += 1;
+                l.2 |= remaining.is_none() || exact == 0;
+                l.3 &= is_dust;
+                if let Some(d) = top {
+                    let k = sign * price as f64 / scale.max(1) as f64;
+                    let mut kept = kept.borrow_mut();
+                    if let Err(i) = kept.binary_search_by(|x| x.total_cmp(&k)) {
+                        kept.insert(i, k);
+                        kept.truncate(d);
+                    }
                 }
             }
-        }
-    })?;
+        })?;
     let mut out: Vec<_> = levels.into_inner().into_iter().collect();
     out.sort_by(|((pa, sa), _), ((pb, sb), _)| {
         let o = (*pa as i128 * *sb as i128).cmp(&(*pb as i128 * *sa as i128)).then(pa.cmp(pb)).then(sa.cmp(sb));
@@ -1435,6 +1574,7 @@ pub(crate) fn for_each_resting(
     token: &Hash32,
     side: i64,
     dust: bool,
+    limit: usize,
     enough: impl Fn(f64) -> bool,
     mut f: impl FnMut(Vec<(Option<usize>, i64, Option<i64>)>, i64, i64, bool),
 ) -> DbResult<(bool, i64)> {
@@ -1444,7 +1584,7 @@ pub(crate) fn for_each_resting(
     let from = book_from(now, ctx.now_unix, dust);
     let sql = format!(
         "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact, o.contract, kob_ustate(u.state, {GENESIS_O}), \
-                COALESCE(u.created_daa, s.last_daa), b.offer, b.arm, b.key, b.levels \
+                COALESCE(u.created_daa, s.last_daa), b.offer, b.arm, b.key, b.levels, b.class, b.take_min \
                 {from} \
                 LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
                 WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} AND {RESTING_TIF}"
@@ -1464,9 +1604,15 @@ pub(crate) fn for_each_resting(
             }
         }
         let (price, remaining): (i64, Option<i64>) = (r.get(0)?, r.get(2)?);
-        let level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, r.get(7)?, now);
-        counted += level.len() as i64;
-        f(level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?, arm == CLASS_DUST);
+        let contract: String = r.get(4)?;
+        let level = resting_levels(&contract, r.get(5)?, r.get(6)?, price, remaining, r.get(7)?, r.get(12)?, limit, now);
+        // a curve read to `limit` levels counts the levels the writer stored for it (the whole sequence)
+        counted += match r.get::<_, Option<i64>>(10)? {
+            Some(n) if contract == TemplateId::KobCurveAsk.name() => n.max(level.len() as i64),
+            _ => level.len() as i64,
+        };
+        // a pending row is dust by its class, not its arm (R7C2b-I1)
+        f(level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?, r.get::<_, Option<i64>>(11)? == Some(CLASS_DUST));
     }
     Ok((book_beyond_scan(conn, token, side, now, ctx.now_unix, dust)?, counted))
 }
@@ -1490,6 +1636,8 @@ pub(crate) struct LiveWindow {
     pub dust: bool,
     /// Base units one fill can take ([`super::takeable::Offer`]): what a book shows of the order at most.
     pub offer: i64,
+    /// A curve's smallest valid fill ([`super::takeable::Offer::take_min`]); `None` for any other kind.
+    pub take_min: Option<i64>,
     /// The key of a curve: its current level's price per base unit (negated for a bid). `None`:
     /// the limit, as the trigger wrote it.
     pub key: Option<f64>,
@@ -1513,8 +1661,57 @@ impl LiveWindow {
     }
 }
 
-/// The [`LiveWindow`] of the live KAS-book order `order_id`, its dust bound `dust_below` sompi (the
-/// listing minimum); `None` when it has no state row.
+/// Whether the store knows `token`: an order names it (as its token or a pair's quote), it was seen (`token_events`) or it
+/// is declared (KCC-23). Four index probes (R7C2b-1).
+pub fn token_known(conn: &Connection, token: &Hash32) -> DbResult<bool> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM orders INDEXED BY orders_token_genesis WHERE token_id = (SELECT id FROM ids WHERE h = ?1)) \
+             OR EXISTS (SELECT 1 FROM orders INDEXED BY orders_quote_genesis WHERE quote_id = (SELECT id FROM ids WHERE h = ?1)) \
+             OR EXISTS (SELECT 1 FROM token_events WHERE token_cov_id = ?1) OR EXISTS (SELECT 1 FROM kcc23_declarations WHERE covenant_id = ?1)",
+        )?
+        .query_row([token.0.to_vec()], |r| r.get(0))?)
+}
+
+/// The listed order `order_id` as the matcher sees it, for the writer's decision of its row: a read that panics or fails
+/// is no order (the row is not open, it is counted, and the commit goes on: R7C2a-I2).
+pub(crate) fn guarded_order(conn: &Connection, order_id: i64) -> Option<crate::matcher::book::ListedOrder> {
+    match crate::indexer::processor::guarded(|| super::book::listed_order_of(conn, order_id)) {
+        Some(Ok(o)) => o,
+        Some(Err(e)) => {
+            UNDECIDED_ROWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!(order_id, "live book: the order could not be read for its row, so it is not open: {e}");
+            None
+        }
+        None => {
+            UNDECIDED_ROWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
+    }
+}
+
+/// Whether the order view's parts render a state without a panic: its auction, repeat, pair, curve and delivery views
+/// and its JSON (R7, 10). A row of a state that does not is in no book, so no book shows an order its view cannot.
+pub(crate) fn renders(s: &AnyState, udaa: i64, now: i64) -> bool {
+    crate::indexer::processor::guarded(|| {
+        let _ = auction_of(s, udaa, u64::try_from(now).ok());
+        let _ = repeat_of(s);
+        let _ = curve_view(s);
+        let _ = crate::indexer::delivery::block_of(s);
+        let _ = s.delivery();
+        if s.is_pair() {
+            let _ = pair_view(s, true, None);
+        }
+        serde_json::to_value(s).is_ok()
+    })
+    .unwrap_or(false)
+}
+
+/// Rows the writer could not decide (a panic or an error reading or judging their order): they are not open (R7C2a-I2).
+pub static UNDECIDED_ROWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The [`LiveWindow`] of the live KAS-book order `order_id`, its dust bound `dust_below` sompi (half the listing
+/// minimum); `None` when it has no state row.
 pub(crate) fn book_window(conn: &Connection, order_id: i64, dust_below: i64, daa: i64) -> DbResult<Option<LiveWindow>> {
     use kob_protocol::state::{MAX_IDLE, TIF_GTC};
     let sql = format!(
@@ -1563,12 +1760,9 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64, dust_below: i64, daa
         _ => (true, 0),
     };
     let sign = if side == 2 { -1.0 } else { 1.0 };
-    let (curve_ok, key) = match &state {
-        Some(AnyState::KobCurveAsk(c)) => match c.price_now() {
-            Some(p) if !crate::model::curve_levels(c).is_empty() => (true, Some(sign * p as f64 / scale.max(1) as f64)),
-            _ => (false, None),
-        },
-        _ => (true, None),
+    let curve_ok = match &state {
+        Some(AnyState::KobCurveAsk(c)) => c.price_now().is_some() && !crate::model::curve_levels(c).is_empty(),
+        _ => true,
     };
     let priced = price.is_some() || curve;
     let open_from = active_from.max(slice_open);
@@ -1576,28 +1770,51 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64, dust_below: i64, daa
     let auction = state.as_ref().is_some_and(|s| auction_of(s, udaa, None).is_some());
     // What one fill can take, and what the taker pays or gets for it, by the matcher's own rules for
     // the order as it stands (R6C2a-2): an order no fill can take cannot be filled and takes no place.
-    // It is judged at the least favourable time of the row's window (R6C2a-1): a fixed quote at once,
-    // an auction at the last DAA it can be filled, where a decaying ask is at its floor and a rising
-    // bid's buying power at its highest quote.
-    let at = if auction { closed_from.saturating_sub(1).max(open_from).max(daa) } else { open_from.max(daa) }.max(udaa);
-    let offer = match super::book::listed_order_of(conn, order_id)? {
-        Some(o) => crate::indexer::processor::guarded(|| super::takeable::kas_offer(&o, at)).unwrap_or_default(),
+    // It is the least of what it offers at both ends of the row's window (R7C2a-1): its first DAA (from the
+    // commit on) and its last. Every kind's offer is monotone over the window, so the smaller end is its
+    // least favourable moment: a fixed quote does not move; a decaying ask falls to its floor (least at the
+    // end); a rising bid rises from its first quote with a buying power fixed at its highest (least at the
+    // start); an armed entry's band moves one way from its stop to its limit; a TWAP or DCA slice is the
+    // same slice at each opening. The ends never pass the window (R7C2a-I1): a row decided late is judged
+    // at its last DAA, and the window, not the offer, says it closed.
+    let last = closed_from.saturating_sub(1).max(udaa);
+    let first = open_from.max(daa).max(udaa).min(last);
+    let offer = match guarded_order(conn, order_id) {
+        Some(o) => crate::indexer::processor::guarded(|| {
+            let (a, b) = (super::takeable::kas_offer(&o, first), super::takeable::kas_offer(&o, last));
+            super::takeable::Offer {
+                amount: a.amount.min(b.amount),
+                value: a.value.min(b.value),
+                take_min: a.take_min.max(b.take_min),
+            }
+        })
+        .unwrap_or_default(),
         None => super::takeable::Offer::default(),
     };
+    // A curve is ranked by its smallest valid fill, at the mean price a taker pays for it (R7C2a-2): one cheap unit
+    // bundled by its minimum fill with dear ones does not take the place of its cheap level.
+    let key = match &state {
+        Some(AnyState::KobCurveAsk(c)) => crate::model::curve_fill_price(c, offer.take_min.clamp(1, c.amount_left.max(1)))
+            .map(|p| sign * p as f64 / scale.max(1) as f64),
+        _ => None,
+    };
+    // A row whose order view could not be rendered is in no book (R7, 10): the view's parts run here as they would there.
+    let renderable = state.as_ref().is_none_or(|s| renders(s, udaa, first));
     // Dust: one fill takes less than `dust_below` (half the listing minimum) of real value from it
     // there. It is read in a range of its own ([`CLASS_DUST`], R5C2-1).
     let dust = offer.value < dust_below as i128;
     Ok(Some(LiveWindow {
-        ok: sql_ok && resting && curve_ok && priced && offer.amount > 0,
+        ok: sql_ok && resting && curve_ok && priced && renderable && offer.amount > 0,
         open_from,
         closed_from,
         deadline,
         auction,
         dust,
         offer: offer.amount,
+        take_min: matches!(state, Some(AnyState::KobCurveAsk(_))).then_some(offer.take_min),
         key,
         levels: match &state {
-            Some(AnyState::KobCurveAsk(c)) => crate::model::curve_levels(c).len() as i64,
+            Some(AnyState::KobCurveAsk(c)) => curve_shown(c, Some(offer.take_min), usize::MAX).len() as i64,
             _ => 1,
         },
         pair: None,
@@ -2267,16 +2484,21 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         if matches!(tif, Some(1) | Some(2)) {
             kill = refund_due;
         }
-        auction = auction_of(s, d, ctx.node_daa);
+        // Every part of the view a hostile state could make panic is guarded: an order view answers, never 500 (R7, 10).
+        auction = crate::indexer::processor::guarded(|| auction_of(s, d, ctx.node_daa)).flatten();
         quote = auction.as_ref().map(|a| a.current_price.clone());
-        repeat = repeat_of(s);
+        repeat = crate::indexer::processor::guarded(|| repeat_of(s)).flatten();
     }
     // A pair order has no KAS quote. Its quote now (B per whole A) is `pair.quote_now`.
-    let pair = pair_state.and_then(|(s, cur)| pair_view(&s, cur, quote.take()));
+    let pair = pair_state.and_then(|(s, cur)| crate::indexer::processor::guarded(|| pair_view(&s, cur, quote.take())).flatten());
     // The delivery terms: the current state's, else the placement's. `bought` is the current one.
-    let block = state.as_ref().or(placed.as_ref()).and_then(crate::indexer::delivery::block_of);
-    let bought = state.as_ref().and_then(|s| s.delivery()).map(|d| d.bought.to_string());
-    let curve = state.as_ref().and_then(curve_view);
+    let block = state
+        .as_ref()
+        .or(placed.as_ref())
+        .and_then(|s| crate::indexer::processor::guarded(|| crate::indexer::delivery::block_of(s)).flatten());
+    let bought =
+        state.as_ref().and_then(|s| crate::indexer::processor::guarded(|| s.delivery()).flatten()).map(|d| d.bought.to_string());
+    let curve = state.as_ref().and_then(|s| crate::indexer::processor::guarded(|| curve_view(s)).flatten());
     // a curve's price is its current level's
     let price = match &curve {
         Some(c) => c.price_now.clone(),
@@ -2330,8 +2552,8 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         amount_estimated: amount_exact == 0 || remaining.is_none(),
         current,
         state_known: r.get::<_, Option<i64>>(33)?.unwrap_or(0) != 0,
-        state: state.as_ref().and_then(|s| serde_json::to_value(s).ok()),
-        placed_state: placed.as_ref().and_then(|s| serde_json::to_value(s).ok()),
+        state: state.as_ref().and_then(|s| crate::indexer::processor::guarded(|| serde_json::to_value(s).ok()).flatten()),
+        placed_state: placed.as_ref().and_then(|s| crate::indexer::processor::guarded(|| serde_json::to_value(s).ok()).flatten()),
         current_daa,
         deadline_passed: active && deadline_passed(deadline, ctx),
         deadline,
@@ -2910,7 +3132,9 @@ pub fn orders(
     // many recent orders of other statuses in front of an old common status would otherwise be read until a page of
     // it is found. A page the budget ends carries the cursor of the point it reached, as `holdings` does.
     let scan_end: Option<(i64, Vec<u8>)> = if f.status.is_some() && !by_status {
-        let mut bconds = vec![pinned_template().to_string()];
+        // The probe walks the rows the read walks, by the same filters and index order (R7C2b-2): the maker, the token
+        // (as base or as quote) and the cursor; every template, so retired ones count too (R7C2b-I2).
+        let mut bconds: Vec<String> = vec!["1".into()];
         let mut bargs: Vec<SqlValue> = vec![];
         if let Some(m) = &f.maker {
             bargs.push(SqlValue::Blob(m.clone()));
@@ -2921,12 +3145,23 @@ pub fn orders(
             bargs.push(SqlValue::Blob(c.clone()));
             bconds.push(format!("(o.genesis_block, o.covenant_id) < (?{}, ?{})", bargs.len() - 1, bargs.len()));
         }
-        conn.prepare(&format!(
-            "SELECT o.genesis_block, o.covenant_id FROM orders o WHERE {} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT 1 OFFSET {ORDERS_SCAN_MAX}",
-            bconds.join(" AND ")
-        ))?
-        .query_row(params_from_iter(bargs.iter()), |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?
+        let base = bconds.join(" AND ");
+        let sql = match &f.token {
+            Some(t) => {
+                bargs.push(SqlValue::Blob(t.0.to_vec()));
+                let n = bargs.len();
+                format!(
+                    "SELECT o.genesis_block, o.covenant_id FROM orders o WHERE {base} AND o.token_id = (SELECT id FROM ids WHERE h = ?{n}) \
+                     UNION ALL SELECT o.genesis_block, o.covenant_id FROM orders o WHERE {base} \
+                     AND o.quote_id = (SELECT id FROM ids WHERE h = ?{n}) AND o.token_id IS NOT (SELECT id FROM ids WHERE h = ?{n}) \
+                     ORDER BY 1 DESC, 2 DESC LIMIT 1 OFFSET {ORDERS_SCAN_MAX}"
+                )
+            }
+            None => format!(
+                "SELECT o.genesis_block, o.covenant_id FROM orders o WHERE {base} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT 1 OFFSET {ORDERS_SCAN_MAX}"
+            ),
+        };
+        conn.prepare(&sql)?.query_row(params_from_iter(bargs.iter()), |r| Ok((r.get(0)?, r.get(1)?))).optional()?
     } else {
         None
     };
@@ -3452,3 +3687,7 @@ mod scale_tests;
 #[cfg(test)]
 #[path = "bounds_tests.rs"]
 mod bounds_tests;
+
+#[cfg(test)]
+#[path = "book_rule_props.rs"]
+mod book_rule_props;

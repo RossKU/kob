@@ -191,7 +191,8 @@ pub fn activity(conn: &Connection, since: Option<i64>) -> DbResult<ActivityView>
         // `create` event, and pruned ones.
         orders = conn.query_row("SELECT COALESCE((SELECT n FROM counters WHERE name = 'orders_all'), 0)", [], |r| r.get(0))?;
     }
-    let locked: i64 = conn.query_row("SELECT COALESCE(SUM(value), 0) FROM order_utxos WHERE spent_block IS NULL", [], |r| r.get(0))?;
+    // One row, kept by triggers (`db::ensure_kas_locked`, R7C2b-3).
+    let locked: i64 = conn.query_row("SELECT COALESCE((SELECT n FROM counters WHERE name = 'kas_locked'), 0)", [], |r| r.get(0))?;
     Ok(ActivityView {
         since,
         ts,

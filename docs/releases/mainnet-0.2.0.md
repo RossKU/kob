@@ -78,6 +78,11 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   takes well under a second. The earlier code set each row in a commit of its own, 0.8 ms per row measured (80 s for
   100,000) before the API listened (R5F-2). While it runs
   the API is not up: the web goes to standalone mode and an Executor plans nothing.
+- This build's book rules are version 6: the first start decides every live-book row again (the time above). It also marks
+  once which stored fills make a price (`order_events.priced`, one pass over the fills) and counts the KAS locked in live
+  orders (`counters.kas_locked`); triggers keep both from then on. `/v1/metrics` gains
+  `kob_api_read_budget_refused_total{route}` and `kob_live_book_undecided_rows_total` (rows whose decision failed: not open,
+  the commit goes on).
 - The same happens once more, at the first commit, when the listing minimum (`min_order_value_sompi`) or the book rules
   change: every row is decided again in that one transaction.
 - **Going back to an earlier build is not supported once this build has opened a store.** An earlier build runs on it
@@ -241,6 +246,19 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 - **`/v1/orders?status=`** may return a short (even empty) page with a `next_cursor` when the read in history order reaches
   its budget of 10,000 orders: follow the cursor until it is absent (the web app and `kob` do).
 - `kob` refuses a malformed holdings cursor from an indexer instead of looping on it.
+- **Every public read has a budget of work** (5,000,000 SQLite steps, 1.5 s of read time per request). A read past it is
+  answered `503 read_budget` with `Retry-After: 1`; no honest read comes near it.
+- **Books judge an order at the worst end of its window**: a rising bid by its first quote, a curve by its smallest valid fill
+  at the mean price a taker pays (its depth is the sequence of its successive smallest fills: an ordinary curve shows every
+  level, a bundle forced by its minimum fill shows at its mean price), a pair order by the least amount one fill
+  takes at either end. Book amounts and prices are what a fill can take and trade at.
+- **No public answer uses the node's claimed DAA score**: `confirmations`, `settled`, an auction's quote now and which orders
+  a book takes as fillable come from the store's verified cursor, advanced by the clock, at most 90 s ahead.
+- `/v1/pairs/{base}/{quote}/candles` answers `404` for a token no order names. `/v1/depth` says `truncated` and leaves out
+  its worst level when two scales' prices round to one level.
+- An order view that cannot be rendered answers `404`, never `500`, and such an order is in no book.
+- `kob` follows the live-order list to its end (up to 200 pages); a list it cannot finish raises the own-orders guard instead
+  of being taken as whole.
 
 ## Wallets tested
 
