@@ -27,6 +27,13 @@ describe('assessIndexerHealth', () => {
     expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: null }) }).level).toBe('ok');
   });
 
+  it('a following indexer that says it is not ok (its chain authority failing) is lagging under the 2 min bound too (R6B-I2)', () => {
+    expect(assessIndexerHealth({ ...base, health: view({ ok: false, lag_seconds: 95 }) })).toMatchObject({ level: 'warn', code: 'lagging', lagSeconds: 95, fresh: false });
+    expect(assessIndexerHealth({ ...base, health: view({ ok: false, lag_seconds: LAG_WARN_SECONDS }) }).code).toBe('lagging');
+    expect(assessIndexerHealth({ ...base, health: view({ ok: true, lag_seconds: 95 }) })).toMatchObject({ level: 'ok', code: 'ok' });
+    expect(assessIndexerHealth({ ...base, health: view({ ok: false, lag_seconds: LAG_STALE_SECONDS + 1 }) }).code).toBe('stale');
+  });
+
   it('announces nothing until the indexer is more than 2 min behind, in every state', () => {
     expect(LAG_WARN_SECONDS).toBe(120);
     expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: 120 }) })).toMatchObject({ level: 'ok', fresh: true });
