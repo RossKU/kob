@@ -218,6 +218,7 @@ pub fn refuse_pre_v3(conn: &Connection, path: &Path) -> DbResult<()> {
 /// of the new store repairs them. A store of an older schema is refused before this runs
 /// ([`refuse_old_layout`]). The layout of the tables is what `schema.sql` says.
 fn migrate(conn: &Connection) -> DbResult<()> {
+    ensure_live_columns(conn)?;
     if backfill_counters(conn)? {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }
@@ -266,9 +267,30 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if let Some(n) = backfill_book_live(conn)? {
         tracing::info!(orders = n, "indexed the live KAS books once (kept by triggers from now on)");
     }
-    // The windows of rows an older build wrote (or the fill above) are set before anything reads.
+    // The windows of rows an older build wrote (or the fill above), and of every row when the rules
+    // behind them changed (R5C2-4), are set before anything reads. The listing minimum is the one the
+    // store last ran with; the writer's first commit applies its own.
+    if let Some(n) = super::pair_volume::backfill(conn)? {
+        tracing::info!(minutes = n, "built the pair volume of the existing pair fills once (kept by triggers from now on)");
+    }
+    // One transaction: outside one, every row's update is a commit and a disk sync (R5F-2).
     let daa = super::book::cursor_daa(conn)?.min(i64::MAX as u64) as i64;
-    maintain_live_books(conn, daa, unix_now())?;
+    let tx = conn.unchecked_transaction()?;
+    let recreated = refresh_schema_objects(&tx)?;
+    if !recreated.is_empty() {
+        tracing::info!(objects = ?recreated, "recreated the triggers and indexes an earlier build stored with another body");
+    }
+    let dust = book_dust_sompi(&tx)?;
+    if ensure_book_rules(&tx, dust)? {
+        tracing::info!("the live books are decided again: the rules behind them changed with this build");
+    }
+    // Fills an earlier build wrote or pruned since (its triggers marked them) before anything reads.
+    super::pair_volume::refresh(&tx)?;
+    let set = maintain_live_books(&tx, daa, unix_now())?;
+    tx.commit()?;
+    if set > 0 {
+        tracing::info!(rows = set, "set the fillable windows of the live books");
+    }
     let unknown_txs = backfill_executor_txs(conn)?;
     if unknown_txs > 0 {
         tracing::info!(
@@ -381,6 +403,7 @@ const OPEN_AT: &str = "CASE WHEN ok = 0 THEN 3 WHEN deadline IS NOT NULL AND dea
 /// decided row by row). Returns the rows set.
 pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> DbResult<usize> {
     let unix = unix.unwrap_or(i64::MIN);
+    let dust = book_dust_sompi(conn)?;
     let mut set = 0;
     for table in ["book_live", "pair_live"] {
         let ids: Vec<i64> = conn
@@ -388,12 +411,21 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for id in ids {
-            let w = if table == "book_live" { super::reads::book_window(conn, id)? } else { super::pairs::pair_window_of(conn, id)? };
+            let w = if table == "book_live" {
+                super::reads::book_window(conn, id, dust)?
+            } else {
+                super::pairs::pair_window_of(conn, id)?
+            };
             let Some(w) = w else {
                 conn.prepare_cached(&format!("DELETE FROM {table} WHERE order_id = ?1"))?.execute([id])?;
                 continue;
             };
-            let extra = if table == "book_live" { ", auction = ?8, key = COALESCE(?9, key)" } else { "" };
+            // What the reads take of the row without decoding its state (R5C2-6).
+            let extra = if table == "book_live" {
+                ", auction = ?8, key = COALESCE(?9, key), levels = ?10"
+            } else {
+                ", ask = ?8, entry = ?9, scale = ?10, amount = ?11, q_kind = ?12, quote = ?13, q_end = ?14, q_slope = ?15, q_step = ?16, q_origin = ?17"
+            };
             let sql = format!(
                 "UPDATE {table} SET ok = ?3, open_from = ?4, closed_from = ?5, deadline = ?6{extra}, open = \
                  CASE WHEN ?3 = 0 THEN 3 WHEN ?6 IS NOT NULL AND ?6 <= ?2 THEN 4 WHEN ?4 > ?1 THEN 0 WHEN ?5 <= ?1 THEN 2 ELSE 1 END \
@@ -409,11 +441,31 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
                     w.closed_from,
                     w.deadline,
                     id,
-                    w.auction as i64,
-                    w.key
+                    w.class(),
+                    w.key,
+                    w.levels
                 ])?;
             } else {
-                st.execute(rusqlite::params![daa, unix, w.ok as i64, w.open_from, w.closed_from, w.deadline, id])?;
+                let p = w.pair;
+                st.execute(rusqlite::params![
+                    daa,
+                    unix,
+                    w.ok as i64,
+                    w.open_from,
+                    w.closed_from,
+                    w.deadline,
+                    id,
+                    p.map(|p| p.ask),
+                    p.map(|p| p.entry),
+                    p.map(|p| p.scale),
+                    p.map(|p| p.amount),
+                    p.map(|p| p.kind),
+                    p.map(|p| p.quote),
+                    p.map(|p| p.end),
+                    p.map(|p| p.slope),
+                    p.map(|p| p.step),
+                    p.map(|p| p.origin)
+                ])?;
             }
             set += 1;
         }
@@ -425,12 +477,97 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             "open = 1 AND deadline <= ?2",
             "open = 1 AND open_from > ?1",
             "open = 2 AND closed_from > ?1",
+            // a host clock that jumped ahead and came back (R5C2-I4)
+            "open = 4 AND deadline > ?2",
         ] {
             conn.prepare_cached(&format!("UPDATE {table} SET open = {OPEN_AT} WHERE {cand}"))?
                 .execute(rusqlite::params![daa, unix])?;
         }
     }
     Ok(set)
+}
+
+/// The version of the rules behind `book_live.ok` / `pair_live.ok` and the book class
+/// (`reads::book_window`, `pairs::pair_window_of`). Bump it whenever they change: a store whose rows
+/// an older rule set decided recomputes them all at its next open or commit ([`ensure_book_rules`],
+/// R5C2-4).
+///
+/// 2: what one fill can take (R5A-1, R5A-2) and the dust class (R5C2-1). 3: the columns the reads take
+/// instead of decoding states (`book_live.levels`, the `pair_live` spec, R5C2-6).
+pub const BOOK_RULES_VERSION: u32 = 3;
+
+/// The columns of `book_live` and `pair_live` that a store an earlier build of schema 14 created lacks
+/// (`CREATE TABLE IF NOT EXISTS` keeps an existing table as it is). They are derived: added empty, they
+/// are set by the reset [`BOOK_RULES_VERSION`] triggers.
+fn ensure_live_columns(conn: &Connection) -> DbResult<()> {
+    let want: [(&str, &[&str]); 2] = [
+        ("book_live", &["levels"]),
+        ("pair_live", &["ask", "entry", "scale", "amount", "q_kind", "quote", "q_end", "q_slope", "q_step", "q_origin"]),
+    ];
+    for (table, cols) in want {
+        let have: Vec<String> = conn
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for c in cols {
+            if !have.iter().any(|h| h == c) {
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {c} INTEGER"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Drops and recreates every trigger and index of this build's schema whose stored SQL differs from
+/// this build's (`CREATE ... IF NOT EXISTS` keeps an older body as it is): an older trigger body would
+/// go on firing, an older index would serve another column list. The build's SQL is that of the
+/// schema applied to an empty store in memory, so the texts compare as SQLite stores them. Objects only
+/// an older build had are left (none of them is in a path this build reads). Returns their names.
+pub fn refresh_schema_objects(conn: &Connection) -> DbResult<Vec<String>> {
+    let mem = Connection::open_in_memory()?;
+    super::packed::register(&mem)?;
+    mem.execute_batch(SCHEMA_SQL)?;
+    mem.execute_batch(crate::logo_reports::SCHEMA)?;
+    mem.execute_batch(crate::logo_votes::SCHEMA)?;
+    let want: Vec<(String, String, String)> = mem
+        .prepare("SELECT type, name, sql FROM sqlite_master WHERE type IN ('trigger', 'index') AND sql IS NOT NULL ORDER BY type DESC, name")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut done = vec![];
+    for (kind, name, sql) in want {
+        let stored: Option<String> =
+            conn.query_row("SELECT sql FROM sqlite_master WHERE type = ?1 AND name = ?2", [&kind, &name], |r| r.get(0)).optional()?;
+        if stored.is_some_and(|s| s != sql) {
+            conn.execute_batch(&format!("DROP {kind} {name}; {sql};"))?;
+            done.push(name);
+        }
+    }
+    Ok(done)
+}
+
+/// The listing minimum the book class was decided with (`meta.book_dust_sompi`), else the default.
+pub fn book_dust_sompi(conn: &Connection) -> DbResult<i64> {
+    Ok(meta_get(conn, "book_dust_sompi")?
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(crate::tokens::ListingRules::default().min_order_value_sompi))
+}
+
+/// Sends every row of `book_live` and `pair_live` back to the writer (`ok` NULL) when the rules that
+/// decided them differ from this build's: [`BOOK_RULES_VERSION`], the pinned templates and the
+/// listing minimum `dust_sompi` (`meta.book_live_rules`). The writer runs it in its transaction
+/// before [`maintain_live_books`], which then decides them again; when nothing changed it reads one
+/// meta row. Returns whether the rows were reset.
+pub fn ensure_book_rules(conn: &Connection, dust_sompi: i64) -> DbResult<bool> {
+    let dust = dust_sompi.max(0);
+    let pinned = blake3::hash(super::reads::pinned_template().as_bytes()).to_hex();
+    let want = format!("{BOOK_RULES_VERSION}/{}/{dust}", &pinned[..16]);
+    if meta_get(conn, "book_live_rules")?.as_deref() == Some(want.as_str()) {
+        return Ok(false);
+    }
+    conn.execute_batch("UPDATE book_live SET ok = NULL, open = 1; UPDATE pair_live SET ok = NULL, open = 1;")?;
+    meta_set(conn, "book_dust_sompi", &dust.to_string())?;
+    meta_set(conn, "book_live_rules", &want)?;
+    Ok(true)
 }
 
 /// Counts the bytes the KCC-23 candidates hold (`counters.kcc23_candidate_bytes`, schema.sql) once, for
@@ -839,19 +976,34 @@ pub const CLIENT_LIGHT_READS: usize = 1;
 /// Reads one API client may have on the heavy lane at once, waiting or running: two of its
 /// `read_pool_size` (4) connections at most.
 pub const CLIENT_HEAVY_READS: usize = 2;
-/// Requests one API client may have in flight at once; the guard answers `503 overloaded` past it.
+/// Requests one API client may have in flight at once, each holding one of the server's request permits.
 ///
-/// With [`CLIENT_WAIT`] a request keeps its place only while it reads or is about to, so it takes 32 client keys (IPv4
-/// addresses, or IPv6 /48 sites, [`CLIENT_SITE_IN_FLIGHT`]) that each keep 8 requests in flight to fill the server's
-/// `max_concurrent_requests` (256). `/v1/health` is outside that cap (R4C2-1).
+/// A request past them waits for one of its client's own ([`CLIENT_QUEUE_WAIT`], at most [`CLIENT_QUEUED`] waiting) and
+/// holds no server permit while it waits. So it takes 32 client keys (IPv4 addresses, or IPv6 /48 sites,
+/// [`CLIENT_SITE_IN_FLIGHT`]) that each keep 8 requests in flight to fill the server's `max_concurrent_requests` (256),
+/// however long they wait. `/v1/health` is outside that cap (R4C2-1).
 pub const CLIENT_IN_FLIGHT: usize = 8;
 /// Requests the IPv6 /64s of one site (`ipv6_site_prefix_bits`, a /48) may have in flight together. The /64s of one
 /// allocation cost nothing to rotate through, so the site is the key that costs an attacker something (R4C2-1).
 pub const CLIENT_SITE_IN_FLIGHT: usize = 32;
-/// Longest a read waits for its client's own lane permit, which that client's other reads hold. Past it the read fails
-/// with [`DbError::Overloaded`] (`503` to that client only), so a client's backlog does not hold the server's request
-/// permits while it waits (R4C2-1). An honest page makes a few reads at once, and a light read takes milliseconds.
-pub const CLIENT_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+/// Longest a request past its client's [`CLIENT_IN_FLIGHT`] waits for one of them (and for its site's, the same), holding
+/// no server permit. One honest page sends 12 to 20 reads at once (R5B-L1); the 20th waits for 12 to end, about 6
+/// heavy reads in turn on the client's 2 heavy permits: 6 x 70 ms (the slowest common read, `/v1/stats`, on the TN10 soak
+/// copy, `docs/ops/executor.md` 5.5) is 0.4 s, so 2 s leaves room for a cold cache. Past it: `503 overloaded`.
+pub const CLIENT_QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Requests one client may have waiting for its in-flight permits; one more is answered `503 overloaded` at once. With
+/// the 8 in flight it covers a page's burst of 20 and a second page opened beside it.
+pub const CLIENT_QUEUED: usize = 24;
+/// Requests the /64s of one IPv6 site may have waiting together for the site's [`CLIENT_SITE_IN_FLIGHT`].
+pub const CLIENT_SITE_QUEUED: usize = 96;
+/// Longest a read waits for its client's own lane permit, which that client's other reads hold, while its request holds a
+/// server permit. Past it the read fails with [`DbError::Overloaded`] (`503` to that client only).
+///
+/// A client holds at most 8 server permits however long this is ([`CLIENT_IN_FLIGHT`]), so the bound on what fills
+/// the 256 does not depend on it. It is sized for an honest burst: of 8 requests in flight, 6 wait behind the 2 heavy
+/// reads, 3 reads in turn, 0.2 s at 70 ms and 1.8 s for 500-candle charts (0.6 s each); and 6 order views of one page's
+/// book check wait on the single light permit, 5 x 3.5 ms (an order view at its bound, about 220,000 VM steps, test profile).
+pub const CLIENT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What one API client (a rate-limit key: an IPv4 address or an IPv6 prefix) may use at once.
 ///
@@ -864,6 +1016,8 @@ pub struct ClientLanes {
     pub(crate) heavy: Arc<Semaphore>,
     /// Requests in flight (`CLIENT_IN_FLIGHT`), taken by the guard.
     pub in_flight: Arc<Semaphore>,
+    /// Requests waiting for `in_flight` (at most `CLIENT_QUEUED`).
+    pub queued: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for ClientLanes {
@@ -872,8 +1026,36 @@ impl Default for ClientLanes {
             light: Arc::new(Semaphore::new(CLIENT_LIGHT_READS)),
             heavy: Arc::new(Semaphore::new(CLIENT_HEAVY_READS)),
             in_flight: Arc::new(Semaphore::new(CLIENT_IN_FLIGHT)),
+            queued: Default::default(),
         }
     }
+}
+
+/// One of `permits`, waited for at most [`CLIENT_QUEUE_WAIT`] with at most `max_queued` others waiting (`queued`).
+/// `None` when the wait is refused or runs out: the guard answers `503 overloaded`.
+pub async fn queued_permit(
+    permits: &Arc<Semaphore>,
+    queued: &std::sync::atomic::AtomicUsize,
+    max_queued: usize,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    use std::sync::atomic::Ordering;
+    if let Ok(p) = permits.clone().try_acquire_owned() {
+        return Some(p);
+    }
+    // Counted out when the wait ends, also when the request goes away while it waits.
+    struct Waiting<'a>(&'a std::sync::atomic::AtomicUsize);
+    impl Drop for Waiting<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    let waiting = Waiting(queued);
+    if queued.fetch_add(1, Ordering::AcqRel) >= max_queued {
+        return None;
+    }
+    let p = tokio::time::timeout(CLIENT_QUEUE_WAIT, permits.clone().acquire_owned()).await;
+    drop(waiting);
+    p.ok().and_then(Result::ok)
 }
 
 /// The permit of the current API client ([`CLIENT_LANES`]) on the light or the heavy lane, waited for at most

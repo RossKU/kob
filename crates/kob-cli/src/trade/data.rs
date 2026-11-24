@@ -99,7 +99,7 @@ pub fn declaration(indexer: &str, cov: &[u8; 32]) -> Result<Option<market::Decla
 ///
 /// Each candidate is confirmed on the node: the script of its state under the program, at that
 /// outpoint, carrying the covenant id. The result is `None` when none is confirmed, and an error
-/// when the confirmed UTXOs name more than one program.
+/// when the confirmed UTXOs name more than one program, or when the indexer's list did not end.
 pub fn held_program(indexer: &str, node: &str, network: &str, cov: &[u8; 32], owner: &[u8; 32]) -> Result<Option<TemplateId>, String> {
     held_program_from(Some(indexer), node, network, cov, owner)
 }
@@ -116,10 +116,7 @@ pub fn held_program_from(
     owner: &[u8; 32],
 ) -> Result<Option<TemplateId>, String> {
     let items = match indexer {
-        Some(indexer) => {
-            let path = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(cov));
-            http::get_ok(indexer, &path, INDEXER_TIMEOUT)?.get("items").and_then(Value::as_array).cloned().unwrap_or_default()
-        }
+        Some(indexer) => owner_token_items(indexer, owner, cov)?,
         None => vec![],
     };
     let mut cands: Vec<(TemplateId, TokenState, [u8; 32], u32)> = vec![];
@@ -166,6 +163,34 @@ pub fn held_program_from(
     }
 }
 
+/// Most pages of `GET /v1/token-utxos?owner=&token=` one listing follows.
+const OWNER_TOKEN_PAGES: usize = 20;
+
+/// The indexer's token UTXOs of `owner` and the token `cov`, following `next_cursor` to its end.
+///
+/// A page may be short or empty and still carry a cursor: the indexer reads a bounded number of
+/// the owner's rows of every token per page (R5C2-2). A list that has not ended after
+/// [`OWNER_TOKEN_PAGES`] pages is an error, never "nothing held".
+fn owner_token_items(indexer: &str, owner: &[u8; 32], cov: &[u8; 32]) -> Result<Vec<Value>, String> {
+    let base = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(cov));
+    let mut items = vec![];
+    let mut cursor: Option<String> = None;
+    for _ in 0..OWNER_TOKEN_PAGES {
+        let path = match &cursor {
+            Some(c) => format!("{base}&cursor={c}"),
+            None => base.clone(),
+        };
+        let page = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
+        items.extend(page.get("items").and_then(Value::as_array).cloned().unwrap_or_default());
+        match page.get("next_cursor").and_then(Value::as_str) {
+            Some(c) if Some(c) != cursor.as_deref() => cursor = Some(c.to_string()),
+            Some(_) => return Err(format!("{}: the indexer's list of your token UTXOs does not advance: incomplete", to_hex(cov))),
+            None => return Ok(items),
+        }
+    }
+    Err(format!("{}: the indexer's list of your token UTXOs did not end after {OWNER_TOKEN_PAGES} pages: incomplete", to_hex(cov)))
+}
+
 fn i64_of(v: Option<&Value>) -> Option<i64> {
     match v? {
         Value::Number(n) => n.as_i64(),
@@ -195,10 +220,7 @@ pub fn token_utxos_from(
     owner: &[u8; 32],
 ) -> Result<Vec<TokenUtxo>, String> {
     let items = match indexer {
-        Some(indexer) => {
-            let path = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(&m.cov));
-            http::get_ok(indexer, &path, INDEXER_TIMEOUT)?.get("items").and_then(Value::as_array).cloned().unwrap_or_default()
-        }
+        Some(indexer) => owner_token_items(indexer, owner, &m.cov)?,
         None => vec![],
     };
     let tt = token_template(m.program);
@@ -619,4 +641,28 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
         deadline: v.get("deadline").and_then(Value::as_u64),
         genesis_daa: v.get("genesis").and_then(|g| i64_of(g.get("daa"))),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R5C2-2: the owner's list of one token follows `next_cursor` through short and empty pages to its end, and a list
+    /// that does not advance is an error, not "nothing held".
+    #[test]
+    fn the_owners_token_list_follows_the_cursor() {
+        let (owner, cov) = ([0x11u8; 32], [0x22u8; 32]);
+        let base = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(&owner), to_hex(&cov));
+        let past = format!("5:{}:{}", "ff".repeat(32), i64::MAX);
+        let mut routes = BTreeMap::new();
+        routes.insert(base.clone(), json!({"items": [], "next_cursor": past}));
+        routes.insert(format!("{base}&cursor={past}"), json!({"items": [{"txid": "ab"}], "next_cursor": null}));
+        let (url, _) = http::mock::start(routes);
+        assert_eq!(owner_token_items(&url, &owner, &cov).unwrap().len(), 1);
+        let mut routes = BTreeMap::new();
+        routes.insert(base.clone(), json!({"items": [], "next_cursor": past}));
+        routes.insert(format!("{base}&cursor={past}"), json!({"items": [], "next_cursor": past}));
+        let (url, _) = http::mock::start(routes);
+        assert!(owner_token_items(&url, &owner, &cov).unwrap_err().contains("incomplete"));
+    }
 }

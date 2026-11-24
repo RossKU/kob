@@ -474,6 +474,36 @@ CREATE TABLE IF NOT EXISTS pair_fills (
 CREATE INDEX IF NOT EXISTS pair_fills_pair ON pair_fills (base_id, quote_id, id);
 CREATE INDEX IF NOT EXISTS pair_fills_pair_ts ON pair_fills (base_id, quote_id, ts);
 CREATE INDEX IF NOT EXISTS pair_fills_block ON pair_fills (block_seq);
+-- `pair_volume`: the pair volume per pair and candle bucket of each interval the pair charts serve (`iv` 1 m, 5 m, 1 h, 1 d):
+-- A and B base units (decimal, summed in 128 bits) and transactions, a transaction counted once at the larger of its two sides
+-- (`indexer::pair_volume`, R5C2-6). `pair_volume_dirty`: the 1-minute buckets whose fills changed, recomputed before the
+-- writer's commit. A bucket without fills has no row.
+CREATE TABLE IF NOT EXISTS pair_volume (
+    base_id  INTEGER NOT NULL,
+    quote_id INTEGER NOT NULL,
+    iv       INTEGER NOT NULL,
+    t        INTEGER NOT NULL,
+    vol_a    TEXT NOT NULL,
+    vol_b    TEXT NOT NULL,
+    txs      INTEGER NOT NULL,
+    PRIMARY KEY (base_id, quote_id, iv, t)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS pair_volume_dirty (
+    base_id  INTEGER NOT NULL,
+    quote_id INTEGER NOT NULL,
+    t        INTEGER NOT NULL,
+    PRIMARY KEY (base_id, quote_id, t)
+) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS pair_volume_fill_insert AFTER INSERT ON pair_fills BEGIN
+    INSERT OR IGNORE INTO pair_volume_dirty (base_id, quote_id, t) VALUES (NEW.base_id, NEW.quote_id, NEW.ts - (NEW.ts % 60000));
+END;
+CREATE TRIGGER IF NOT EXISTS pair_volume_fill_delete AFTER DELETE ON pair_fills BEGIN
+    INSERT OR IGNORE INTO pair_volume_dirty (base_id, quote_id, t) VALUES (OLD.base_id, OLD.quote_id, OLD.ts - (OLD.ts % 60000));
+END;
+CREATE TRIGGER IF NOT EXISTS pair_volume_fill_update AFTER UPDATE OF base_id, quote_id, ts, txid, side, amount_a, amount_b ON pair_fills BEGIN
+    INSERT OR IGNORE INTO pair_volume_dirty (base_id, quote_id, t) VALUES (OLD.base_id, OLD.quote_id, OLD.ts - (OLD.ts % 60000));
+    INSERT OR IGNORE INTO pair_volume_dirty (base_id, quote_id, t) VALUES (NEW.base_id, NEW.quote_id, NEW.ts - (NEW.ts % 60000));
+END;
 
 -- KCC-23 declarations (`kcc23.rs`). A candidate preparation: an accepted version 1 transaction whose payload is a declaration
 -- (`0x00` + one strict I-JSON object, at most 16 KiB), its id-relevant fields in the record-log encoding (`kcc23::encode_tx`,
@@ -856,7 +886,10 @@ CREATE TABLE IF NOT EXISTS book_live (
     deadline      INTEGER,
     ok            INTEGER,
     open          INTEGER NOT NULL DEFAULT 1,
-    auction       INTEGER NOT NULL DEFAULT 0
+    auction       INTEGER NOT NULL DEFAULT 0,
+    -- The resting levels a read counts (a curve: its remaining levels), set by the writer (R5C2-6). An older store gains the
+    -- column at open (`db::migrate`).
+    levels        INTEGER
 );
 CREATE INDEX IF NOT EXISTS book_live_key ON book_live (token_id, side, open, auction, key, genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS book_live_pending ON book_live (token_id, side, open, open_from);
@@ -880,7 +913,20 @@ CREATE TABLE IF NOT EXISTS pair_live (
     closed_from   INTEGER,
     deadline      INTEGER,
     ok            INTEGER,
-    open          INTEGER NOT NULL DEFAULT 1
+    open          INTEGER NOT NULL DEFAULT 1,
+    -- What the reads take of the order, set by the writer with `ok` (`pairs::PairSpec`, R5C2-6): its side (ask: it sells A),
+    -- `entry` (a `KobIfdPair`), scale(A), the amount one fill can take, and its quote as a function of the DAA score. An
+    -- older store gains the columns at open (`db::migrate`).
+    ask           INTEGER,
+    entry         INTEGER,
+    scale         INTEGER,
+    amount        INTEGER,
+    q_kind        INTEGER,
+    quote         INTEGER,
+    q_end         INTEGER,
+    q_slope       INTEGER,
+    q_step        INTEGER,
+    q_origin      INTEGER
 );
 CREATE INDEX IF NOT EXISTS pair_live_pair ON pair_live (token_id, quote_id, open, genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS pair_live_base ON pair_live (token_id, open, genesis_block, covenant_id);
@@ -970,6 +1016,11 @@ END;
 CREATE TRIGGER IF NOT EXISTS book_live_flag_insert AFTER INSERT ON order_flags BEGIN
     UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = NEW.covenant_id);
     UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = NEW.covenant_id);
+END;
+-- A flag moved to the order's next UTXO is an upsert (`flags::set`), which fires no insert or delete trigger (R5C2-3).
+CREATE TRIGGER IF NOT EXISTS book_live_flag_update AFTER UPDATE ON order_flags BEGIN
+    UPDATE book_live SET ok = NULL, open = 1 WHERE order_id IN (SELECT id FROM orders WHERE covenant_id IN (OLD.covenant_id, NEW.covenant_id));
+    UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id IN (SELECT id FROM orders WHERE covenant_id IN (OLD.covenant_id, NEW.covenant_id));
 END;
 CREATE TRIGGER IF NOT EXISTS book_live_flag_delete AFTER DELETE ON order_flags BEGIN
     UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = OLD.covenant_id);

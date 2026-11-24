@@ -800,12 +800,15 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     // The best (price, scale) of a side by the exact price per base unit, and its levels.
     let mut truncated = false;
     let mut best = |side: i64| -> DbResult<(Option<(i64, i64)>, i64)> {
-        let (mut best, mut n): (Option<(i64, i64)>, i64) = (None, 0);
-        truncated |= reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
+        let best: std::cell::Cell<Option<(i64, i64)>> = std::cell::Cell::new(None);
+        let sign = if side == 2 { -1.0 } else { 1.0 };
+        // A row of a ranked range worse than the best so far is not decoded (R5C2-6).
+        let enough = |key: f64| best.get().is_some_and(|(bp, bs)| reads::worse(key, sign * bp as f64 / bs as f64));
+        let (cut, n) = reads::for_each_resting(conn, ctx, token, side, false, enough, |levels, scale, _| {
             let s = scale.max(1);
             for (_, p, _) in levels {
-                n += 1;
-                let better = best.is_none_or(|(bp, bs)| {
+                let best_now = best.get();
+                let better = best_now.is_none_or(|(bp, bs)| {
                     let o = (p as i128 * bs as i128).cmp(&(bp as i128 * s as i128));
                     if side == 1 {
                         o.is_lt()
@@ -814,11 +817,12 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
                     }
                 });
                 if better {
-                    best = Some((p, s));
+                    best.set(Some((p, s)));
                 }
             }
         })?;
-        Ok((best, n))
+        truncated |= cut;
+        Ok((best.get(), n))
     };
     let (best_ask, ask_orders) = best(1)?;
     let (best_bid, bid_orders) = best(2)?;
@@ -828,15 +832,26 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     // at least that.
     let band = |side: i64, bound: i128| -> DbResult<i128> {
         let mut sum = 0i128;
-        let _ = reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
-            let s = scale.max(1);
-            for (_, p, amount) in levels {
-                let at = per_basis(p, s, basis).saturating_mul(100);
-                if (side == 1 && at <= bound) || (side == 2 && at >= bound) {
-                    sum = sum.saturating_add((amount.unwrap_or(0).max(0) as i128).saturating_mul(p as i128) / s as i128);
+        // A row of a ranked range whose key is past the band adds nothing: the rest is not decoded.
+        let edge =
+            if side == 1 { bound as f64 / (100.0 * basis.max(1) as f64) } else { -(bound as f64) / (100.0 * basis.max(1) as f64) };
+        let _ = reads::for_each_resting(
+            conn,
+            ctx,
+            token,
+            side,
+            false,
+            |key| reads::worse(key, edge),
+            |levels, scale, _| {
+                let s = scale.max(1);
+                for (_, p, amount) in levels {
+                    let at = per_basis(p, s, basis).saturating_mul(100);
+                    if (side == 1 && at <= bound) || (side == 2 && at >= bound) {
+                        sum = sum.saturating_add((amount.unwrap_or(0).max(0) as i128).saturating_mul(p as i128) / s as i128);
+                    }
                 }
-            }
-        })?;
+            },
+        )?;
         Ok(sum)
     };
     let bands = match depth_reference(bid, ask) {

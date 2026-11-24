@@ -122,7 +122,7 @@ pub struct MatchArgs {
     /// Has no effect here: maintenance (the merge and this sale) runs only under `kobd --executor`,
     /// which reads the operator's tokens from its own index; `kobd match` reads its book from
     /// `--book-file` and holds none. Accepted for the shared command lines.
-    #[arg(long, env = "KOB_DUST_SELL")]
+    #[arg(long, env = "KOB_DUST_SELL", value_parser = clap::builder::BoolishValueParser::new())]
     pub dust_sell: bool,
 }
 

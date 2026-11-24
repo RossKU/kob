@@ -1867,6 +1867,8 @@ fn seed_pair_fill(c: &Connection, cov: u8, tx: u8, ts: i64, side: i64, amount_a:
         params![ts, cid(tx), cid(cov), cid(BASE), cid(QUOTE), side, amount_a, amount_b, price, counterparty],
     )
     .unwrap();
+    // The writer's commit recomputes the pair volume of the fills it wrote.
+    crate::indexer::pair_volume::refresh(c).unwrap();
 }
 
 #[tokio::test]
@@ -3144,37 +3146,131 @@ async fn a_busy_client_does_not_hold_up_a_shared_book_key() {
     drop(held);
 }
 
-/// R4C2-1: the /64s of one IPv6 /48 site share `CLIENT_SITE_IN_FLIGHT` requests in flight, so rotating through the free
-/// /64s of one allocation does not multiply what it may hold. Another site is not affected.
+/// R4C2-1, R5B-L1: the /64s of one IPv6 /48 site share `CLIENT_SITE_IN_FLIGHT` requests in flight and
+/// `CLIENT_SITE_QUEUED` waiting for them, so rotating through the free /64s of one allocation does not multiply what it
+/// may hold. Past both a request is refused at once. Another site is not affected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_64s_of_one_ipv6_site_share_its_requests_in_flight() {
-    use crate::indexer::db::CLIENT_SITE_IN_FLIGHT;
+    use crate::indexer::db::{CLIENT_SITE_IN_FLIGHT, CLIENT_SITE_QUEUED};
     let e = env(|c| {
         c.rate_limit.per_ip_rps = 1_000.0;
         c.rate_limit.per_ip_burst = 1_000;
         c.rate_limit.per_site_rps = 0.0;
     });
     let app = router(e.state.clone());
-    let held = hold_heavy_lane(&e.state.pool, 2, 1_500);
+    let held = hold_heavy_lane(&e.state.pool, 2, 3_500);
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let waiting: Vec<_> = (0..CLIENT_SITE_IN_FLIGHT)
-        .map(|i| {
-            let app = app.clone();
-            tokio::spawn(async move { get_from(&app, "/v1/strays", &format!("2001:db8:7:{i:x}::1"), &[]).await.0 })
-        })
-        .collect();
+    let fire = |i: usize| {
+        let app = app.clone();
+        tokio::spawn(async move { get_from(&app, "/v1/strays", &format!("2001:db8:7:{i:x}::1"), &[]).await.0 })
+    };
+    let in_flight: Vec<_> = (0..CLIENT_SITE_IN_FLIGHT).map(fire).collect();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let queued: Vec<_> = (CLIENT_SITE_IN_FLIGHT..CLIENT_SITE_IN_FLIGHT + CLIENT_SITE_QUEUED).map(fire).collect();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let t0 = std::time::Instant::now();
     let (s, _, v) = get_from(&app, "/v1/strays", "2001:db8:7:ffff::1", &[]).await;
     assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("overloaded")), "the site is full");
+    assert!(t0.elapsed() < std::time::Duration::from_millis(500), "refused at once: {:?}", t0.elapsed());
     let other = {
         let app = app.clone();
         tokio::spawn(async move { get_from(&app, "/v1/strays", "2001:db8:8::1", &[]).await.0 })
     };
     assert_eq!(other.await.unwrap(), StatusCode::OK, "another site waits for the lane and is served");
-    for w in waiting {
+    for w in in_flight {
         assert_eq!(w.await.unwrap(), StatusCode::OK);
+    }
+    // the lane is held longer than a request waits for its site's permits
+    for w in queued {
+        assert_eq!(w.await.unwrap(), StatusCode::SERVICE_UNAVAILABLE);
     }
     for h in held {
         h.await.unwrap();
+    }
+}
+
+/// R5B-L1, R5C2-7: one honest page's burst, 20 reads at once from one client (14 heavy ones of distinct keys and 6 order
+/// views on its single light permit), while the heavy lane is busy with other work for 300 ms: none is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_honest_pages_burst_is_served_whole() {
+    let e = env(|c| {
+        c.rate_limit.per_ip_rps = 1_000.0;
+        c.rate_limit.per_ip_burst = 1_000;
+    });
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    let held = hold_heavy_lane(&e.state.pool, 4, 300);
+    let mut uris: Vec<String> = (1..=10).map(|d| format!("/v1/books/{}?depth={d}&aggregate=false", h(TOKEN))).collect();
+    uris.extend(["/v1/tokens".to_string(), format!("/v1/stats/{}", h(TOKEN)), "/v1/strays".to_string(), "/v1/pairs".to_string()]);
+    uris.extend([1u8, 2, 3, 4, 6, 7].map(|o| format!("/v1/orders/{}", h(o))));
+    assert_eq!(uris.len(), 20);
+    let t0 = std::time::Instant::now();
+    let all: Vec<_> = uris
+        .into_iter()
+        .map(|u| {
+            let app = app.clone();
+            tokio::spawn(async move { (get_from(&app, &u, "198.51.100.20", &[]).await, u) })
+        })
+        .collect();
+    for r in all {
+        let ((s, _, v), u) = r.await.unwrap();
+        assert!(s.is_success(), "{u}: {s} {v}");
+    }
+    eprintln!("20 reads of one page: {:?}", t0.elapsed());
+    for h in held {
+        h.await.unwrap();
+    }
+}
+
+/// R5B-L1: however many requests one client sends, it holds at most `CLIENT_IN_FLIGHT` of the server's request permits;
+/// `CLIENT_QUEUED` more wait without one, and past them it is refused at once. Another client still gets a permit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_client_holds_at_most_its_in_flight_server_permits() {
+    use crate::indexer::db::{CLIENT_IN_FLIGHT, CLIENT_QUEUED};
+    let e = env(|c| {
+        c.max_concurrent_requests = CLIENT_IN_FLIGHT + 1;
+        c.rate_limit.per_ip_rps = 1_000.0;
+        c.rate_limit.per_ip_burst = 1_000;
+    });
+    let app = router(e.state.clone());
+    let held = hold_heavy_lane(&e.state.pool, 4, 1_500);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mine: Vec<_> = (0..CLIENT_IN_FLIGHT + CLIENT_QUEUED)
+        .map(|_| {
+            let app = app.clone();
+            tokio::spawn(async move { get_from(&app, "/v1/strays", "198.51.100.30", &[]).await.0 })
+        })
+        .collect();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let t0 = std::time::Instant::now();
+    let (s, _, v) = get_from(&app, "/v1/strays", "198.51.100.30", &[]).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("overloaded")));
+    assert!(t0.elapsed() < std::time::Duration::from_millis(500), "{:?}", t0.elapsed());
+    // the server's last permit is free for another client, which waits for the lane and is served
+    assert_eq!(get_from(&app, "/v1/strays", "198.51.100.31", &[]).await.0, StatusCode::OK);
+    for w in mine {
+        let s = w.await.unwrap();
+        assert!(s == StatusCode::OK || s == StatusCode::SERVICE_UNAVAILABLE, "{s}");
+    }
+    for h in held {
+        h.await.unwrap();
+    }
+}
+
+/// R5C2-6: a book, depth or pair-book read is computed at a fixed step of `depth` and cut: a request for fewer levels gets
+/// exactly the first levels of a larger one, and the two share one computation.
+#[tokio::test]
+async fn a_book_of_a_small_depth_is_the_head_of_its_step() {
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    for (route, param) in [("books", "depth"), ("depth", "levels")] {
+        let (_, big) = get(&app, &format!("/v1/{route}/{}?{param}=20", h(TOKEN))).await;
+        let (_, small) = get(&app, &format!("/v1/{route}/{}?{param}=1", h(TOKEN))).await;
+        for side in ["asks", "bids"] {
+            let b = big[side].as_array().unwrap();
+            assert!(!b.is_empty(), "{route} {side}: {big}");
+            assert_eq!(small[side].as_array().unwrap().as_slice(), &b[..1], "{route} {side}");
+        }
     }
 }

@@ -532,12 +532,14 @@ listed live pair orders that are active, not expired and not past their deadline
 through the two KAS books; indicative). The price of a level is `price_num / price_den` quote base units per base base unit;
 `amount` is base-token base units; `orders` is a number. `asks` are ways to buy base with quote, ascending; `bids` ways to sell,
 descending. `daa_score` (number) is the DAA score the quotes are evaluated at (the node's, else the cursor's).
-The direct and entry levels come from the oldest 2,000 pair orders that rest at a level, found among the oldest 20,000 listed
-live candidates that are active, GTC, not expired and not past their deadline (an unarmed stop entry, a TWAP slice not due yet
-or an inexact custody counts toward the 20,000 but not the 2,000). The candidates are the oldest 20,001 pair orders of the pair a
-taker can fill now, and at most 200 that became fillable after the indexer's last commit: an order not active yet, expired, past
-its deadline, between TWAP slices, an unarmed entry or without its exact custody takes no place (R4C2-2). `orders_truncated` (bool)
-is true when a bound cut them, so newer resting orders may be missing.
+The direct and entry levels come from the oldest 2,000 pair orders that rest at a level, found among at most 20,000 candidates:
+the oldest pair orders of the pair a taker can fill now, then at most 200 that became fillable after the indexer's last commit
+(the read takes 20,001 of the first kind only to know whether more are there). An order not active yet, expired, past its
+deadline, between TWAP slices, an unarmed entry, without its exact custody, with nothing left or unable to fund one fill from its
+custody and KAS takes no place (R4C2-2, R5A-1, R5A-2). A level's amount is at most what one fill can take from the order now.
+`orders_truncated` (bool) is true when a bound cut them, so newer resting orders may be missing. `route_truncated` (bool, sent
+only when true) says that a KAS leg of the route was read in part (its book holds more fillable orders than one read takes), so
+a better route level may be missing.
 
 **`GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`** takes the parameters of `/v1/candles/{token}`
 (section 3.16: `interval` default `5m`, `limit` default 500, at most 1500). The candles are **derived from the two KAS series**,
@@ -553,7 +555,7 @@ never from pair fills.
 
 A rate is B base units per `price_basis` base units of A: `num / den` the exact reduced fraction, `value` its floor.
 `a_traded` / `b_traded` say which side traded in KAS in the bucket (the other side carries its last close forward). `h` and `l`
-are the bounds the two series allow, not observed trades. `pair_volume_*` and `pair_fills` are the pair-order fills of the bucket, each transaction once: a netting fill (an ask and a bid of the pair filling each other) is one trade though both orders record it (its larger side's amounts; `pair_fills` counts transactions).
+are the bounds the two series allow, not observed trades. `pair_volume_*` and `pair_fills` are the pair-order fills of the bucket, each transaction once: a netting fill (an ask and a bid of the pair filling each other) is one trade though both orders record it (its larger side's amounts; `pair_fills` counts transactions). They are every fill of the bucket: the indexer keeps them per pair and bucket as the fills are written and reverted, so a long window is never cut.
 
 **`GET /v1/pairs/{base}/{quote}/fills?limit=&before=`** (`limit` default 50, at most `max_page_size`; `before` a fill id):
 
@@ -1335,7 +1337,7 @@ Every error the handlers and the guard produce is JSON:
 | 429 | `ws_per_ip_limit` | WebSocket upgrade over the per-client cap. | 5 |
 | 429 | `ws_per_site_limit` | WebSocket upgrade over the per-IPv6-site cap. | 5 |
 | 500 | `internal` | A database or serialisation error ("internal error"); logged server side. | no |
-| 503 | `overloaded` | `max_concurrent_requests` requests already in flight; rejected at once, not queued. | 1 |
+| 503 | `overloaded` | `max_concurrent_requests` requests already in flight (rejected at once, not queued), or the client's own requests in flight and waiting are full (section 5.3). | 1 |
 | 503 | `db_busy` | SQLite reported the database busy or locked ("database busy, retry shortly"). | 1 |
 | 503 | `ws_capacity` | WebSocket upgrade over `max_ws_connections`. | 5 |
 | 504 | `timeout` | The request ran longer than `request_timeout_ms` ("request timed out"). | no |
@@ -1379,13 +1381,16 @@ too; WebSocket messages after the upgrade do not, they have their own cap).
   `/v1/health`, `/v1/health/ready` and `/v1/metrics` answer from memory and take no place in it, so they answer while it is
   full (R4C2-1).
 * With the per-client rate limit on, one client (its rate-limit key: an IPv4 address or an IPv6 `/64`) may have 8 requests in
-  flight, and the `/64`s of one IPv6 `/48` site 32 together; past either the request is answered `503 overloaded`
-  (`Retry-After: 1`). A client has 1 read on the light lane and 2 on the heavy lane at once; a further read of the same client
-  waits for one of them at most 500 ms, then is answered `503 overloaded`, to that client only. It takes 32 client keys (IPv4
-  addresses or IPv6 sites) that each keep 8 requests in flight to fill the 256; health answers even then.
+  flight, and the `/64`s of one IPv6 `/48` site 32 together. A request past them waits for one, at most 2 s, holding no place
+  in the 256 while it waits; at most 24 requests of a client (96 of a site) wait, and one more, or one whose wait runs out, is
+  answered `503 overloaded` (`Retry-After: 1`), to that client only. So a page may send its 12 to 20 reads at once. A client
+  has 1 read on the light lane and 2 on the heavy lane at once; a further read of the same client waits for one of them at most
+  2 s, then is answered `503 overloaded`. It takes 32 client keys (IPv4 addresses or IPv6 sites) that each keep 8 requests in
+  flight to fill the 256, however long they wait; health answers even then.
 * A request that runs longer than `request_timeout_ms` (default 10,000) is answered `504 timeout`. The wait for a free
-  read-pool connection counts. The abandoned read is cancelled (not started if still queued; interrupted if running) and its
-  connection returns to the pool.
+  read-pool connection counts. An abandoned uncached read is cancelled (not started if still queued; interrupted if running) and
+  its connection returns to the pool. A read the response cache shares (section 5.6) is not: it runs on for the others who ask
+  for the same key, at most 20 s, under the heavy-read permit of the client that started it.
 * Reads run on `read_pool_size` (default 4) database connections, plus one more "light lane" connection for the reads bounded by a
   few index lookups (`/v1/health` counters, `/v1/orders/{id}` and its events, the declaration), so those never queue behind
   heavy reads. Independent of the request timeout, a single pooled read is interrupted by the database after 20 seconds
@@ -1424,9 +1429,9 @@ connection over a cap gets the bare `503` of section 5.1 and is closed. These ca
 and `/v1/depth/{token}` are kept in a response cache per **data generation** of the store (the generation moves after every
 committed batch, revert, operator import and possibly-frozen flag). The key is the request's parameters plus, for the reads that
 depend on the clock (books, pairs, pair books, stats, depth), the node's DAA score and the wall-clock second, so a cached body is
-byte for byte what the request would have computed.
+byte for byte what the request would have computed. The books, the depth and the pair books are computed at a `depth` (`levels`) of 20, 50, 100 or 200, the first at or above the one asked (at most `max_page_size`), and the answer is cut to the levels asked: the same levels, since the reads are exact by price.
 Concurrent requests of one key wait for one read; a failed read is not kept. The read is started by the first request (which
-needs a heavy read of its own client free within 500 ms, section 5.3) and then runs on its own: a request that goes away does not
+needs a heavy read of its own client free within 2 s, section 5.3) and then runs on its own: a request that goes away does not
 stop it, and the others do not wait for the first client's other reads (R4C2-3). At most 1,024 bodies and 32 MiB per generation are
 held; a new key past either bound evicts the least recently used bodies. This is invisible to clients except as lower latency: it adds no header and no staleness beyond the store's own.
 

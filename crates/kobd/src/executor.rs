@@ -283,7 +283,7 @@ pub struct RunArgs {
     /// who leaves an ask open at a low price for a minute: turning the sale on accepts that for
     /// the tokens the inventory policy does not list (`docs/ops/executor.md`, "The sale's price
     /// floor"). In `kobd.toml`: `[launch] args = ["--dust-sell"]`.
-    #[arg(long, env = "KOB_DUST_SELL", help_heading = "Maintenance")]
+    #[arg(long, env = "KOB_DUST_SELL", value_parser = clap::builder::BoolishValueParser::new(), help_heading = "Maintenance")]
     pub dust_sell: bool,
     /// Accepted and ignored: merging only is the default now (`--dust-sell` sells).
     #[arg(long, hide = true, help_heading = "Maintenance")]
@@ -917,6 +917,12 @@ mod tests {
         assert!(!sell(&[]));
         assert!(sell(&["--dust-sell"]));
         assert!(!sell(&["--no-dust-sell"]));
+        // `KOB_DUST_SELL` takes 1 / 0, true / false, yes / no and on / off (R5F-4).
+        for (v, on) in [("1", true), ("true", true), ("yes", true), ("on", true), ("0", false), ("false", false), ("off", false)] {
+            std::env::set_var("KOB_DUST_SELL", v);
+            assert_eq!(sell(&[]), on, "KOB_DUST_SELL={v}");
+        }
+        std::env::remove_var("KOB_DUST_SELL");
     }
 
     /// A key file inside the data directory is refused. A pause file there is refused when the data

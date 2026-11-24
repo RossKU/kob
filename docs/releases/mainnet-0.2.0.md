@@ -68,6 +68,23 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 - **An older build refuses a schema 14 store.** To go back, restore `index.sqlite3.before-migrate` and the log as it was.
 - Details: `docs/ops/executor.md` 7.6a.
 
+### First start of this build: the live books are filled once
+
+- The first start over a store that an earlier build wrote (also after `kobd db compact`, and after a store went back to an
+  older build and returns) fills the live-book tables (`book_live`, `pair_live`) from the live listed orders and sets every
+  row's fillable window, in one transaction, before the API listens. Later starts only check them (about 0.1 s).
+- Time, measured on a synthetic store of 100,000 live listed orders on the build PC (Windows, the test profile `opt-level = 1`, so a release
+  build is faster): 22 s, about 0.2 ms per live order. The TN10 soak copy (320 live orders, `docs/ops/executor.md` 5.5)
+  takes well under a second. The earlier code set each row in a commit of its own, 0.8 ms per row measured (80 s for
+  100,000) before the API listened (R5F-2). While it runs
+  the API is not up: the web goes to standalone mode and an Executor plans nothing.
+- The same happens once more, at the first commit, when the listing minimum (`min_order_value_sompi`) or the book rules
+  change: every row is decided again in that one transaction.
+- **Going back to the previous build:** it runs on a store this build wrote (the same schema 14; the new tables and triggers
+  stay and it ignores them, at a small extra cost per write). But its `kobd db compact` refuses that store ("the old store
+  has a table this build does not know"): compact only with this build. Coming back to this build needs nothing: its first
+  start sets the rows the previous build left unset.
+
 ### The record log is zstd
 
 - Sealed segments are now `seg-*.kobrec.zst` (about a quarter smaller than gzip). `kobd db migrate` compresses them as its
@@ -163,7 +180,7 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 ### Behaviour changes
 
 - **Maintenance no longer sells by default.** The operator's own token UTXOs are only merged; `--dust-sell` (also
-  `KOB_DUST_SELL`, or `[launch] args = ["--dust-sell"]`) turns the sale on, which accepts that its price floor comes from a
+  `KOB_DUST_SELL=1`, which also takes `true`, `yes` or `on`, or `[launch] args = ["--dust-sell"]`) turns the sale on, which accepts that its price floor comes from a
   book anyone can post into. `--no-dust-sell` is still accepted and does nothing.
 - **The indexer judges the node it follows by the clock.** Whether the chain authority keeps up is decided by the cursor
   block's verified header time against the host clock alone: within 90 s it keeps up; above that its lag must fall by

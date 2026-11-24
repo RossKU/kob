@@ -1599,8 +1599,17 @@ impl Processor {
                 family: Some(state.family()),
                 scale: Some(terms.scale).filter(|s| *s > 0),
                 min_fill: Some(terms.min_fill),
-                // A bid has no amount. Its quantity and value are its escrow, the carrier.
-                amount: state.amount_left(),
+                // A bid has no amount. Its quantity and value are its escrow, the carrier. An if-done
+                // entry is measured on what one fill can take from the KAS it holds, not on the
+                // amount it states (R5A-1).
+                amount: match (state.amount_left(), terms.price) {
+                    (Some(a), Some(p)) => {
+                        let t = guarded(|| super::takeable::kas_takeable(state, carrier.min(i64::MAX as u64) as i64, p))
+                            .unwrap_or(Some(0));
+                        Some(t.map_or(a, |t| a.min(t)))
+                    }
+                    (a, _) => a,
+                },
                 price: listing_price,
                 tip: Some(terms.tip),
                 // a curve has no expiry (it rests until sold out or cancelled)

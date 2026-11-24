@@ -29,6 +29,7 @@ pub mod market;
 pub mod outputs;
 pub mod packed;
 pub mod packed_dicts;
+pub mod pair_volume;
 pub mod pairs;
 pub mod prefetch;
 pub mod processor;
@@ -40,6 +41,7 @@ pub mod recovery;
 pub mod release;
 pub mod status;
 pub mod storage;
+pub(crate) mod takeable;
 pub mod trust;
 
 use crate::api::{self, ApiState};

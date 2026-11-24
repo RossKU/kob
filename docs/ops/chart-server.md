@@ -171,7 +171,9 @@ Set `KOB_PAGES_INDEXER_URL` to `https://chart.example.org` (`docs/ops/web-hostin
 
 **Client addresses.** Every request arrives from `cloudflared` on this machine, i.e. from 127.0.0.1. Without
 `trusted_proxies` all visitors would share one client's rate limits and connection caps (20 requests per second, 20
-WebSockets, ...). The API believes a forwarding header only from a peer in `api.trusted_proxies` (`crates/kobd/src/api/client_ip.rs`):
+WebSockets, 8 requests in flight with 24 more waiting at most 2 s, 1 light and 2 heavy reads at a time): the whole public site
+would then answer mostly `503 overloaded`, and no start check catches it, because cloudflared connects over loopback. The API
+believes a forwarding header only from a peer in `api.trusted_proxies` (`crates/kobd/src/api/client_ip.rs`):
 
 * `trusted_proxies = ["127.0.0.1", "::1"]`: cloudflared's address; requests from any other peer are keyed by their own address
   and their headers ignored.
@@ -185,7 +187,7 @@ WebSockets, ...). The API believes a forwarding header only from a peer in `api.
   allocation becomes a separate IPv4 key: the /64 and /48 grouping of IPv6 clients (`ipv6_prefix_bits`, `ipv6_site_prefix_bits`)
   no longer applies, and one IPv6 allocation counts as thousands of clients for the rate limits and the requests in flight.
 * Visitors behind one carrier-grade NAT or company address share one key: one client's rate limit (20 requests per second),
-  8 requests in flight, and 1 light and 2 heavy reads at a time (`docs/api-reference.md` 5.2 and 5.3). A co-located heavy
+  8 requests in flight (24 more waiting), and 1 light and 2 heavy reads at a time (`docs/api-reference.md` 5.2 and 5.3). A co-located heavy
   user can use them up for the others; past them a visitor gets `503 overloaded` or `429` with `Retry-After`, which the web
   app retries. Nothing in the API can tell such visitors apart.
 

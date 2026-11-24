@@ -713,8 +713,11 @@ impl Ingest {
         }
         // The candle aggregates follow the fills this transaction wrote or reverted.
         super::candles::refresh(&tx, &self.proc.tokens)?;
+        // The pair volume of the minutes whose pair fills this transaction wrote or reverted (R5C2-6).
+        super::pair_volume::refresh(&tx)?;
         // The fillable windows of the live books follow the orders this transaction wrote and the new
-        // DAA score (R4C2-2).
+        // DAA score (R4C2-2), under this writer's listing minimum (the dust class, R5C2-1).
+        super::db::ensure_book_rules(&tx, self.proc.rules.min_order_value_sompi)?;
         super::db::maintain_live_books(&tx, super::processor::sql_int(cursor.daa), Some((now_ms() / 1000) as i64))?;
         set_cursor(&tx, &cursor)?;
         // Chain blocks older than the reorg window are final and no longer kept.
