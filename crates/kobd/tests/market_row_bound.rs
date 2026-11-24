@@ -53,11 +53,20 @@ fn candles_keep_every_fill_beyond_the_row_cap_and_stats_say_when_they_were_cut()
     let one = market::candles(&conn, &tok, Some(3), "1m", 60_000, Some(0), None, 1).unwrap();
     assert_eq!(one.items.len(), 1, "one candle, the newest");
     assert_eq!(one.items[0].t, newest_ts.div_euclid(60_000) * 60_000);
-    // the whole history: the first candle is the first fill's bucket, and every fill is counted once
+    // without the candle aggregates (a lean store, or rows not built yet) a chart reads at most the newest
+    // `CANDLE_SCAN_ROWS_MAX` fills of its window and says so (R6C2b-1)
+    for (name, iv) in [("1h", 3_600_000i64), ("1d", 86_400_000)] {
+        let cut = market::candles(&conn, &tok, Some(3), name, iv, None, None, 1500).unwrap();
+        assert!(cut.truncated, "{name}: the fills beyond the cap are left out and said to be");
+        assert_eq!(cut.items.iter().map(|c| c.trades).sum::<u64>(), market::CANDLE_SCAN_ROWS_MAX as u64, "{name}");
+    }
+    // with the aggregates: the whole history, the first candle is the first fill's bucket, and every fill is counted once
+    kobd::indexer::candles::rebuild(&conn, &tok, 1_000).unwrap();
     for (name, iv) in [("1h", 3_600_000i64), ("1d", 86_400_000)] {
         let all = market::candles(&conn, &tok, Some(3), name, iv, None, None, 1500).unwrap();
         assert_eq!(all.items.first().unwrap().t, first_ts.div_euclid(iv) * iv, "{name}: the chart starts at the first trade");
         assert_eq!(all.items.iter().map(|c| c.trades).sum::<u64>(), n as u64, "{name}: every trade is in a candle");
+        assert!(!all.truncated, "{name}");
     }
     // a 1m chart over more fills than the cap: the oldest candles are there too
     let m = market::candles(&conn, &tok, Some(3), "1m", 60_000, Some(0), None, 1500).unwrap();

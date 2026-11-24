@@ -42,6 +42,21 @@ where
     Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], body).into_response())
 }
 
+/// `x` rounded down to a multiple of `iv` (a bucket start).
+fn snap_down(x: i64, iv: i64) -> i64 {
+    x.div_euclid(iv.max(1)).saturating_mul(iv.max(1))
+}
+
+/// `x` rounded up to a multiple of `iv` (a bucket end), saturating.
+fn snap_up(x: i64, iv: i64) -> i64 {
+    let d = snap_down(x, iv);
+    if d == x {
+        x
+    } else {
+        d.saturating_add(iv.max(1))
+    }
+}
+
 /// The depths a book route computes: a request's `depth` (or `levels`) is computed at the first of
 /// these at or above it (at most `max`) and its answer cut to what it asked, so one client can cause
 /// a handful of distinct computations per key and second, not one per number (R5C2-6).
@@ -371,9 +386,11 @@ pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(
     let depth = limit(&q, "depth", 20, app.state.cfg.max_page_size)?;
     let aggregate = flag(&q, "aggregate")?.unwrap_or(true);
     let ctx = app.ctx();
+    // Dust is in the answer only when asked for, marked (R6B-L2).
+    let dust = flag(&q, "include_dust")?.unwrap_or(false);
     let step = depth_step(depth, app.state.cfg.max_page_size);
-    let key = format!("book {token} {step} {aggregate} {:?} {:?}", ctx.node_daa, ctx.now_unix);
-    cached_cut(&app, key, depth, step, &["asks", "bids"], move |c| reads::book(c, &ctx, &token, step, aggregate)).await
+    let key = format!("book {token} {step} {aggregate} {dust} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached_cut(&app, key, depth, step, &["asks", "bids"], move |c| reads::book_with(c, &ctx, &token, step, aggregate, dust)).await
 }
 
 /// `GET /v1/pairs?token=`: the pairs with listed live pair orders, a JSON array.
@@ -427,6 +444,9 @@ pub async fn pair_candles(State(app): State<Arc<App>>, Path((base, quote)): Path
         }
     }
     let n = limit(&q, "limit", 500, 1500)?;
+    // A chart answers in whole buckets of its interval (R6C2b-1): the window is widened to them before
+    // the key and the read, so no read scans the fills of a partial bucket at an edge.
+    let (from, to) = (from.map(|f| snap_down(f, iv)), to.map(|t| snap_up(t, iv)));
     let tokens = app.state.tokens.clone();
     // Cached as the token candles are.
     let key = format!("pair-candles {base} {quote} {interval} {from:?} {to:?} {n}");
@@ -628,6 +648,9 @@ pub async fn candles(State(app): State<Arc<App>>, Path(token): Path<String>, Que
         }
     }
     let n = limit(&q, "limit", 500, 1500)?;
+    // A chart answers in whole buckets of its interval (R6C2b-1): the window is widened to them before
+    // the key and the read, so no read scans the fills of a partial bucket at an edge.
+    let (from, to) = (from.map(|f| snap_down(f, iv)), to.map(|t| snap_up(t, iv)));
     let tokens = app.state.tokens.clone();
     let key = format!("candles {token} {interval} {from:?} {to:?} {n}");
     cached(&app, key, move |c| {
@@ -652,6 +675,9 @@ pub async fn quotes(State(app): State<Arc<App>>, Path(token): Path<String>, Quer
         }
     }
     let n = limit(&q, "limit", 500, 1500)?;
+    // A chart answers in whole buckets of its interval (R6C2b-1): the window is widened to them before
+    // the key and the read, so no read scans the fills of a partial bucket at an edge.
+    let (from, to) = (from.map(|f| snap_down(f, iv)), to.map(|t| snap_up(t, iv)));
     let tokens = app.state.tokens.clone();
     let key = format!("quotes {token} {interval} {from:?} {to:?} {n}");
     cached(&app, key, move |c| {
@@ -706,11 +732,12 @@ pub async fn depth(State(app): State<Arc<App>>, Path(token): Path<String>, Query
     let n = limit(&q, "levels", 50, app.state.cfg.max_page_size)?;
     let tokens = app.state.tokens.clone();
     let ctx = app.ctx();
+    let dust = flag(&q, "include_dust")?.unwrap_or(false);
     let step = depth_step(n, app.state.cfg.max_page_size);
-    let key = format!("depth {token} {step} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    let key = format!("depth {token} {step} {dust} {:?} {:?}", ctx.node_daa, ctx.now_unix);
     cached_cut(&app, key, n, step, &["asks", "bids"], move |c| {
         let decimals = reads::token_decimals(c, &tokens, &token)?;
-        market::depth(c, &ctx, &token, decimals, step)
+        market::depth_with(c, &ctx, &token, decimals, step, dust)
     })
     .await
 }

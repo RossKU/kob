@@ -889,7 +889,9 @@ CREATE TABLE IF NOT EXISTS book_live (
     auction       INTEGER NOT NULL DEFAULT 0,
     -- The resting levels a read counts (a curve: its remaining levels), set by the writer (R5C2-6). An older store gains the
     -- column at open (`db::migrate`).
-    levels        INTEGER
+    levels        INTEGER,
+    -- The base units one fill can take, set by the writer (`takeable::kas_offer`, R6C2a-2): what a read shows at most.
+    offer         INTEGER
 );
 CREATE INDEX IF NOT EXISTS book_live_key ON book_live (token_id, side, open, auction, key, genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS book_live_pending ON book_live (token_id, side, open, open_from);

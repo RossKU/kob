@@ -412,9 +412,9 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             .collect::<rusqlite::Result<_>>()?;
         for id in ids {
             let w = if table == "book_live" {
-                super::reads::book_window(conn, id, dust)?
+                super::reads::book_window(conn, id, dust / 2, daa)?
             } else {
-                super::pairs::pair_window_of(conn, id)?
+                super::pairs::pair_window_of(conn, id, daa)?
             };
             let Some(w) = w else {
                 conn.prepare_cached(&format!("DELETE FROM {table} WHERE order_id = ?1"))?.execute([id])?;
@@ -422,7 +422,7 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             };
             // What the reads take of the row without decoding its state (R5C2-6).
             let extra = if table == "book_live" {
-                ", auction = ?8, key = COALESCE(?9, key), levels = ?10"
+                ", auction = ?8, key = COALESCE(?9, key), levels = ?10, offer = ?11"
             } else {
                 ", ask = ?8, entry = ?9, scale = ?10, amount = ?11, q_kind = ?12, quote = ?13, q_end = ?14, q_slope = ?15, q_step = ?16, q_origin = ?17"
             };
@@ -443,7 +443,8 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
                     id,
                     w.class(),
                     w.key,
-                    w.levels
+                    w.levels,
+                    w.offer
                 ])?;
             } else {
                 let p = w.pair;
@@ -493,15 +494,17 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
 /// R5C2-4).
 ///
 /// 2: what one fill can take (R5A-1, R5A-2) and the dust class (R5C2-1). 3: the columns the reads take
-/// instead of decoding states (`book_live.levels`, the `pair_live` spec, R5C2-6).
-pub const BOOK_RULES_VERSION: u32 = 3;
+/// instead of decoding states (`book_live.levels`, the `pair_live` spec, R5C2-6). 4: every kind by the matcher's own
+/// candidate rules and KIP-9 (`book_live.offer`), an auction at its least favourable quote, dust below half the
+/// listing minimum (R6C2a-1, R6C2a-2, R6C2a-I2).
+pub const BOOK_RULES_VERSION: u32 = 4;
 
 /// The columns of `book_live` and `pair_live` that a store an earlier build of schema 14 created lacks
 /// (`CREATE TABLE IF NOT EXISTS` keeps an existing table as it is). They are derived: added empty, they
 /// are set by the reset [`BOOK_RULES_VERSION`] triggers.
 fn ensure_live_columns(conn: &Connection) -> DbResult<()> {
     let want: [(&str, &[&str]); 2] = [
-        ("book_live", &["levels"]),
+        ("book_live", &["levels", "offer"]),
         ("pair_live", &["ask", "entry", "scale", "amount", "q_kind", "quote", "q_end", "q_slope", "q_step", "q_origin"]),
     ];
     for (table, cols) in want {

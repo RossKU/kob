@@ -159,7 +159,12 @@ struct OwnedToken {
 }
 
 fn owned_tokens(conn: &Connection) -> DbResult<HashMap<[u8; 32], Vec<OwnedToken>>> {
-    let mut st = conn.prepare_cached(concat!(
+    owned_tokens_of(conn, None)
+}
+
+/// [`owned_tokens`] of every order, or of the order `one` (its `orders.id`) only.
+fn owned_tokens_of(conn: &Connection, one: Option<i64>) -> DbResult<HashMap<[u8; 32], Vec<OwnedToken>>> {
+    let sql = concat!(
         "SELECT fo.covenant_id, t.txid, t.idx, t.amount, t.value, t.role, t.created_daa, tk.h, ",
         program_name!("h.program_id"),
         ", kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount) \
@@ -167,9 +172,11 @@ fn owned_tokens(conn: &Connection) -> DbResult<HashMap<[u8; 32], Vec<OwnedToken>
              LEFT JOIN token_holdings h ON h.tx_id = ",
         tx_of!("t.txid"),
         " AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id \
-             WHERE t.spent_block IS NULL ORDER BY t.created_block, t.txid, t.idx"
-    ))?;
-    let rows = st.query_map([], |r| {
+             WHERE t.spent_block IS NULL{} ORDER BY t.created_block, t.txid, t.idx"
+    );
+    let sql = sql.replace("{}", if one.is_some() { " AND t.order_id = ?1" } else { "" });
+    let mut st = conn.prepare_cached(&sql)?;
+    let rows = st.query_map(rusqlite::params_from_iter(one), |r| {
         Ok((
             (
                 r.get::<_, Vec<u8>>(0)?,
@@ -276,11 +283,33 @@ pub(crate) fn live_orders_sql() -> &'static str {
     })
 }
 
+/// The listed live order `order_id` (`orders.id`) as the matcher sees it ([`listed_orders`]): its
+/// order UTXO, decoded state, custodies, bought-custody and strays. `None` when it is not one (not
+/// listed, not live, not proven, a state the numeric gate refuses, an inexact custody set).
+///
+/// The book reads decide with it what one fill can take now (`indexer::takeable`, R6C2a-2), by the
+/// matcher's own candidate rules, so a book and an executor never disagree on what is fillable.
+pub(crate) fn listed_order_of(conn: &Connection, order_id: i64) -> DbResult<Option<ListedOrder>> {
+    Ok(live_orders_with(conn, true, Some(order_id))?.into_iter().next())
+}
+
 /// The live orders with their custody and strays ([`owned_tokens`]: the unspent token UTXOs).
 fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
-    let mut tokens = owned_tokens(conn)?;
-    let mut st = conn.prepare_cached(live_orders_sql())?;
-    let rows = st.query_map([listed as i64], |r| {
+    live_orders_with(conn, listed, None)
+}
+
+/// [`live_orders`] of every order, or of the order `one` only.
+fn live_orders_with(conn: &Connection, listed: bool, one: Option<i64>) -> DbResult<Vec<ListedOrder>> {
+    let mut tokens = owned_tokens_of(conn, one)?;
+    let sql = match one {
+        Some(_) => {
+            live_orders_sql().replace(" ORDER BY o.genesis_block", " AND s.order_id = ?2 AND o.id = ?2 ORDER BY o.genesis_block")
+        }
+        None => live_orders_sql().to_string(),
+    };
+    let mut st = conn.prepare_cached(&sql)?;
+    let args: Vec<i64> = std::iter::once(listed as i64).chain(one).collect();
+    let rows = st.query_map(rusqlite::params_from_iter(args), |r| {
         Ok((
             r.get::<_, Vec<u8>>(0)?,
             r.get::<_, String>(1)?,

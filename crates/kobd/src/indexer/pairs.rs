@@ -271,13 +271,13 @@ pub(crate) struct PairSpec {
 }
 
 impl PairSpec {
-    /// The spec of a pair order's tip state `s` (UTXO DAA `udaa`, `value` sompi, its live custodies).
-    fn of(s: &AnyState, udaa: i64, value: i64, custodies: &[(Vec<u8>, i64, i64)]) -> Option<PairSpec> {
+    /// The spec of a pair order's tip state `s` (UTXO DAA `udaa`) of which one fill can take `take`
+    /// base units of A now (the matcher's pair rules, `takeable::pair_offer`).
+    fn of(s: &AnyState, udaa: i64, take: i64) -> Option<PairSpec> {
         match s {
             AnyState::KobPair(p) => {
                 let (kind, origin) = if p.slope == 0 { (0, 0) } else { (1, p.origin(udaa)?) };
                 let slice = if p.max_fill > 0 { p.amount_left.min(p.max_fill) } else { p.amount_left };
-                let take = super::takeable::pair_takeable(s, value, custodies, p.price_max())?;
                 Some(PairSpec {
                     ask: p.is_ask(),
                     entry: false,
@@ -297,7 +297,6 @@ impl PairSpec {
                     Some(o) if e.band_daa > 0 => (2, o),
                     _ => (0, 0),
                 };
-                let take = super::takeable::pair_takeable(s, value, custodies, e.price)?;
                 Some(PairSpec {
                     ask: !e.is_buy_first(),
                     entry: true,
@@ -380,7 +379,7 @@ fn spec_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<Option<PairSpec>> {
 /// The spec of a row the writer has not set yet (`ok` NULL: an older build's write), decided as the
 /// writer would, at DAA `now` and the read's clock; `None` when it cannot be filled now.
 fn unset_spec(conn: &Connection, order_id: i64, now: i64, ctx: &ReadCtx) -> DbResult<Option<PairSpec>> {
-    let Some(w) = pair_window_of(conn, order_id)? else { return Ok(None) };
+    let Some(w) = pair_window_of(conn, order_id, now)? else { return Ok(None) };
     let past_deadline = matches!((w.deadline, ctx.now_unix), (Some(d), Some(u)) if u as i64 >= d);
     Ok(w.pair.filter(|_| w.ok && w.open_from <= now && now < w.closed_from && !past_deadline))
 }
@@ -477,7 +476,7 @@ fn pair_window(now: i64, unix: Option<u64>) -> String {
 /// stores it in `pair_live` (R4C2-2): the rules of [`eligible`], a resting level and
 /// [`pair_custody_ok`] as DAA bounds, and what the reads take of it ([`PairSpec`], R5C2-6). `None`
 /// when it has no state row.
-pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Option<super::reads::LiveWindow>> {
+pub(crate) fn pair_window_of(conn: &Connection, order_id: i64, daa: i64) -> DbResult<Option<super::reads::LiveWindow>> {
     let sql = format!(
         "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, s.cur_value, \
                 (s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {RESTING_TIF} AND {NOT_FROZEN} AND {pinned}) \
@@ -490,7 +489,7 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
         .prepare_cached(&sql)?
         .query_row([order_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
         .optional()?;
-    let Some((cov, contract, raw, udaa, deadline, value, sql_ok)) = row else { return Ok(None) };
+    let Some((cov, contract, raw, udaa, deadline, _value, sql_ok)) = row else { return Ok(None) };
     let udaa = udaa.unwrap_or(0);
     let state = tip_state(&contract, raw);
     let (mut ok, mut open_from, mut closed_from, mut pair) = (false, 0, i64::MAX, None);
@@ -502,10 +501,6 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
             AnyState::KobIfdPair(e) => (e.entry_stop == 0 || e.armed != 0) && e.amount_left > 0,
             _ => false,
         };
-        let custodies = pair_custodies(conn, &cov)?;
-        pair = crate::indexer::processor::guarded(|| PairSpec::of(s, udaa, value.unwrap_or(0), &custodies)).flatten();
-        let funded = pair.is_some_and(|p| p.amount > 0);
-        ok = sql_ok.unwrap_or(false) && resting && funded && crate::sanity::check(s).is_ok() && custodies_match(&custodies, s);
         open_from = crate::model::terms_of(s).active_from;
         if let AnyState::KobPair(p) = s {
             if p.interval > 0 {
@@ -513,6 +508,15 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
             }
         }
         closed_from = crate::indexer::processor::guarded(|| s.refund_due(udaa)).flatten().unwrap_or(i64::MAX);
+        let custodies = pair_custodies(conn, &cov)?;
+        // What one fill can take, by the matcher's pair rules, once the window opens (R6C2a-2).
+        let lo = super::book::listed_order_of(conn, order_id)?;
+        let at = daa.max(open_from).max(udaa);
+        let take =
+            lo.and_then(|o| crate::indexer::processor::guarded(|| super::takeable::pair_offer(&o, at)).flatten()).map_or(0, |x| x.0);
+        pair = crate::indexer::processor::guarded(|| PairSpec::of(s, udaa, take)).flatten();
+        let funded = pair.is_some_and(|p| p.amount > 0);
+        ok = sql_ok.unwrap_or(false) && resting && funded && crate::sanity::check(s).is_ok() && custodies_match(&custodies, s);
     }
     Ok(Some(super::reads::LiveWindow {
         ok,
@@ -521,6 +525,7 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
         deadline,
         auction: false,
         dust: false,
+        offer: pair.map_or(0, |p| p.amount),
         key: None,
         levels: 1,
         pair,
@@ -883,6 +888,10 @@ pub struct PairCandlesView {
     /// Always `kas_books`: derived from the KAS trades of A and of B, never from pair fills.
     pub price_source: &'static str,
     pub items: Vec<PairCandleView>,
+    /// A token's series could not use the aggregates and was read from its newest fills only
+    /// (`market::CANDLE_SCAN_ROWS_MAX`). Not sent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 /// `pa / pb` as B base units per `basis_a` base units of A.
@@ -965,16 +974,19 @@ pub fn pair_candles(
         (None, None) => 0,
     };
     let start = from.unwrap_or_else(|| end.saturating_sub(iv.saturating_mul(limit as i64)));
+    let (start, end) = market::whole_buckets(start, end, iv);
     let mut items = vec![];
+    let mut truncated = false;
     if end > start {
         // The newest `limit` candles of each side hold every bucket of the newest `limit` of the
         // union: a bucket of A among them has fewer than `limit` newer buckets of A. The older ones
         // are dropped and only their last close is carried, read as the last trade before the
         // first bucket kept.
-        let mut ca: BTreeMap<i64, Candle> =
-            market::candle_series(conn, base, basis_a, iv, start, end, limit)?.into_iter().map(|c| (c.t, c)).collect();
-        let mut cb: BTreeMap<i64, Candle> =
-            market::candle_series(conn, quote, basis_b, iv, start, end, limit)?.into_iter().map(|c| (c.t, c)).collect();
+        let (sa, ta) = market::candle_series(conn, base, basis_a, iv, start, end, limit)?;
+        let (sb, tb) = market::candle_series(conn, quote, basis_b, iv, start, end, limit)?;
+        truncated = ta || tb;
+        let mut ca: BTreeMap<i64, Candle> = sa.into_iter().map(|c| (c.t, c)).collect();
+        let mut cb: BTreeMap<i64, Candle> = sb.into_iter().map(|c| (c.t, c)).collect();
         let mut buckets: BTreeSet<i64> = ca.keys().chain(cb.keys()).copied().collect();
         // The start of the window, or the first bucket kept when older ones were dropped. It is
         // then after the start.
@@ -1039,6 +1051,7 @@ pub fn pair_candles(
         quote_decimals: decimals.1,
         price_source: "kas_books",
         items,
+        truncated,
     })
 }
 
@@ -1209,7 +1222,6 @@ mod tests {
         use kob_protocol::state::{IfdPairState, PairState, SIDE_ASK, SIDE_BID};
         let AnyState::KobPair(p) = compiled(kob_protocol::artifacts::TemplateId::KobPair) else { panic!() };
         let AnyState::KobIfdPair(e) = compiled(kob_protocol::artifacts::TemplateId::KobIfdPair) else { panic!() };
-        let big = [(p.s_cov_id.to_vec(), i64::MAX / 4, 1_000_000), (p.t_cov_id.to_vec(), i64::MAX / 4, 1_000_000)];
         let udaa = 5_000;
         for (side, price, end) in [(SIDE_ASK, 9_000, 4_000), (SIDE_BID, 4_000, 9_000)] {
             let x = PairState {
@@ -1226,7 +1238,7 @@ mod tests {
                 ..p.clone()
             };
             let s = AnyState::KobPair(x.clone());
-            let spec = PairSpec::of(&s, udaa, i64::MAX / 4, &big).unwrap();
+            let spec = PairSpec::of(&s, udaa, 1_000).unwrap();
             for t in (3_900..6_000).step_by(7) {
                 assert_eq!(spec.quote_at(t), x.price_at(t, udaa), "KobPair side {side} at {t}");
             }
@@ -1242,7 +1254,7 @@ mod tests {
                 ..e.clone()
             };
             let s = AnyState::KobIfdPair(x.clone());
-            let spec = PairSpec::of(&s, udaa, i64::MAX / 4, &big).unwrap();
+            let spec = PairSpec::of(&s, udaa, 1_000).unwrap();
             for t in (3_900..6_000).step_by(7) {
                 assert_eq!(spec.quote_at(t), x.price_at(false, t, udaa), "KobIfdPair armed {armed} at {t}");
             }

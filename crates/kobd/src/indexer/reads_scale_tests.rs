@@ -179,24 +179,52 @@ fn load(path: &std::path::Path, n: usize) {
             29,
             30,
         ];
+        // a real ask a fill can take (R6C2a-2): 10 whole tokens at 1 KAS, its state, UTXO and exact custody
+        let (hh, pre, suf) = crate::testkit::tok_fields(P8);
+        let state = AnyState::KobAsk(kob_protocol::state::AskState {
+            token_cov_id: T0,
+            token_tpl_hash: hh,
+            tpl_prefix_len: pre,
+            tpl_suffix_len: suf,
+            ..crate::testkit::ask(1, 100_000_000)
+        });
+        let amount = crate::testkit::WHOLE * 10;
+        let utxo = [&[0xd0u8][..], &cov[1..]].concat();
         tx.execute(
             "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, \
-                                 in_book, genesis_state, genesis_block, genesis_daa, listed, origin) \
-             VALUES (?1, 'KobAsk', ?2, 1, 1, ?5, ?3, ?4, 1000, 1000, 1, x'00', 1, 1, 1, 'chain')",
-            rusqlite::params![cov, pinned_ask_id, t0_id, tpl_id, maker_one],
+                                 min_fill, tip, expiry_daa, in_book, genesis_state, genesis_block, genesis_daa, listed, origin, ext_id) \
+             VALUES (?1, 'KobAsk', ?2, 1, 1, ?5, ?3, ?4, 1000, 100000000, ?6, ?7, ?8, 1, ?9, 1, 1, 1, 'chain', ?10)",
+            rusqlite::params![
+                cov,
+                pinned_ask_id,
+                t0_id,
+                tpl_id,
+                maker_one,
+                crate::testkit::WHOLE,
+                crate::testkit::TIP,
+                crate::testkit::EXPIRY,
+                state.encode(),
+                intern(&crate::testkit::EXT)
+            ],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa) \
+             VALUES (?2, 0, (SELECT id FROM orders WHERE covenant_id = ?1), 20000000, x'00', ?3, 1, 1)",
+            rusqlite::params![cov, utxo, state.encode()],
         )
         .unwrap();
         tx.execute(
             "INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, \
                                       state_known, last_block, last_daa) \
-             VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 'open', 0, 10, 1, randomblob(32), 0, 1000, 1, 1, 1)",
-            [&cov],
+             VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), 'open', 0, ?2, 1, ?3, 0, 20000000, 1, 1, 1)",
+            rusqlite::params![cov, amount, utxo],
         )
         .unwrap();
         tx.execute(
             "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
-             VALUES (randomblob(32), 0, ?1, (SELECT id FROM orders WHERE covenant_id = ?2), 10, 1, 'custody', 1, 1)",
-            rusqlite::params![t0_id, cov],
+             VALUES (randomblob(32), 0, ?1, (SELECT id FROM orders WHERE covenant_id = ?2), ?3, 10000000, 'custody', 1, 1)",
+            rusqlite::params![t0_id, cov, amount],
         )
         .unwrap();
         if k < 2 {
@@ -288,7 +316,12 @@ fn the_per_order_and_per_request_reads_stay_fast_on_a_store_of_soak_size() {
     // 6. The book of the big token: every live ask checks its custody, and two of them have 20,000
     // strays.
     let b = timed("book (60 live asks, 2 with 20,000 strays)", ms(500), || book(&conn, &ctx, &t0, 100, false).unwrap());
-    assert!(matches!(b.asks, BookSide::Orders(ref o) if o.len() == 60), "all 60 asks are liquidity");
+    let classes: String = conn
+        .query_row("SELECT group_concat(COALESCE(ok, -1) || ':' || auction || ':' || COALESCE(offer, -1)) FROM book_live", [], |r| {
+            r.get(0)
+        })
+        .unwrap_or_default();
+    assert!(matches!(b.asks, BookSide::Orders(ref o) if o.len() == 60), "all 60 asks are liquidity: {classes}");
     // 7. The placement identities of a bid-only token, which the stats and trades read.
     timed("market_scale (bid-only token)", fast, || market_scale(&conn, &T1).unwrap());
     drop(conn);

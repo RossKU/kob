@@ -1614,8 +1614,8 @@ fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, bloc
     let quote = state.pair_tokens().map(|p| p.b.cov_id.to_vec());
     c.execute(
         "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, min_fill, price, tip, tif, \
-         expiry_daa, active_from, in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed, quote_id) \
-         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?14, ?15, ?16, ?17, 1, ?18)",
+         expiry_daa, active_from, in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed, quote_id, ext_id) \
+         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?14, ?15, ?16, ?17, 1, ?18, ?19)",
         params![
             cid(id),
             t.name(),
@@ -1635,6 +1635,8 @@ fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, bloc
             block,
             block * 100,
             quote.map(|q| intern(c, &q).unwrap()),
+            // the KCC-20 extension its custody carries, as the indexer records it
+            state.custody_ext(state.token_cov_id()).map(|e| intern(c, &e).unwrap()),
         ],
     )
     .unwrap();
@@ -3189,7 +3191,7 @@ async fn the_64s_of_one_ipv6_site_share_its_requests_in_flight() {
     }
 }
 
-/// R5B-L1, R5C2-7: one honest page's burst, 20 reads at once from one client (14 heavy ones of distinct keys and 6 order
+/// R5B-L1, R5C2-7: one honest page's burst, 20 reads at once from one client (14 heavy computations of distinct keys and 6 order
 /// views on its single light permit), while the heavy lane is busy with other work for 300 ms: none is refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_honest_pages_burst_is_served_whole() {
@@ -3200,7 +3202,11 @@ async fn an_honest_pages_burst_is_served_whole() {
     seed_all(&e.w);
     let app = router(e.state.clone());
     let held = hold_heavy_lane(&e.state.pool, 4, 300);
-    let mut uris: Vec<String> = (1..=10).map(|d| format!("/v1/books/{}?depth={d}&aggregate=false", h(TOKEN))).collect();
+    // 10 distinct book and depth computations (one per depth step, aggregate and dust flag; R6C2b-I6), not joiners of one
+    let mut uris: Vec<String> = [(1, true), (1, false), (30, true), (30, false), (60, true), (60, false), (150, true), (150, false)]
+        .map(|(d, a)| format!("/v1/books/{}?depth={d}&aggregate={a}", h(TOKEN)))
+        .to_vec();
+    uris.extend([1, 150].map(|d| format!("/v1/depth/{}?levels={d}&include_dust=true", h(TOKEN))));
     uris.extend(["/v1/tokens".to_string(), format!("/v1/stats/{}", h(TOKEN)), "/v1/strays".to_string(), "/v1/pairs".to_string()]);
     uris.extend([1u8, 2, 3, 4, 6, 7].map(|o| format!("/v1/orders/{}", h(o))));
     assert_eq!(uris.len(), 20);
