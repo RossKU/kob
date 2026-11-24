@@ -345,7 +345,7 @@ pub fn book_from_indexer(scale: i64, v: &Value) -> Book {
 const ACTIVE_PAGES_MAX: usize = 200;
 
 /// Whether an order-list cursor has the form the indexer gives: `<genesis block>:<64 hex covenant id>`.
-fn order_cursor_ok(c: &str) -> bool {
+pub(crate) fn order_cursor_ok(c: &str) -> bool {
     c.split_once(':').is_some_and(|(b, id)| {
         !b.is_empty() && b.bytes().all(|x| x.is_ascii_digit()) && id.len() == 64 && id.bytes().all(|x| x.is_ascii_hexdigit())
     })
