@@ -210,10 +210,11 @@ fn pair_orders_crossing_each_other_are_planned_within_the_budget() {
 /// its book budget, and the planner's work stays within a bound stated in allocation passes,
 /// candidate pairs and netting steps. Checked against the fixes undone one by one: the profit step
 /// judging netted orders one by one again gives 1,298 allocation passes (bound 1,000), the netting
-/// group unbounded by the token slots 10.1 M netting steps (bound 2.6 M; 57 s against 6 s, all
-/// other counts unchanged), and with all three fixes undone every plan runs into its 30 s book
-/// budget (`cut_short` 4 of 5): each fails this test, by count and not by time.
-/// budget (`cut_short` 4 of 5): each fails this test, by count and not by time.
+/// group unbounded by the token slots 10.1 M netting steps (then counted without skipped entries; 57 s
+/// against 6 s, all other counts unchanged), and with all three fixes undone every plan runs into its
+/// 30 s book budget (`cut_short` 4 of 5): each failed this test, by count and not by time. Since
+/// R8F3b-1 the netting steps count skipped entries too, and each netting group has its own bounded
+/// share of a plan's work (`matcher::batch`, `NET_BOOK_WORK`).
 #[test]
 fn a_big_untipped_pair_book_does_not_starve_the_plain_crossings() {
     use common::pair::*;
@@ -227,6 +228,44 @@ fn a_big_untipped_pair_book_does_not_starve_the_plain_crossings() {
     assert!(!rep.prepared.is_empty(), "the plain crossings are built");
     assert!(rep.anomalies.is_empty(), "{:?}", rep.anomalies);
     assert_work(&rep, "300 + 300 untipped pair orders", WORK_STARVE);
+}
+
+/// R8F3b-1: an attacker's pair book on its own two tokens: `n` whole-fill pair asks (`minFill = amountLeft`) at the best
+/// rate and one tiny pair bid on the other side. Every ask's netted part breaks its own minimum fill. Before, netting ran
+/// first in every allocation, restarted its scan after each such ask and forgot them between the allocations of one plan,
+/// so the plan ran past its 5 s book budget and the executor built nothing, not even the plain KAS crossings of another
+/// token in the same view. Now no set of orders on one token pair can take the planning time of the others: the plain
+/// crossings are built within the production budget and no plan is cut short.
+#[test]
+fn unnettable_min_fill_pair_orders_do_not_starve_the_plain_crossings() {
+    use common::pair::*;
+    let (x, y) = ([0x91u8; 32], [0x92u8; 32]);
+    for n in [5_000u32, 15_000] {
+        let mut orders = vec![];
+        for i in 0..n {
+            let mut s = pask(1 + (i % 4) as u8, T8, T8, WHOLE, RATE - 10, 0);
+            s.min_fill = s.amount_left; // whole fills only
+            orders.push(pair_retoken(l_pair(200_000 + i, T8, T8, s, 1_000), x, y));
+        }
+        orders.push(pair_retoken(l_pair(199_999, T8, T8, pbid(5, T8, T8, 10, RATE + 10, 0), 1_000), x, y));
+        for i in 0..50 {
+            orders.push(l_bid_a(60_000 + i, T8, 9, P260, 3 * WHOLE));
+            orders.push(l_ask_a(63_000 + i, T8, 9, P250, 3 * WHOLE));
+        }
+        let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] };
+        let inp = input(&b);
+        // the production budgets (book 5 s, tick 20 s)
+        let cfg = EngineConfig { token_carrier: OP_TOKEN_CARRIER, ..cfg() };
+        let t0 = Instant::now();
+        let rep = tick(&inp, &cfg, &Families::default(), &signer());
+        let took = t0.elapsed();
+        println!("{n} unnettable pair asks + 100 plain KAS orders: {took:?}, {} tx, {:?}", rep.prepared.len(), rep.work);
+        assert!(!rep.prepared.is_empty(), "{n}: the plain crossings are built ({took:?}, {:?})", rep.work);
+        assert_eq!(rep.work.cut_short, 0, "{n}: a plan ran into its book budget ({took:?}): {:?}", rep.work);
+        // measured 160,056 and 480,056 netting steps (walk steps and skipped entries) for the two sizes
+        assert!(rep.work.net_steps <= 2_000_000, "{n}: {} netting steps", rep.work.net_steps);
+        assert!(rep.anomalies.is_empty(), "{:?}", rep.anomalies);
+    }
 }
 
 #[test]
@@ -262,5 +301,5 @@ fn unprofitable_pair_refunds_are_not_built() {
 // Work bounds [allocation passes, candidate pairs tried, netting steps], about 4x the counts measured on the fixed planner
 // (`TickReport::work`, deterministic: the same on every machine while no plan is cut short).
 const WORK_LOSS: [u64; 3] = [240, 2_000, 100]; // measured 57, 456, 0
-const WORK_PAIR: [u64; 3] = [1_000, 2_400_000, 450_000]; // measured 260, 583,668, 110,923
-const WORK_STARVE: [u64; 3] = [1_000, 3_000_000, 2_600_000]; // measured 258, 774,476, 637,806
+const WORK_PAIR: [u64; 3] = [1_000, 2_400_000, 4_000_000]; // measured 260, 583,668, 992,143 (net steps count skipped entries since R8F3b-1)
+const WORK_STARVE: [u64; 3] = [1_000, 3_000_000, 50_000_000]; // measured 258, 774,476, 12,766,620 (skipped entries counted)

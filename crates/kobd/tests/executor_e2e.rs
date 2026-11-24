@@ -521,11 +521,12 @@ async fn nothing_is_planned_until_the_indexer_has_caught_up() {
     let rep = step_ok(r.step().await);
     assert!(rep.not_ready.as_deref().is_some_and(|w| w.contains("catching_up") && w.contains("500 DAA")), "{rep:?}");
     assert!(rep.built.is_empty() && node.submitted() == 0);
-    // caught up: the crossing is matched
+    // caught up (the cursor block's verified time recent, R8C1-L4): the crossing is matched
     health.update(|h| {
         h.state = FollowerState::Following;
         h.node_daa = Some(c.daa());
         h.cursor_daa = c.daa();
+        h.cursor_time_unix_ms = Some(wall_ms() - 2_000);
     });
     let rep = step_ok(r.step().await);
     assert!(rep.not_ready.is_none() && rep.built.len() == 1 && rep.funding.is_some(), "{rep:?}");
@@ -563,12 +564,17 @@ async fn the_runner_plans_within_the_lag_tolerance_and_stops_beyond_it() {
         h.node_daa = Some(c.daa());
         h.cursor_hash = Some(c.hs.node.tip());
         h.cursor_daa = c.daa() - 301;
+        // the cursor block 31 s old by its verified time: beyond the 30 s (R8C1-L4)
+        h.cursor_time_unix_ms = Some(wall_ms() - 31_000);
     });
     let rep = step_ok(r.step().await);
     assert!(rep.not_ready.as_deref().is_some_and(|w| w.contains("catching_up") && w.contains("301 DAA")), "{rep:?}");
     assert!(rep.built.is_empty() && node.submitted() == 0);
     // 300 DAA behind: still `catching_up`, not caught up, but within the tolerance: the crossing is matched
-    health.update(|h| h.cursor_daa = c.daa() - 300);
+    health.update(|h| {
+        h.cursor_daa = c.daa() - 300;
+        h.cursor_time_unix_ms = Some(wall_ms() - 20_000);
+    });
     assert!(!health.snapshot().caught_up() && health.snapshot().within_lag_tolerance());
     let rep = step_ok(r.step().await);
     assert!(rep.not_ready.is_none() && rep.built.len() == 1, "{rep:?}");
@@ -716,4 +722,9 @@ async fn run_indexes_matches_and_shuts_down_cleanly() {
         let journal = std::fs::read_to_string(dir.path().join("data").join(kobd::matcher::journal::FILE_NAME)).unwrap();
         assert!(journal.lines().any(|l| l.contains("\"op\":\"add\"")), "{journal}");
     }
+}
+
+/// The wall clock, Unix ms.
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
 }

@@ -1065,9 +1065,11 @@ fn the_total_cap_lowers_the_rate_never_below_the_floor() {
     let rate = rate_of(p);
     assert!(p.accounting.fee <= 3 * floor_fee, "fee {} over the cap {}", p.accounting.fee, 3 * floor_fee);
     assert!((250..=300).contains(&rate), "rate {rate}");
-    // a cap below the floor fee: the floor
+    // a cap below the floor fee: the rate goes no lower than the floor, and the cap holds there too, so nothing is
+    // signed (R8FX2-1)
     let r = run(&input(&b), &priced(100, 1_000, floor_fee / 2));
-    assert_eq!(rate_of(&r.prepared[0]), 100);
+    assert!(r.prepared.is_empty(), "{:?}", r.prepared.iter().map(rate_of).collect::<Vec<_>>());
+    assert!(r.skipped.iter().any(|(_, w)| w.contains("fee bound")), "{:?}", r.skipped);
 }
 
 // ------------------------------------------------------------------ the earliest profitable tick (§3.3)

@@ -258,3 +258,66 @@ async fn a_dropped_database_wait_leaves_the_next_wait_the_authoritys() {
     let c = charged(&f).await;
     assert!(c >= 350, "after a dropped database wait: {c} ms of 400 charged");
 }
+
+/// The cursor at a block `lag_ms` behind the follower's clock (a block whose time is verified).
+fn at_lag(f: &Follower<MockNode>, lag_ms: u64) {
+    let h = Hash32([0x5c; 32]);
+    *f.cursor_seen.lock().unwrap() = Some(h);
+    *f.cursor_ts.lock().unwrap() = Some((h, f.wall_ms() - lag_ms));
+}
+
+/// R8C1-L2: a deposal by the excursion budget keeps what the budget charged with the stint, so that a node back within
+/// the hour comes back with its budget spent. Before, the budget branch cleared the excursions just before the stint was
+/// kept, and the node came back with a full 300 s.
+#[tokio::test]
+async fn a_stint_ended_by_its_budget_keeps_the_budget_spent() {
+    let f = wait_follower();
+    at_lag(&f, 200_000);
+    f.judge(false);
+    {
+        let mut r = f.rule();
+        r.kept_up = true;
+        r.failing = false;
+        r.failed = None;
+        r.period = None;
+        let run = r.run_ms;
+        r.run_ms = run + 400_000;
+        r.excursions.push_back((run, run + 400_000));
+        r.last_check = None;
+    }
+    f.judge(false);
+    let mut r = f.rule();
+    assert!(r.failed.as_deref().is_some_and(|w| w.contains("held the lag above")), "{:?}", r.failed);
+    let key = r.authority.take().expect("an authority");
+    r.keep_stint(key.clone());
+    let spent: u64 = r.past.iter().find(|(k, _)| *k == key).map(|(_, (_, ex, _))| ex.iter().map(|(a, b)| b - a).sum()).unwrap_or(0);
+    assert!(spent >= 300_000, "the stint keeps its spent budget: {spent} ms");
+}
+
+/// R8C1-L1: the 30-minute backstop judges progress, not whose time it was: a period 31 minutes old in which the lag fell
+/// by 100 s goes on (a new backstop window), one in which it did not fall by 90 s fails; with no other node to hand over
+/// to it only says so (`failing`, no step given up).
+#[tokio::test]
+async fn the_backstop_judges_progress_and_spares_a_lone_node_the_abort() {
+    for (fell_ms, lone, fails) in [(100_000i64, false, false), (10_000, false, true), (10_000, true, false)] {
+        let f = wait_follower();
+        at_lag(&f, 200_000);
+        f.judge(false);
+        let wall = f.wall_ms();
+        {
+            let mut r = f.rule();
+            r.lone = lone;
+            let p = r.period.as_mut().expect("a period above the tolerance");
+            p.wall_start = wall - 31 * 60_000;
+            p.wall_lag = Some(200_000 + fell_ms);
+        }
+        f.judge(false);
+        let r = f.rule();
+        assert_eq!(r.failed.is_some(), fails, "lag fell by {fell_ms} ms, lone {lone}: {:?}", r.failed);
+        if fails {
+            assert!(r.failed.as_deref().unwrap().contains("without gaining"), "{:?}", r.failed);
+        }
+        assert_eq!(r.failing, fails || lone, "fell {fell_ms}, lone {lone}");
+        assert!(wall.saturating_sub(r.period.as_ref().unwrap().wall_start) < 60_000, "a new backstop window");
+    }
+}

@@ -199,8 +199,13 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   90 s in every 3 minutes, and once it has kept up it may spend at most 5 minutes in an hour above 90 s, or another node
   takes over (with a single node, `/v1/health` says so). Only the time kobd waits on that node counts: its own database
   work, a full disk or a slow cross-checking node is not the node's; which time is whose comes from kobd's own code, never
-  from the text of a node's answer, and a stretch above 90 s that lasts 30 minutes by the wall clock fails whoever's
-  time it was. A public node deposed for it that held back chain
+  from the text of a node's answer, and a stretch above 90 s that lasts 30 minutes by the wall clock without the lag
+  falling by 90 s fails whoever's time it was. A window whose transactions use many subnetwork lanes is proven
+  whatever their number (in pieces of at most 4,096 lanes, one chain block always whole): before, more than 64 lanes
+  stopped every indexer at that block. A lane proof a node calls "too deep" halts nothing: of a recent cursor it is that
+  node's failure, of one older than the pruning depth a `gap` that is left by itself once a node serves the proof.
+  `state`, `caught_up` and `within_lag_tolerance` (the executor's gate) and lean pruning now follow the cursor block's
+  verified time; the node's DAA claim is shown, never used. A public node deposed for it that held back chain
   its successor then served is kept away 10 minutes, doubling up to 6 hours; nodes the operator configured are never
   kept away. The small node calls of each step (the sink, the DAG info, a header) now time out after 30 s. New in `/v1/health`:
   `authority_pace` (`keeping_up`, `gaining`, `failing`, `unknown`) and `chain_proofs_off`; `ok`, `/v1/health/ready`,
