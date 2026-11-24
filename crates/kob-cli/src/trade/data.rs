@@ -67,7 +67,7 @@ pub fn clock(node: &str) -> Result<Clock, String> {
     if hi - lo > CLOCK_MARGIN_DAA {
         return Err(format!(
             "the two nodes disagree about the chain's time (DAA {lo} against {hi}, more than {CLOCK_MARGIN_DAA} apart): nothing \
-             was planned; try again, or name one node you trust with --node"
+             was planned; try again, or name one node you trust with --node [NODES_DISAGREE_ON_TIME]"
         ));
     }
     let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);

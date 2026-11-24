@@ -932,6 +932,13 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         Custody::Missing(_) => return Err("the bought-custody was not found on the node: not cancelled".into()),
         Custody::Unknown(why) => return Err(format!("bought-custody {why}: not cancelled")),
     };
+    // R9T-6: twins within the token inputs one transaction takes, as `kob cancel` caps them; the rest stay with the
+    // ended covenant id and are said, so that nothing an outsider sends stops a node-only cancel.
+    let (twins, twins_left) = cap_twins(
+        state,
+        &[custody.as_ref(), prefund.as_ref()].into_iter().flatten().chain(bought.iter()).cloned().collect::<Vec<_>>(),
+        &f.twins,
+    );
     let utxo = utxo_of(u);
     let fee = FeeOptions { fee_rate: Some(a.fee_rate), fee_mode: if a.priority_fee { FeeMode::Priority } else { FeeMode::Relay } };
     let (built, funding) = build_funded(true, &a.node, &a.network, &maker, |funding| {
@@ -941,7 +948,7 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
             custody: custody.clone(),
             prefund: prefund.clone(),
             // every UTXO of exactly a custody's state goes back with it: nothing spends it once the id has ended
-            strays: bought.iter().chain(f.twins.iter()).cloned().collect(),
+            strays: bought.iter().chain(twins.iter()).cloned().collect(),
             foreign: vec![],
             tokens: vec![],
             funding,
@@ -976,6 +983,9 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
                 }
             );
             // the node cannot list strays by script, so the ones it does not know of end with the order (R8FX-4)
+            if twins_left > 0 {
+                eprintln!("  note: {twins_left} UTXO(s) of exactly a custody's state are more than one transaction takes: they stay owned by the ended covenant id and are lost");
+            }
             eprintln!("  note: tokens sent to this order that the node cannot list (strays) stay owned by the ended covenant id and are lost: if an indexer lists them, `kob sweep --view FILE` first");
         }
         if let Err(e) = crate::trade::opts::confirm_with(a.yes, &a.network, &format!("the cancel of {cov}")) {
@@ -994,7 +1004,33 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         },
         "file": sent.file.map(|p| p.display().to_string()),
         "engine_validated": true,
+        "twins_left": twins_left,
     }))
+}
+
+/// The custody twins a cancel takes: per token, at most the program's token inputs of one transaction (for the order's
+/// own family also its cap) less the custodies of that token; the count left is returned (R9T-6).
+fn cap_twins(state: &AnyState, held: &[TokenUtxo], twins: &[TokenUtxo]) -> (Vec<TokenUtxo>, usize) {
+    let cap = |token: [u8; 32]| -> usize {
+        let hash = match state.pair_tokens() {
+            Some(t) if token == t.b.cov_id => t.b.tpl_hash,
+            Some(t) => t.a.tpl_hash,
+            None => state.token_tpl_hash().unwrap_or_default(),
+        };
+        let slots = token_template_by_hash(&hash).map(|tt| tt.slots.0.min(tt.family.max_tok_in())).unwrap_or(usize::MAX);
+        slots.saturating_sub(held.iter().filter(|h| h.utxo.covenant_id == Some(token)).count())
+    };
+    let mut out: Vec<TokenUtxo> = vec![];
+    let mut left = 0;
+    for t in twins {
+        let token = t.utxo.covenant_id.unwrap_or_default();
+        if out.iter().filter(|o| o.utxo.covenant_id == Some(token)).count() < cap(token) {
+            out.push(t.clone());
+        } else {
+            left += 1;
+        }
+    }
+    (out, left)
 }
 
 /// Run the search and the cancels.

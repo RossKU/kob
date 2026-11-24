@@ -125,6 +125,33 @@ impl From<&str> for Fail {
     }
 }
 
+/// A refusal with an issue code, as a placement's: the message ends in ` [CODE]`, the form tools match on
+/// (`error: <message> [<CODE>]`), and `--json` carries it as an issue.
+pub(crate) fn coded(code: &str, message: impl std::fmt::Display) -> String {
+    format!("{message} [{code}]")
+}
+
+impl Fail {
+    /// The issue code a [`coded`] message ends with.
+    fn issue_code(&self) -> Option<&str> {
+        let m = self.message.strip_suffix(']')?;
+        let (_, code) = m.rsplit_once(" [")?;
+        (!code.is_empty() && code.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')).then_some(code)
+    }
+
+    /// Prints the refusal and returns the exit code. With `--json` and an issue code, one document on stdout
+    /// carries it as an issue, as a refused placement's does: `{"action", "issues": [...], "result": null}`.
+    fn report(&self, c: &Common, action: &str) -> i32 {
+        eprintln!("error: {}", self.message);
+        if let (true, Some(code)) = (c.json, self.issue_code()) {
+            let message = self.message[..self.message.len() - code.len() - 3].to_string();
+            let doc = json!({"action": action, "network": c.network, "issues": [{"code": code, "severity": "error", "message": message}], "result": serde_json::Value::Null});
+            println!("{}", crate::text::json(&doc));
+        }
+        self.code
+    }
+}
+
 /// A malformed argument, with exit code 2.
 fn usage(e: impl Into<String>) -> Fail {
     Fail { code: 2, message: e.into() }
@@ -416,7 +443,11 @@ fn amend_crossing(
                 "amended without the crossing check (the indexer did not answer for the book)",
             )]);
         }
-        return Err("the book could not be checked for the new price (the indexer did not answer): pass --ack-no-guards to amend without the crossing check".into());
+        return Err(coded(
+            "GUARDS_UNAVAILABLE",
+            "the book could not be checked for the new price (the indexer did not answer): pass --ack-no-guards to amend without the crossing check",
+        )
+        .into());
     };
     let Some(t) = super::plan::crossing_touch(&v.book, side, price, tip) else { return Ok(vec![]) };
     match crossing {
@@ -425,9 +456,12 @@ fn amend_crossing(
             Severity::Warning,
             format!("the new price crosses the market (best {} at {t}): it fills at your price; a matcher keeps the difference", if side == Side::Sell { "bid" } else { "ask" }),
         )]),
-        _ => Err(format!(
-            "the new price crosses the market (best {} at {t}): refused, nothing signed. Pass --crossing limit to fill at your price (a matcher keeps the difference), or cancel and place it (a crossing placement starts as an auction)",
-            if side == Side::Sell { "bid" } else { "ask" }
+        _ => Err(coded(
+            "MARKETABLE_REJECTED",
+            format!(
+                "the new price crosses the market (best {} at {t}): refused, nothing signed. Pass --crossing limit to fill at your price (a matcher keeps the difference), or cancel and place it (a crossing placement starts as an auction)",
+                if side == Side::Sell { "bid" } else { "ask" }
+            ),
         )
         .into()),
     }
@@ -696,7 +730,7 @@ pub fn build_replace(
         lost(&mut notes, format!("{} stray UTXO(s) the indexer counts but does not list", live.unlisted));
     } else if live.unlisted > 0 {
         return Err(format!(
-            "the indexer counts {} stray UTXO(s) of this order that it does not list; a cancel-replace would leave them locked for ever: run `kob sweep {}` first, then replace (or pass --abandon-strays to lose them)",
+            "the indexer counts {} stray UTXO(s) of this order that it does not list; a cancel-replace would leave them locked for ever: run `kob sweep {}` first, then replace (or pass --abandon-strays to lose them) [STRAYS_UNTAKEN]",
             live.unlisted,
             to_hex(&live.cov)
         ));
@@ -705,7 +739,7 @@ pub fn build_replace(
         lost(&mut notes, format!("{} stray UTXO(s) of other tokens", live.foreign));
     } else if live.foreign > 0 {
         return Err(format!(
-            "the order's covenant id owns {} stray UTXO(s) of other tokens, which a cancel-replace would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace (or pass --abandon-strays to lose them)",
+            "the order's covenant id owns {} stray UTXO(s) of other tokens, which a cancel-replace would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace (or pass --abandon-strays to lose them) [STRAYS_UNTAKEN]",
             live.foreign,
             to_hex(&live.cov)
         ));
@@ -730,7 +764,7 @@ pub fn build_replace(
             lost(&mut notes, format!("{} token UTXO(s) of another extension commitment", other.len()));
         } else if !other.is_empty() {
             return Err(format!(
-                "the order's covenant id owns {} token UTXO(s) of another extension commitment, which a cancel-replace cannot take and would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace (or pass --abandon-strays to lose them)",
+                "the order's covenant id owns {} token UTXO(s) of another extension commitment, which a cancel-replace cannot take and would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace (or pass --abandon-strays to lose them) [STRAYS_UNTAKEN]",
                 other.len(),
                 to_hex(&live.cov)
             ));
@@ -757,7 +791,7 @@ pub fn build_replace(
         let inputs = held.len() + strays.iter().filter(|s| s.utxo.covenant_id == Some(token)).count();
         if inputs > slots {
             return Err(format!(
-                "the order has more stray token UTXOs than one transaction moves ({slots} inputs): sweep them first (kob sweep)"
+                "the order has more stray token UTXOs than one transaction moves ({slots} inputs): sweep them first (kob sweep), or pass --abandon-strays [STRAYS_UNTAKEN]"
             ));
         }
         if need > have {
@@ -900,7 +934,11 @@ pub fn run_replace(args: &[String]) -> i32 {
         // R9FC-1: never below the order's own UTXO; a new expiry needs the indexer's witness to agree
         let clock = data::indexer_witness(indexer, data::clock(node)?.at_least([live.order.utxo.block_daa_score as i64]));
         if clock.disputed && gtd.is_some() {
-            return Err("the node's and the indexer's view of the chain's time disagree: a new expiry is not set (try again)".into());
+            return Err(coded(
+                "CLOCK_DISPUTED",
+                "the node's and the indexer's view of the chain's time disagree: a new expiry is not set (try again)",
+            )
+            .into());
         }
         let input = AmendInput { gtd: gtd.map(|w| gtd_daa(&clock, w)), ..input };
         let (rep, value, mut notes) = replacement(&live, &input, clock.daa, m.tick)?;
@@ -908,7 +946,9 @@ pub fn run_replace(args: &[String]) -> i32 {
         if let (Some(want), Some(now)) = (input.price, trades_at(&rep, clock.daa, clock.daa)) {
             // R9FC2-1: the amended order trades at exactly the price given, from now on: checked on the state itself.
             if now != (want, false) {
-                return Err("the amended order would not trade at the price given: nothing signed".into());
+                return Err(
+                    coded("AMEND_PRICE_MISMATCH", "the amended order would not trade at the price given: nothing signed").into()
+                );
             }
             let crossing = match p.get("--crossing") {
                 None | Some("reject") => super::plan::Crossing::Reject,
@@ -959,10 +999,7 @@ pub fn run_replace(args: &[String]) -> i32 {
     })();
     match r {
         Ok((ready, units)) => finish(&c, &signer, ready, &units, "this amendment"),
-        Err(e) => {
-            eprintln!("error: {}", e.message);
-            e.code
-        }
+        Err(e) => e.report(&c, "replace"),
     }
 }
 
@@ -1331,10 +1368,7 @@ fn order_of_view(
 fn finish_or(c: &Common, signer: &Signer, r: Result<(Ready, Units), Fail>, what: &str) -> i32 {
     match r {
         Ok((ready, units)) => finish(c, signer, ready, &units, what),
-        Err(e) => {
-            eprintln!("error: {}", e.message);
-            e.code
-        }
+        Err(e) => e.report(c, what),
     }
 }
 

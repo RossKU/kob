@@ -1809,3 +1809,56 @@ fn the_decode_checks_the_custody_rules_of_the_transaction() {
     let issues = crate::trade::show::custody_issues(&bad);
     assert!(issues.iter().any(|m| m.contains("stays live")), "{issues:?}");
 }
+
+/// R9T-6: `kob recover --cancel` takes the custody twins within the token inputs of one transaction (8 for the 8/8
+/// program, the custody included), as `kob cancel` does; with one twin more than that, the cancel still builds, passes
+/// the engine and says how many are left (`twins_left`), instead of failing for every cancel of the order.
+#[test]
+fn recover_caps_custody_twins_at_the_programs_inputs() {
+    let mut f = fixture();
+    // 8 twins of A1's custody (exactly its state, owned by A1): with the custody that is 9 units, one over the 8 inputs
+    for k in 0..8u8 {
+        f.utxos.push(token_node_utxo(P, TOKEN, 0xd0 + k, 10 * SCALE, A1));
+    }
+    let (url, _node) = mock::start(f.utxos.clone());
+    let dir = tmp("recovertwins");
+    let (backup, export) = files(&f, &dir);
+    let out = dir.join("signed");
+    let a = recover::parse_args(&v(&format!(
+        "--from {} --from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key-file {} --out-dir {}",
+        backup.display(),
+        export.display(),
+        to_hex(&pk(1)),
+        keyf(1),
+        out.display()
+    )))
+    .unwrap();
+    let (report, _) = recover::execute(&a).unwrap();
+    let c = &by_cov(&report, A1)["cancel"];
+    assert_eq!(c["status"], "signed", "{c}");
+    assert_eq!(c["twins_left"], 1, "{c}");
+    let s = signed_from(c["file"].as_str().unwrap());
+    let token_inputs = s.tx.inputs.iter().filter(|i| i.utxo.covenant_id == Some(TOKEN)).count();
+    assert_eq!(token_inputs, 8, "the custody and 7 twins");
+}
+
+/// The `kob recover` documents the tools read, for the shapes fixture (`trade::tests_e2e::cli_json_shapes`): the
+/// report, one order entry, and one cancel result (a dry run).
+pub(crate) fn recover_shape_docs() -> Value {
+    let f = fixture();
+    let (url, _node) = mock::start(f.utxos.clone());
+    let dir = tmp("recovershapes");
+    let (backup, export) = files(&f, &dir);
+    let out = dir.join("signed");
+    let a = recover::parse_args(&v(&format!(
+        "--from {} --from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key-file {} --out-dir {}",
+        backup.display(),
+        export.display(),
+        to_hex(&pk(1)),
+        keyf(1),
+        out.display()
+    )))
+    .unwrap();
+    let (report, _) = recover::execute(&a).unwrap();
+    json!({"recover_report": report, "recover_entry": by_cov(&report, A1), "recover_cancel": by_cov(&report, A1)["cancel"]})
+}

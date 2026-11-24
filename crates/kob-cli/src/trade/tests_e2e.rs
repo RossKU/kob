@@ -2034,3 +2034,108 @@ fn a_replace_with_unlisted_strays_needs_abandon_strays() {
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("ABANDONED (--abandon-strays): 3 stray UTXO(s) the indexer counts but does not list"), "{out}");
 }
+
+/// The shape of a JSON document: every scalar becomes its type name (`"string"`, `"number"`, `"bool"`, `"null"`),
+/// except the enumerated strings tools match on (`code`, `severity`, `status`, `action`, `network`, `kind`, `side`),
+/// which are kept; an array becomes one element whose objects hold the union of its elements' fields. Values such as
+/// txids, times and temporary paths do not enter it, so the fixture is the same on every run and every machine.
+fn shape(v: &Value, key: &str) -> Value {
+    const KEEP: [&str; 7] = ["code", "severity", "status", "action", "network", "kind", "side"];
+    match v {
+        Value::Null => json!("null"),
+        Value::Bool(_) => json!("bool"),
+        Value::Number(_) => json!("number"),
+        Value::String(s) if KEEP.contains(&key) => json!(s),
+        Value::String(_) => json!("string"),
+        Value::Array(a) => {
+            let mut merged: Option<Value> = None;
+            for x in a {
+                let s = shape(x, key);
+                merged = Some(match (merged, s) {
+                    (Some(Value::Object(mut m)), Value::Object(n)) => {
+                        for (k, v) in n {
+                            m.entry(k).or_insert(v);
+                        }
+                        Value::Object(m)
+                    }
+                    (Some(m), _) => m,
+                    (None, s) => s,
+                });
+            }
+            Value::Array(merged.into_iter().collect())
+        }
+        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), shape(x, k))).collect()),
+    }
+}
+
+/// The `--json` documents the tools (mm-bot, kob-mcp) read, as shapes, in `tools/fixtures/kob-cli-shapes.json`.
+///
+/// The test FAILS when the committed file differs from what this build produces, so a field change shows up as a
+/// diff to commit. Regenerate with `KOB_UPDATE_SHAPES=1 cargo test -p kob-cli --bin kob cli_json_shapes`.
+#[test]
+fn cli_json_shapes() {
+    let maker = pk(0x11);
+    let cov = [0xa1; 32];
+    let order = AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000));
+    let w = world_x("shapes", &[(order, cov, 0x10, 2 * KAS)], |_, routes| {
+        let view = routes[&format!("/v1/orders/{}", to_hex(&cov))].clone();
+        routes.insert(
+            format!("/v1/orders?maker={}&status=active&limit=200", to_hex(&maker)),
+            json!({"items": [view], "next_cursor": null}),
+        );
+        routes.insert(
+            format!("/v1/token-utxos?owner={}&limit=500", to_hex(&maker)),
+            json!({"items": [token_item(0x03, &user_token(maker, 100 * SCALE))], "next_cursor": null}),
+        );
+    });
+    let doc = |code_out: (i32, String, String)| -> Value {
+        serde_json::from_str(&code_out.1).unwrap_or_else(|e| panic!("{e}: {}{}", code_out.1, code_out.2))
+    };
+    let mut out = serde_json::Map::new();
+    let a = w.args(0x11, "limit --token TST --side sell --amount 1TST --price 3KAS --decimals 3 --dry-run --json");
+    let place = doc(crate::text::capture_split(|| crate::trade::place::run(&a)));
+    out.insert("issues".into(), place["issues"].clone());
+    out.insert("place_plan".into(), place);
+    let a = w.args(0x11, &format!("{} --price 3.1KAS --dry-run --json", to_hex(&cov)));
+    out.insert("replace_plan".into(), doc(crate::text::capture_split(|| crate::trade::actions::run_replace(&a))));
+    let a = w.args(0x11, &format!("{} --price 3.1KAS --yes --json", to_hex(&cov)));
+    let _ = crate::text::capture_split(|| crate::trade::actions::run_replace(&a));
+    let signing: Value = serde_json::from_str(&std::fs::read_to_string(w.fresh(".replace.json")).unwrap()).unwrap();
+    out.insert("signing_document".into(), signing);
+    let a = w.args(0x11, "--json");
+    out.insert("balances".into(), doc(crate::text::capture_split(|| crate::trade::views::run_balances(&a))));
+    let a = w.args(0x11, "--json");
+    out.insert("orders".into(), doc(crate::text::capture_split(|| crate::trade::views::run_orders(&a))));
+    // a holdings list cut by its length: the partial balances
+    let cursor = format!("5:{}:7", "ab".repeat(32));
+    let wp = world_x("shapespartial", &[], |_, routes| {
+        let base = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(&maker), to_hex(&TOKEN));
+        routes.insert(base.clone(), json!({"items": [token_item(0x03, &user_token(maker, 100 * SCALE))], "next_cursor": cursor}));
+        routes.insert(format!("{base}&cursor={cursor}"), json!({"items": [], "next_cursor": cursor}));
+        routes.insert(
+            format!("/v1/token-utxos?owner={}&limit=500", to_hex(&maker)),
+            json!({"items": [token_item(0x03, &user_token(maker, 100 * SCALE))], "next_cursor": null}),
+        );
+        routes
+            .insert(format!("/v1/orders?maker={}&status=active&limit=200", to_hex(&maker)), json!({"items": [], "next_cursor": null}));
+    });
+    let a = wp.args(0x11, "--json");
+    out.insert("balances_partial".into(), doc(crate::text::capture_split(|| crate::trade::views::run_balances(&a))));
+    if let Value::Object(r) = crate::tests_e2e::recover_shape_docs() {
+        out.extend(r);
+    }
+    let shapes = Value::Object(out.iter().map(|(k, v)| (k.clone(), shape(v, k))).collect());
+    let text = format!("{}\n", serde_json::to_string_pretty(&shapes).unwrap());
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/fixtures/kob-cli-shapes.json");
+    if std::env::var_os("KOB_UPDATE_SHAPES").is_some() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
+    let committed = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+    assert!(
+        committed == text,
+        "the --json documents changed: regenerate {} with `KOB_UPDATE_SHAPES=1 cargo test -p kob-cli --bin kob cli_json_shapes` and commit it",
+        path.display()
+    );
+}
