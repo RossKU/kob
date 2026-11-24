@@ -517,8 +517,9 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
 /// instead of decoding states (`book_live.levels`, the `pair_live` spec, R5C2-6). 4: every kind by the matcher's own
 /// candidate rules and KIP-9 (`book_live.offer`), an auction at its least favourable quote, dust below half the
 /// listing minimum (R6C2a-1, R6C2a-2, R6C2a-I2). 5: the least of both ends of the window (R7C2a-1, R7C2a-3), a curve ranked
-/// and shown by its smallest valid fill (`book_live.take_min`, R7C2a-2).
-pub const BOOK_RULES_VERSION: u32 = 5;
+/// and shown by its smallest valid fill (`book_live.take_min`, R7C2a-2). 6: a curve's `levels` count the sequence of its
+/// successive smallest fills, its whole depth (R8).
+pub const BOOK_RULES_VERSION: u32 = 6;
 
 /// The columns of `book_live` and `pair_live` that a store an earlier build of schema 14 created lacks
 /// (`CREATE TABLE IF NOT EXISTS` keeps an existing table as it is). They are derived: added empty, they

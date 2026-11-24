@@ -1054,9 +1054,10 @@ pub(crate) fn resting_levels(
     remaining: Option<i64>,
     value: Option<i64>,
     take_min: Option<i64>,
+    limit: usize,
     now: i64,
 ) -> Vec<(Option<usize>, i64, Option<i64>)> {
-    resting_levels_of(tip_state(contract, state).as_ref(), udaa, price, remaining, value, take_min, now)
+    resting_levels_of(tip_state(contract, state).as_ref(), udaa, price, remaining, value, take_min, limit, now)
 }
 
 /// The levels a book read shows of a row the writer decided (`w`), at DAA `now`: what the property test of the book rule
@@ -1070,7 +1071,7 @@ pub(crate) fn shown_levels(
     w: &LiveWindow,
     now: i64,
 ) -> Vec<(Option<usize>, i64, Option<i64>)> {
-    resting_levels_of(Some(s), udaa, price, remaining, Some(w.offer), w.take_min, now)
+    resting_levels_of(Some(s), udaa, price, remaining, Some(w.offer), w.take_min, usize::MAX, now)
 }
 
 /// [`resting_levels`] of a decoded tip state (`None`: unknown).
@@ -1081,56 +1082,114 @@ fn resting_levels_of(
     remaining: Option<i64>,
     value: Option<i64>,
     take_min: Option<i64>,
+    limit: usize,
     now: i64,
 ) -> Vec<(Option<usize>, i64, Option<i64>)> {
+    // a curve expands only the levels the read needs (`limit`: its depth)
     if let Some(AnyState::KobCurveAsk(c)) = s {
-        return curve_shown(c, value, take_min);
+        return curve_shown(c, take_min, limit);
     }
     resting_level_of(s, udaa, price, remaining, value, now).map(|(q, a)| (None, q, a)).into_iter().collect()
 }
 
-/// The levels a book shows of a curve (R7C2a-2): what one fill can take (`offer`, at most the levels one fill walks), its
-/// smallest valid fill (`take_min`: the minimum fill as KIP-9 raises it) first, at the mean price a taker pays for it, then
-/// the rest of the reachable levels, each at its own price but never below a level before it (a taker reaches a later,
-/// cheaper level only through the earlier ones). A row the writer has not set (no `offer`) shows every remaining level.
-fn curve_shown(
+/// The levels a book shows of a curve (R7C2a-2, R8): the sequence of its successive smallest valid fills. From the curve's
+/// state, the smallest fill a taker can make (`take_min` for the first: the matcher's own, its minimum fill as KIP-9
+/// raises it; [`curve_step_min`] for the states after it) is one level at the mean price a taker pays for it; then the
+/// smallest fill of the state that fill leaves, and so on to the end of the table, a step no fill can take, or `limit`
+/// distinct prices. The steps of one level at its price are one level. An ordinary curve (a minimum fill no larger than a level)
+/// shows every remaining level at its own price; a minimum fill that bundles levels shows the bundle at its mean price,
+/// so no depth shows at a price nobody can trade at. A shown price never falls below one before it (a later level is
+/// reached through the earlier ones). A row the writer has not set (no `take_min`) shows every remaining level.
+pub(crate) fn curve_shown(
     c: &kob_protocol::state::CurveAskState,
-    offer: Option<i64>,
     take_min: Option<i64>,
+    limit: usize,
 ) -> Vec<(Option<usize>, i64, Option<i64>)> {
-    let levels = crate::model::curve_levels(c);
-    let Some(cap) = offer else { return levels.into_iter().map(|(l, p, a)| (Some(l), p, Some(a))).collect() };
-    let cap = cap.min(c.amount_left);
-    if cap <= 0 {
-        return vec![];
-    }
-    let m = take_min.unwrap_or(1).clamp(1, cap);
-    let Some(mean) = crate::model::curve_fill_price(c, m) else { return vec![] };
-    // the smallest fill is shown at the level it ends in
-    let mut reach = 0i64;
-    let ends_in = levels.iter().find(|l| {
-        reach = reach.saturating_add(l.2);
-        reach >= m
-    });
-    let mut out = vec![(ends_in.or(levels.first()).map(|l| l.0), mean, Some(m))];
-    let (mut at, mut floor) = (0i64, mean);
-    for (l, p, a) in levels {
-        let (lo, hi) = (at, at.saturating_add(a));
-        at = hi;
-        let (from, to) = (lo.max(m), hi.min(cap));
-        if to > from {
-            floor = floor.max(p);
-            // the rest of the level the smallest fill ends in, at its price, is that entry (one order, one level)
-            match out.last_mut() {
-                Some((ll, q, Some(a))) if *q == floor && *ll == Some(l) => *a += to - from,
-                _ => out.push((Some(l), floor, Some(to - from))),
+    let Some(first) = take_min else {
+        return crate::model::curve_levels(c).into_iter().take(limit).map(|(l, p, a)| (Some(l), p, Some(a))).collect();
+    };
+    let mut out: Vec<(Option<usize>, i64, Option<i64>)> = vec![];
+    let (mut st, mut floor, mut next, mut prices) = (c.clone(), 0i64, Some(first), 0usize);
+    while st.amount_left > 0 && st.level_size > 0 {
+        let (Some(price), level) = (st.price_now(), st.level()) else { break };
+        let in_level = (level.saturating_add(1)).saturating_mul(st.level_size).saturating_sub(st.sold()).min(st.amount_left);
+        // the smallest fill inside the level, in closed form (no walk): the first step's is the matcher's
+        let m = match next.take() {
+            Some(m) => Some(m),
+            None => in_level_min(&st, price).filter(|m| *m <= in_level).or_else(|| curve_step_min(&st)),
+        };
+        let Some(m) = m.filter(|m| *m > 0).map(|m| m.min(st.amount_left)) else { break };
+        // fills of at least `m` take the whole level at its price (the last of them takes the rest of it); a level that
+        // holds less than the smallest fill is reached only by a fill that crosses into the next, at its mean price
+        let (amount, mean) = if m <= in_level {
+            (in_level, price)
+        } else {
+            match crate::model::curve_fill_price(&st, m) {
+                Some(p) if st.proceeds(m).is_some() => (m, p),
+                _ => break,
+            }
+        };
+        floor = floor.max(mean);
+        let l = usize::try_from(level).ok();
+        match out.last_mut() {
+            Some((ll, q, Some(a))) if *q == floor && *ll == l => *a += amount,
+            _ => {
+                // `limit` distinct prices: the levels at the last of them are all read (a book of depth n is exact)
+                if out.last().is_none_or(|e| e.1 != floor) {
+                    if prices >= limit {
+                        break;
+                    }
+                    prices += 1;
+                }
+                out.push((l, floor, Some(amount)));
             }
         }
-        if at >= cap {
-            break;
-        }
+        st.amount_left -= amount;
     }
     out
+}
+
+/// The smallest fill of curve `s` inside its current level (at `price`): its minimum fill, raised to a payout KIP-9
+/// accepts at that price (`proceeds` of `n` units of one level is `ceil(n x (price - tip) / scale)`). `None` when the
+/// level pays nothing (a price at the tip).
+fn in_level_min(s: &kob_protocol::state::CurveAskState, price: i64) -> Option<i64> {
+    let rate = price.checked_sub(s.tip).filter(|r| *r > 0)? as i128;
+    let floor = crate::matcher::candidate::KAS_OUTPUT_MIN as i128;
+    let n = (floor - 1).max(0) * s.scale.max(1) as i128 / rate + 1;
+    let m = i64::try_from(n).ok()?.max(s.min_fill.max(1));
+    // the whole rest is a fill too (it closes the order)
+    Some(m.min(s.amount_left))
+}
+
+/// The smallest fill a taker can make of curve `s` as it stands, by the matcher's rule for a curve
+/// (`matcher::candidate::kip9_limits`): at least its minimum fill (or the whole rest when less is left), a walk the
+/// covenant accepts (at most 8 levels, no level below the tip), and a payout to the maker KIP-9 accepts. `None` when no
+/// fill can be made.
+pub(crate) fn curve_step_min(s: &kob_protocol::state::CurveAskState) -> Option<i64> {
+    let floor = crate::matcher::candidate::KAS_OUTPUT_MIN;
+    let lo = s.min_fill.max(1).min(s.amount_left);
+    let top = s.max_fill();
+    let ok = |n: i64| s.proceeds(n).is_some_and(|p| p >= floor);
+    if lo <= 0 || lo > top {
+        return None;
+    }
+    if ok(lo) {
+        return Some(lo);
+    }
+    if !ok(top) {
+        // the whole rest, within one fill's walk, closes the order: its payout joins the order's value
+        return (top == s.amount_left && s.proceeds(top).is_some()).then_some(top);
+    }
+    let (mut a, mut b) = (lo, top);
+    while a + 1 < b {
+        let mid = a + (b - a) / 2;
+        if ok(mid) {
+            b = mid;
+        } else {
+            a = mid;
+        }
+    }
+    Some(b)
 }
 
 /// Most orders with a fixed quote one read of a book side takes: those a taker can fill now, best
@@ -1288,7 +1347,7 @@ fn book_side_orders(
         // levels leave it out the same way. The state is decoded once.
         let state = tip_state(&contract, raw_state);
         let mut levels =
-            resting_levels_of(state.as_ref(), utxo_daa.unwrap_or(last_daa), price, remaining, r.get(18)?, r.get(20)?, now);
+            resting_levels_of(state.as_ref(), utxo_daa.unwrap_or(last_daa), price, remaining, r.get(18)?, r.get(20)?, depth, now);
         if levels.is_empty() {
             return Ok(None);
         }
@@ -1445,31 +1504,32 @@ pub(crate) fn book_side_sorted(
     let kept: std::cell::RefCell<Vec<f64>> = Default::default();
     let sign = if side == 2 { -1.0 } else { 1.0 };
     let enough = |key: f64| top.is_some_and(|d| kept.borrow().len() >= d && worse(key, *kept.borrow().last().unwrap_or(&f64::MAX)));
-    let (truncated, _) = for_each_resting(conn, ctx, token, side, dust, enough, |mut level, scale, exact, is_dust| {
-        if let Some(d) = top {
-            // a level worse than the best `top` prices so far cannot be among them: not sorted, not kept (R6C2b-2)
-            if let Some(last) = kept.borrow().get(d.saturating_sub(1)).copied() {
-                level.retain(|l| !worse(sign * l.1 as f64 / scale.max(1) as f64, last));
-            }
-            best_prices(&mut level, side, d);
-        }
-        let mut levels = levels.borrow_mut();
-        for (_, price, remaining) in level {
-            let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false, true));
-            l.0 += remaining.unwrap_or(0).max(0) as i128;
-            l.1 += 1;
-            l.2 |= remaining.is_none() || exact == 0;
-            l.3 &= is_dust;
+    let (truncated, _) =
+        for_each_resting(conn, ctx, token, side, dust, top.unwrap_or(usize::MAX), enough, |mut level, scale, exact, is_dust| {
             if let Some(d) = top {
-                let k = sign * price as f64 / scale.max(1) as f64;
-                let mut kept = kept.borrow_mut();
-                if let Err(i) = kept.binary_search_by(|x| x.total_cmp(&k)) {
-                    kept.insert(i, k);
-                    kept.truncate(d);
+                // a level worse than the best `top` prices so far cannot be among them: not sorted, not kept (R6C2b-2)
+                if let Some(last) = kept.borrow().get(d.saturating_sub(1)).copied() {
+                    level.retain(|l| !worse(sign * l.1 as f64 / scale.max(1) as f64, last));
+                }
+                best_prices(&mut level, side, d);
+            }
+            let mut levels = levels.borrow_mut();
+            for (_, price, remaining) in level {
+                let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false, true));
+                l.0 += remaining.unwrap_or(0).max(0) as i128;
+                l.1 += 1;
+                l.2 |= remaining.is_none() || exact == 0;
+                l.3 &= is_dust;
+                if let Some(d) = top {
+                    let k = sign * price as f64 / scale.max(1) as f64;
+                    let mut kept = kept.borrow_mut();
+                    if let Err(i) = kept.binary_search_by(|x| x.total_cmp(&k)) {
+                        kept.insert(i, k);
+                        kept.truncate(d);
+                    }
                 }
             }
-        }
-    })?;
+        })?;
     let mut out: Vec<_> = levels.into_inner().into_iter().collect();
     out.sort_by(|((pa, sa), _), ((pb, sb), _)| {
         let o = (*pa as i128 * *sb as i128).cmp(&(*pb as i128 * *sa as i128)).then(pa.cmp(pb)).then(sa.cmp(sb));
@@ -1514,6 +1574,7 @@ pub(crate) fn for_each_resting(
     token: &Hash32,
     side: i64,
     dust: bool,
+    limit: usize,
     enough: impl Fn(f64) -> bool,
     mut f: impl FnMut(Vec<(Option<usize>, i64, Option<i64>)>, i64, i64, bool),
 ) -> DbResult<(bool, i64)> {
@@ -1543,8 +1604,13 @@ pub(crate) fn for_each_resting(
             }
         }
         let (price, remaining): (i64, Option<i64>) = (r.get(0)?, r.get(2)?);
-        let level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, r.get(7)?, r.get(12)?, now);
-        counted += level.len() as i64;
+        let contract: String = r.get(4)?;
+        let level = resting_levels(&contract, r.get(5)?, r.get(6)?, price, remaining, r.get(7)?, r.get(12)?, limit, now);
+        // a curve read to `limit` levels counts the levels the writer stored for it (the whole sequence)
+        counted += match r.get::<_, Option<i64>>(10)? {
+            Some(n) if contract == TemplateId::KobCurveAsk.name() => n.max(level.len() as i64),
+            _ => level.len() as i64,
+        };
         // a pending row is dust by its class, not its arm (R7C2b-I1)
         f(level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?, r.get::<_, Option<i64>>(11)? == Some(CLASS_DUST));
     }
@@ -1748,7 +1814,7 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64, dust_below: i64, daa
         take_min: matches!(state, Some(AnyState::KobCurveAsk(_))).then_some(offer.take_min),
         key,
         levels: match &state {
-            Some(AnyState::KobCurveAsk(c)) => curve_shown(c, Some(offer.amount), Some(offer.take_min)).len() as i64,
+            Some(AnyState::KobCurveAsk(c)) => curve_shown(c, Some(offer.take_min), usize::MAX).len() as i64,
             _ => 1,
         },
         pair: None,

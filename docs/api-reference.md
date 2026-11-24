@@ -479,9 +479,10 @@ no single fill can take (its tip above its price, a minimum fill above its maxim
 is not in the book at all. The amounts are at most what one fill can take (`fillable_now`), and an order's worth is the least of
 what it offers at either end of its window (a decaying ask at its floor, a rising bid at its first quote). A TWAP or DCA order
 whose slice is worth less than the line, and a bid whose escrow is mostly its delivery carrier, are dust from the start: they
-are filled by executors but shown only with `include_dust=true`. A curve shows what one fill reaches: its smallest valid fill
-first, at the mean price a taker pays for it (and is ranked there), then its other reachable levels, each at its own price but
-never below an earlier one.
+are filled by executors but shown only with `include_dust=true`. A curve shows its whole depth as the sequence of its successive smallest valid fills:
+the smallest fill a taker can make now at the mean price it pays (the curve is ranked there), then the smallest fill of
+what that leaves, and so on to the end of its table. An ordinary curve shows every remaining level at its own price; a
+minimum fill that bundles levels shows as one level at its mean price. A shown price is never below an earlier one.
 
 ```
 curl -s "$API/v1/books/$TOKEN?depth=5"

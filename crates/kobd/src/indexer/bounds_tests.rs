@@ -2067,3 +2067,53 @@ fn a_rising_bid_and_a_bundled_curve_do_not_set_the_touch() {
     }
     assert_eq!(book_side_sorted(&conn, &ctx, &token, 1, Some(1), false).unwrap().0[0].0 .0, 100_000_000, "the honest best ask");
 }
+
+/// R8: a curve keeps its whole depth. An ordinary curve of 50 levels (a minimum fill no larger than a level) shows its 50
+/// levels, each at its own price and size; the book of depth 200 and the levels the statistics count both see them all.
+#[test]
+fn an_ordinary_curve_shows_every_level() {
+    use kob_protocol::state::CurveAskState;
+    let conn = open_memory("testnet-10").unwrap();
+    let (hh, p, sf) = tok_fields(T3);
+    let table: Vec<i64> = (0..50).map(|k| 100_000_000 + k * 1_000_000).collect();
+    let c = CurveAskState {
+        maker: pk(9),
+        token_cov_id: TOKEN_COV,
+        token_tpl_hash: hh,
+        tpl_prefix_len: p,
+        tpl_suffix_len: sf,
+        scale: SCALE,
+        min_fill: 1,
+        tip: 0,
+        active_from: 0,
+        level_size: WHOLE,
+        total: 50 * WHOLE,
+        amount_left: 50 * WHOLE,
+        extension_commitment: EXT,
+        table: table.clone(),
+    };
+    let s = Seed {
+        prefix: "w",
+        contract: "KobCurveAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(AnyState::KobCurveAsk(c).encode()),
+        price0: Some(100_000_000),
+        remaining: 50 * WHOLE,
+        custody: true,
+        listed: true,
+        maker: pk(9),
+    };
+    seed(&conn, &s, 0, 1);
+    crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    let (token, ctx) = (Hash32(TOKEN_COV), ctx());
+    let levels = book_side_sorted(&conn, &ctx, &token, 1, Some(200), false).unwrap().0;
+    let got: Vec<(i64, i128)> = levels.iter().map(|((p, _), (a, ..))| (*p, *a)).collect();
+    assert_eq!(got, table.iter().map(|p| (*p, WHOLE as i128)).collect::<Vec<_>>());
+    let stored: i64 = conn.query_row("SELECT levels FROM book_live", [], |r| r.get(0)).unwrap();
+    assert_eq!(stored, 50, "the statistics count every level");
+    let b = serde_json::to_value(book(&conn, &ctx, &token, 200, false).unwrap()).unwrap();
+    assert_eq!(b["asks"].as_array().unwrap().len(), 50);
+}

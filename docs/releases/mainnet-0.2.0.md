@@ -78,7 +78,7 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   takes well under a second. The earlier code set each row in a commit of its own, 0.8 ms per row measured (80 s for
   100,000) before the API listened (R5F-2). While it runs
   the API is not up: the web goes to standalone mode and an Executor plans nothing.
-- This build's book rules are version 5: the first start decides every live-book row again (the time above). It also marks
+- This build's book rules are version 6: the first start decides every live-book row again (the time above). It also marks
   once which stored fills make a price (`order_events.priced`, one pass over the fills) and counts the KAS locked in live
   orders (`counters.kas_locked`); triggers keep both from then on. `/v1/metrics` gains
   `kob_api_read_budget_refused_total{route}` and `kob_live_book_undecided_rows_total` (rows whose decision failed: not open,
@@ -244,7 +244,8 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 - **Every public read has a budget of work** (5,000,000 SQLite steps, 1.5 s of read time per request). A read past it is
   answered `503 read_budget` with `Retry-After: 1`; no honest read comes near it.
 - **Books judge an order at the worst end of its window**: a rising bid by its first quote, a curve by its smallest valid fill
-  at the mean price a taker pays (shown first, then the levels one fill reaches), a pair order by the least amount one fill
+  at the mean price a taker pays (its depth is the sequence of its successive smallest fills: an ordinary curve shows every
+  level, a bundle forced by its minimum fill shows at its mean price), a pair order by the least amount one fill
   takes at either end. Book amounts and prices are what a fill can take and trade at.
 - **No public answer uses the node's claimed DAA score**: `confirmations`, `settled`, an auction's quote now and which orders
   a book takes as fillable come from the store's verified cursor, advanced by the clock, at most 90 s ahead.

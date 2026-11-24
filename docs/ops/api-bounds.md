@@ -57,10 +57,10 @@ distinct computations one client can cause per data generation (and second, for 
 | Route | Worst case seeded | Wall | VM steps | Keys a client can cause |
 |---|---|---|---|---|
 | `/v1/tokens` | 24,000 curve asks on one token | 0.7 ms | 31,114 | 1 |
-| `/v1/books/{token}?aggregate=false&depth=200` | 1,200 curve asks of 1,000 levels at the best price, 250 dust and 250 pending curves of 1,000 levels (2,400 / 500 / 500 for the 2 N run); with `include_dust` | 18 ms; 24 ms (re-measured 2026-11-24, R7) | 253,635; 291,698 | 16 per token and second: `depth` is computed at 20, 50, 100 or 200 (`api::rest::DEPTH_STEPS`) and cut, times `aggregate`, times `include_dust` |
-| `/v1/books/{token}` (levels, depth 200, `include_dust`) | the same | 34 ms | 297,362 | (above) |
-| `/v1/depth/{token}?levels=200&include_dust=true` | the same | 35 ms (no re-read at 4 x the levels since R7C2b-3: when two scales round to one per-basis level the worst level is left out and the answer says `truncated`) | 297,066 | 8 per token and second (the same steps, times `include_dust`) |
-| `/v1/stats/{token}` | the same; and 25,000 / 50,000 fills of the day (each read alone; one token holding both is about the sum, within the read budget) | 57 ms; 63 ms | 478,596; 633,030 | 1 per token and second |
+| `/v1/books/{token}?aggregate=false&depth=200` | 1,200 curve asks of 1,000 levels at the best price, 250 dust and 250 pending curves of 1,000 levels (2,400 / 500 / 500 for the 2 N run); with `include_dust` | 19 ms; 41 ms (re-measured 2026-11-24, R8: every curve shown as its sequence of smallest fills, at most `depth` steps a curve) | 253,635; 291,698 | 16 per token and second: `depth` is computed at 20, 50, 100 or 200 (`api::rest::DEPTH_STEPS`) and cut, times `aggregate`, times `include_dust` |
+| `/v1/books/{token}` (levels, depth 200, `include_dust`) | the same | 58 ms | 297,362 | (above) |
+| `/v1/depth/{token}?levels=200&include_dust=true` | the same | 59 ms (no re-read at 4 x the levels since R7C2b-3: when two scales round to one per-basis level the worst level is left out and the answer says `truncated`) | 297,066 | 8 per token and second (the same steps, times `include_dust`) |
+| `/v1/stats/{token}` | the same; and 25,000 / 50,000 fills of the day (each read alone; one token holding both is about the sum, within the read budget) | 94 ms; 63 ms (the 2 % band reads each curve's whole sequence) | 478,596; 633,030 | 1 per token and second |
 | `/v1/quotes` sampling (once a minute) | 12,000 / 24,000 curve asks | 5 ms | 199,512 | none (the writer's) |
 | `/v1/pairs?token=` | 20,001 fillable `KobPair` asks, real states and custodies | 25 ms | 780,122 | 1 per token and second |
 | `/v1/pairs/{a}/{b}/book?depth=` | the same | 1.9 ms | 62,183 | 4 per pair and second (the steps) |
@@ -128,7 +128,9 @@ every output the fill builds. It is the least of what it offers at both ends of 
 commit on, and its last): every kind's offer is monotone over the window, so that is its least favourable moment (a decaying ask
 at its floor; a rising bid at its first quote, with the buying power of its highest; an armed entry at the band's end it starts
 from). A curve is ranked, shown and valued by its smallest valid fill (its minimum fill as KIP-9 raises it) at the mean price a
-taker pays for it, then its other reachable levels, never below an earlier one. A pair order shows the least amount one fill can
+taker pays for it; its depth is the sequence of its successive smallest valid fills (an ordinary curve: every remaining
+level at its own price; a bundle forced by its minimum fill: one level at its mean price), never below an earlier one, and a read
+expands only the levels its `depth` needs (`reads::curve_shown`, R8). A pair order shows the least amount one fill can
 take at either end of its window. `bounds::a_rising_bid_and_a_bundled_curve_do_not_set_the_touch` is the findings' own case and
 `book_rule_props::the_book_rule_holds_for_every_kind_at_every_time_of_its_window` the property over every kind (below). An order no fill can take takes no place
 at all (`ok` 0); one worth less than the threshold (an order its own maker filled down to one base unit, a TWAP slice or a
@@ -147,7 +149,7 @@ a resting kind with an open slice):
 | Kind | What each of the 1,000 must hold | Who can take it |
 |---|---|---|
 | `KobAsk`, `KobAskKron`, `KobIfdAsk` (+ KRON) | tokens worth at least 0.5 KAS at its price (an auction: at its floor) in its exact custody (a TWAP ask: per slice); a sell-first entry also the KAS of the prefund and exit carrier of a partial fill, else it can only be taken whole | anyone, at once, at the price shown |
-| `KobCurveAsk` | tokens worth at least 0.5 KAS over the levels one fill reaches, ranked at the mean price of its smallest valid fill | anyone, at once, at that mean price for the smallest fill |
+| `KobCurveAsk` | tokens worth at least 0.5 KAS in its smallest valid fill (at most 8 levels), ranked at that fill's mean price | anyone, at once, at that mean price for the smallest fill |
 | `KobBid`, `KobBidKron` | at least 0.5 KAS of buying power at its lowest quote of the window (a DCA bid: per slice) above the carriers and reserve | anyone, at once, at the price shown |
 | `KobIfdBid` (+ KRON) | at least 0.5 KAS that one fill can spend from its escrow after its delivery and exit carriers, at both ends of its band | anyone, at once, at the price shown |
 | unarmed stops, conditionals (`KobCond*`), IOC / FOK takers | not in the books | |

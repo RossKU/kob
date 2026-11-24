@@ -423,6 +423,59 @@ fn times(r: &mut Rng, first: i64, last: i64) -> Vec<i64> {
     v
 }
 
+/// The curve `cv` of `lo` with `taken` more base units sold: the order and its custody as the matcher sees them then.
+fn curve_after(
+    lo: &crate::matcher::book::ListedOrder,
+    cv: &CurveAskState,
+    taken: i64,
+) -> (crate::matcher::book::ListedOrder, CurveAskState) {
+    let st = CurveAskState { amount_left: cv.amount_left - taken, ..cv.clone() };
+    let mut o = lo.clone();
+    o.order.state = AnyState::KobCurveAsk(st.clone());
+    if let Some(c) = o.custody.as_mut() {
+        c.state = kob_protocol::state::TokenState::custody(c.state.family(), st.amount_left, c.state.owner(), c.state.extension());
+    }
+    (o, st)
+}
+
+/// The sequential statement of a curve's shown levels (R8), each failure reported through `fail`.
+fn check_curve_sequence(
+    lo: &crate::matcher::book::ListedOrder,
+    cv: &CurveAskState,
+    shown: &[(Option<usize>, i64, Option<i64>)],
+    cx: &CandCtx,
+    fail: &mut dyn FnMut(&str),
+) {
+    let mut taken = 0i64;
+    for (k, (_, price, amount)) in shown.iter().enumerate() {
+        let amount = amount.unwrap_or(0);
+        let (o, st) = curve_after(lo, cv, taken);
+        let cands = candidates_of(&[&o], cx);
+        let Some(leg) = cands.first().and_then(|c| c.curve.as_ref()) else {
+            fail(&format!("curve level {k} ({amount} at {price}) is shown, but no fill can be built after {taken} taken"));
+            return;
+        };
+        let m = leg.rules.min_fill.max(1).min(st.amount_left);
+        if amount < m {
+            fail(&format!("curve level {k} shows {amount} units, the smallest fill then is {m}"));
+            return;
+        }
+        if let Some(mean) = crate::model::curve_fill_price(&st, m) {
+            if mean > *price {
+                fail(&format!("curve level {k} shows price {price}, its smallest fill then trades at {mean}"));
+                return;
+            }
+        }
+        taken += amount;
+    }
+    if taken < cv.amount_left {
+        let (o, _) = curve_after(lo, cv, taken);
+        if candidates_of(&[&o], cx).iter().any(|c| c.cap > 0) {
+            fail(&format!("curve shows {taken} of {} units, but a fill can still be built after them", cv.amount_left));
+        }
+    }
+}
+
 /// A state's debug form without its hashes and keys, to keep a failure readable.
 fn short(s: &str) -> String {
     let mut out = String::new();
@@ -527,11 +580,16 @@ fn the_book_rule_holds_for_every_kind_at_every_time_of_its_window() {
                 let terms = crate::model::terms_of(&d.state);
                 let shown = shown_levels(&d.state, udaa, terms.price.unwrap_or(0), d.state.amount_left(), &w, t);
                 let total: i64 = shown.iter().map(|l| l.2.unwrap_or(0)).sum();
-                if total > off.amount {
-                    failures.push(at(&format!("shows {total} base units, one fill takes {}", off.amount)));
-                }
                 let (ex, by) = (std::collections::BTreeSet::new(), std::collections::BTreeMap::new());
                 let cx = CandCtx { t, utc: 0, excluded: &ex, by_id: &by, unaccepted: &ex, pair_ticks: None };
+                if let AnyState::KobCurveAsk(cv) = &d.state {
+                    // a curve's depth is the sequence of its successive smallest fills: each shown level is a fill the
+                    // matcher builds once the levels before it are taken, at the shown price or better for the taker, and
+                    // when they are all taken the matcher builds none (nothing obtainable in sequence is missing)
+                    check_curve_sequence(&lo, cv, &shown, &cx, &mut |w| failures.push(at(w)));
+                } else if total > off.amount {
+                    failures.push(at(&format!("shows {total} base units, one fill takes {}", off.amount)));
+                }
                 let cands = candidates_of(&[&lo], &cx);
                 let ask_side = crate::model::side_of(&d.state) == 1;
                 if let (Some(first), Some(c0)) = (shown.first(), cands.first()) {

@@ -862,7 +862,8 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
         let sign = if side == 2 { -1.0 } else { 1.0 };
         // A row of a ranked range worse than the best so far is not decoded (R5C2-6).
         let enough = |key: f64| best.get().is_some_and(|(bp, bs)| reads::worse(key, sign * bp as f64 / bs as f64));
-        let (cut, n) = reads::for_each_resting(conn, ctx, token, side, false, enough, |levels, scale, _, _| {
+        // the best price of a curve is its first level: one level read of each (the counts come from the stored sequence)
+        let (cut, n) = reads::for_each_resting(conn, ctx, token, side, false, 1, enough, |levels, scale, _, _| {
             let s = scale.max(1);
             for (_, p, _) in levels {
                 let best_now = best.get();
@@ -899,6 +900,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
             token,
             side,
             false,
+            usize::MAX,
             |key| reads::worse(key, edge),
             |levels, scale, _, _| {
                 let s = scale.max(1);
