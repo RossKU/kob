@@ -190,6 +190,26 @@ fn ask_to_stop(child: &std::process::Child) -> bool {
     unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) != 0 }
 }
 
+/// How long the stop may take from the request to the exit. The runner drops a step that submits nothing at once
+/// (`matcher::run::STEP_GRACE` applies only to a submission in flight, and against a silent node there is none), and
+/// the follower and the API select on the stop. What may then take time is bounded by its own timeout: the database
+/// flush (3 s) and the runtime's wait for blocking calls (`shutdown_timeout`, 3 s). So 6 s, plus 2 s for a slow
+/// runner (the signal's delivery and the process exit). Measured on a Windows desktop: 2.07 s before the grace was
+/// limited to submissions (2.00 s of it the grace), the flush 8 ms.
+const STOP_BOUND: Duration = Duration::from_secs(8);
+
+/// How long the runner may take to end after the process logged the stop request: it waits for nothing then.
+const RUNNER_END_BOUND: Duration = Duration::from_secs(1);
+
+/// The time of day of a log line that contains `what` (`2026-11-24 19:47:05.296Z  INFO ...`), in ms.
+fn logged_at(log: &str, what: &str) -> Option<u64> {
+    let line = log.lines().find(|l| l.contains(what))?;
+    let t = line.split_whitespace().nth(1)?.trim_end_matches('Z');
+    let mut p = t.split(':');
+    let (h, m, s): (u64, u64, f64) = (p.next()?.parse().ok()?, p.next()?.parse().ok()?, p.next()?.parse().ok()?);
+    Some((h * 3_600 + m * 60) * 1_000 + (s * 1_000.0).round() as u64)
+}
+
 /// `kobd --executor` against a node that accepts the connection and never answers: a stop asked for
 /// while the first step waits for it ends the process cleanly within a few seconds.
 #[test]
@@ -265,20 +285,28 @@ fn the_binary_stops_within_seconds_when_the_node_is_silent() {
         if let Some(s) = child.try_wait().unwrap() {
             break s;
         }
-        if asked.elapsed() > Duration::from_secs(8) {
+        if asked.elapsed() > STOP_BOUND + Duration::from_secs(4) {
             let _ = child.kill();
             let _ = child.wait();
             panic!("the executor was still running {:?} after it was asked to stop", asked.elapsed());
         }
         std::thread::sleep(Duration::from_millis(50));
     };
+    let exited = asked.elapsed();
     let _ = reader.join();
     while let Ok(l) = rx.try_recv() {
         log.push_str(&l);
         log.push('\n');
     }
+    // where the time went, for a slow runner: the log lines carry their own times
+    eprintln!("the process exited {exited:?} after the stop was asked; its log:\n{log}");
     assert!(status.success(), "the stop is a clean exit, not a kill: {status:?}\n{log}");
     assert!(log.contains("shutting down"), "{log}");
     assert!(log.contains("database flushed"), "{log}");
-    assert!(asked.elapsed() < Duration::from_secs(6), "stopped after {:?}", asked.elapsed());
+    // The runner ends at once after the request (no wait for the silent node), by the process's own log times.
+    if let (Some(req), Some(end)) = (logged_at(&log, ": shutting down (press it again"), logged_at(&log, "INFO shutting down")) {
+        let took = Duration::from_millis(end.saturating_sub(req));
+        assert!(took < RUNNER_END_BOUND, "the runner ended {took:?} after the stop request; its log:\n{log}");
+    }
+    assert!(exited < STOP_BOUND, "stopped after {exited:?} (bound {STOP_BOUND:?}); its log:\n{log}");
 }

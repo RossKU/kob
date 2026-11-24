@@ -157,8 +157,25 @@ pub trait BookSource: Send {
     fn report_executor(&mut self, _health: crate::indexer::status::ExecutorHealth, _metrics: String) {}
 }
 
-/// How long the step in flight may go on once the runner was asked to stop ([`Runner::run`]).
+/// How long the step in flight may go on once the runner was asked to stop ([`Runner::run`]), while it submits a
+/// transaction. A step that submits nothing at that moment is dropped at once.
 pub const STEP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Counts a submission in flight ([`Runner::submitting`]) while it lives.
+struct Submitting(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Submitting {
+    fn up(n: &std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Submitting(n.clone())
+    }
+}
+
+impl Drop for Submitting {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 /// DAA scores that a quarantined order stays out of the book, one hour at 10 per second.
 ///
@@ -593,6 +610,8 @@ pub struct InFlightJob {
 pub struct Runner<N: NodeApi, S: BookSource> {
     /// The node the process talks to.
     pub node: N,
+    /// Submissions to the node in flight now: only while one is does a stop wait for the step ([`STEP_GRACE`]).
+    submitting: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Where the book comes from.
     pub source: S,
     /// The operator's key.
@@ -988,6 +1007,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             fee_rates,
             plan_base_rate,
             fee_board: None,
+            submitting: Default::default(),
             node,
             source,
             signer,
@@ -1275,6 +1295,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let margin = self.cfg.clock_skew_max_secs.saturating_add(self.clock_skew.unwrap_or(0).unsigned_abs());
             let clock = ResendClock { daa, utc: utc_now(), margin_secs: margin };
             for t in self.tracker.resend_after_reorg(&ev.rolled_back, &clock) {
+                let _sending = Submitting::up(&self.submitting);
                 let _ = self.node.submit(t.rpc_tx.clone()).await;
             }
         }
@@ -1500,10 +1521,12 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.source.watch(txid);
         // Write-ahead (`super::journal`). A kill between here and the node's answer leaves the
         // entry for the next start to settle.
+        let sending = Submitting::up(&self.submitting);
         if let Some(j) = self.journal.as_mut() {
             j.add(&t, None);
         }
         let outcome = self.tracker.submit(&self.node, t, daa).await;
+        drop(sending);
         match outcome {
             SubmitOutcome::Accepted | SubmitOutcome::AlreadyKnown => {
                 tracing::info!(txid = %kob_protocol::json::to_hex(&txid), kind = %kind, fee, fee_rate, "submitted");
@@ -1550,7 +1573,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         if !self.cfg.dry_run {
             let margin = self.cfg.clock_skew_max_secs.saturating_add(self.clock_skew.unwrap_or(0).unsigned_abs());
             let resend = ResendClock { daa, utc: utc_now(), margin_secs: margin };
-            for (id, outcome) in self.tracker.resubmit_unconfirmed(&self.node, &resend).await {
+            let sending = Submitting::up(&self.submitting);
+            let resent = self.tracker.resubmit_unconfirmed(&self.node, &resend).await;
+            drop(sending);
+            for (id, outcome) in resent {
                 tracing::info!(txid = %kob_protocol::json::to_hex(&id), ?outcome, "resent a submit that had no verdict");
                 match outcome {
                     SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput => rep.conflicts.push(id),
@@ -2215,9 +2241,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
 
     /// Runs until `shutdown` resolves.
     ///
-    /// A step in flight at that moment gets [`STEP_GRACE`] to end, for a transaction being
-    /// submitted, and is dropped after that. A request to a node that does not answer could
-    /// otherwise take its whole timeout.
+    /// A step in flight at that moment that is submitting a transaction gets [`STEP_GRACE`] to end, so that the node's
+    /// verdict is recorded, and is dropped after that; any other step is dropped at once. A request to a node that
+    /// does not answer could otherwise take its whole timeout. Dropping a submission is safe either way: it was
+    /// journaled before it was sent, and the next start settles it.
     pub async fn run(&mut self, shutdown: impl std::future::Future<Output = ()>) -> anyhow::Result<()> {
         tokio::pin!(shutdown);
         // The first status line comes after the first tick, then one every `status_every`.
@@ -2232,6 +2259,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         let mut skipped_before: BTreeSet<String> = BTreeSet::new();
         // The build, logged once. The status line does not repeat it.
         tracing::info!("{}", crate::version::build_line());
+        let submitting = self.submitting.clone();
         loop {
             let res = {
                 let step = self.step();
@@ -2239,7 +2267,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 tokio::select! {
                     r = &mut step => r,
                     _ = &mut shutdown => {
-                        let _ = tokio::time::timeout(STEP_GRACE, &mut step).await;
+                        // Only a submission in flight is waited for; a wait on a silent node ends now.
+                        if submitting.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                            let _ = tokio::time::timeout(STEP_GRACE, &mut step).await;
+                        }
                         return Ok(());
                     }
                 }
