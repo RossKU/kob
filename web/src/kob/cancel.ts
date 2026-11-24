@@ -95,6 +95,11 @@ export interface OrderSnapshot {
    */
   straysUnknown?: boolean;
   /**
+   * The stray list was read but cut at its page bound: the indexer can answer, so a sweep can be
+   * made first. Unset, an unknown list could not be asked at all (indexer down, standalone mode).
+   */
+  straysCut?: boolean;
+  /**
    * Foreign strays (docs/spec/matcher.md section 1.2). These are tokens of other covenant ids owned
    * by the order id, one group per token with the program the indexer proved their state under. The
    * maker's cancel and sweep return them to the maker, one output per token. After the order ends
@@ -701,7 +706,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
     return false;
   });
   if (snap.straysUnknown) {
-    issues.push(issue('cancel.strays-unknown', 'warning', 'the stray tokens of this order could not be read: any that exist are not swept by this cancel and are lost when it closes'));
+    issues.push(issue('cancel.strays-unknown', 'warning', 'the stray tokens of this order could not be read: any that exist are not swept by this cancel and are lost when it closes', { cut: snap.straysCut === true ? 1 : 0 }));
   }
   const kept: TokenUtxo[] = [];
   const groups: TokenGroup[] = [];

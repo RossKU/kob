@@ -218,6 +218,7 @@ export default {
   'orders.straysValueSweep.other': '{count} UTXOs were sent to this order: sweep them back (the order stays open) or cancel',
   'orders.sweep.action': 'Sweep strays',
   'orders.sweep.hint': 'Returns the stray tokens to your wallet; the order continues unchanged.',
+  'orders.strays.uncheckedOnClose': 'The tokens other people may have sent to this order could not be checked (the indexer cannot be read). Any there stay behind and are lost when it closes. Your own tokens and KAS come back.',
   'orders.strays.lostOnClose': 'This closes an order that owns {utxos} token UTXO(s) you cannot move (another token, or one whose state was never proven). They stay behind and cannot be recovered.',
   'orders.sweepFirst.title': 'Sweep the stray tokens first?',
   'orders.sweepFirst.body': 'Cancelling {orders} now abandons {strays} for good. A sweep returns strays while the order stays open; the cancel then takes the rest.',

@@ -11,7 +11,7 @@ import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import type { ActionRequest } from '../../kob/types';
 import { FakeChain, MAKER, TOKEN, goldenRequest, keyUtxo, orderViewOf, placeGolden, signAndValidate, snapshotOfRecovered, strayFor, testAddress, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, planSweepFor, snapshotFor, strandedCount, strayToTokenUtxo } from './actions';
+import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, planSweepFor, snapshotFor, strandedCount, straysUnchecked, strayToTokenUtxo } from './actions';
 import { buildEntries, describeEntry, type OrderEntry } from './orders-model';
 
 const kob = loadKobNode();
@@ -277,12 +277,34 @@ describe('strays a cancel would leave behind for good (R8F4-2)', () => {
   });
 });
 
+describe('with the indexer down, a maker gets an order back from its record and the node alone (R8B-M1)', () => {
+  const down = () => Promise.reject(new TypeError('fetch failed'));
+  for (const name of ['create.condAsk', 'create.condBid', 'create.ifdBid', 'create.ifdAsk', 'create.curve', 'pair.create.ask', 'pair.create.bid']) {
+    it(name + ': the cancel is built, and its confirmation says the strays could not be checked', async () => {
+      const a = place(name);
+      const { plan } = await planCancelFor(services({ chain: chainOf(a), indexer: { order: down, tokenUtxos: down } }), MAKER.pk, entryOf(a, false, true), null);
+      validate(plan);
+      expect(straysUnchecked(plan)).toBe(true);
+      expect(plan.issues.find((i) => i.code === 'cancel.strays-unknown')?.severity).toBe('warning');
+    });
+  }
+
+  it('a stray list the indexer answered but cut still stops the cancel (a sweep can come first)', async () => {
+    const a = place('create.ask');
+    const stray = strayFor(a.snap, 9n);
+    const cut = async () => Object.assign([{ ...tokenUtxoView(stray, 'stray'), owner: a.rec.covenantId }], { truncated: true as const });
+    const { plan } = await planCancelFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: cut } }), MAKER.pk, entryOf(a, false, true), []);
+    expect(plan.ok).toBe(false);
+    expect(straysUnchecked(plan)).toBe(false);
+  });
+});
+
 describe('a sweep never moves the custody of the order it keeps (R8FX-1)', () => {
   it('the indexer leaves the custody out, lists it as a stray and says side 2: the record path finds the custody, and the sweep moves only true strays', async () => {
     const a = place('create.ask');
     const real = a.snap.custody!;
     const stray = strayFor(a.snap, 4n, 92);
-    const evil = { ...orderViewOf(kob, { ...a.snap, custody: null, strays: [real, stray] }), side: 2 };
+    const evil = { ...orderViewOf(kob, { ...a.snap, custody: null, strays: [real, stray] }), side: 2 } as never;
     // the hostile per-owner list names the custody as a stray too
     const listed = [real, stray].map((u) => ({ ...tokenUtxoView(u, 'stray'), owner: a.rec.covenantId }));
     const s = services({ chain: withStrays(chainOf(a), [stray]), indexer: { order: async () => evil, tokenUtxos: async () => listed } });
@@ -296,7 +318,7 @@ describe('a sweep never moves the custody of the order it keeps (R8FX-1)', () =>
   it('without a record the snapshot has no custody and the sweep stops', async () => {
     const a = place('create.ask');
     const real = a.snap.custody!;
-    const evil = { ...orderViewOf(kob, { ...a.snap, custody: null, strays: [real] }), side: 2 };
+    const evil = { ...orderViewOf(kob, { ...a.snap, custody: null, strays: [real] }), side: 2 } as never;
     const { plan } = await planSweepFor(services({ chain: chainOf(a), indexer: { order: async () => evil } }), MAKER.pk, entryOf(a, true, false));
     expect(plan.ok).toBe(false);
     expect(plan.issues.map((i) => i.code)).toContain('cancel.custody-missing');

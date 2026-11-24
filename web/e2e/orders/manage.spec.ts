@@ -370,6 +370,37 @@ test.describe('recovery', () => {
     await expect(row.getByTestId('order-amount')).toContainText('2');
   });
 
+  // R8B-M1: the kinds the standalone book does not hold take the records-and-node path too, and the
+  // final confirmation says the strays (units others sent) could not be checked.
+  for (const kind of ['stop', 'curve'] as const) {
+    test(`with the indexer down, a ${kind} order is cancelled from its record and the node, the confirmation saying the strays could not be checked`, async ({ appPage: page, mock, wallet }) => {
+      await fund(mock);
+      await openMarket(page, mock);
+      if (kind === 'stop') {
+        await pickType(page, 'stopMarket', 'sell');
+        await fillFields(page, { amount: '2', stop: '0.023' });
+      } else {
+        await pickType(page, 'limit', 'sell');
+        await fillFields(page, { amount: '2', price: '0.03', 'ladder.on': true, 'ladder.levels': '3', 'ladder.pct': '10' });
+        await expect(page.getByTestId('order-ladder-as-curve')).toHaveAttribute('aria-checked', 'true');
+      }
+      const placed = await placeOrder(page, mock);
+      const id = placed.views[0].covenant_id;
+      await page.route('**/v1/**', (r) => r.abort());
+      await page.reload();
+      await connectWallet(page);
+      await gotoOrders(page);
+      await expect(page.getByTestId('status-dot')).toHaveAttribute('data-indexer-code', 'unreachable', { timeout: 30_000 });
+      const row = page.getByTestId(`order-row-${id}`);
+      await expect(row).toBeVisible();
+      await page.getByTestId(`order-cancel-${id}`).click();
+      await expect(page.getByTestId('confirm-order-notes')).toContainText('could not be checked');
+      const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
+      expect(cancel!.submission.closed.map((c) => c.covenantId)).toEqual([id]);
+      expect((await mock.order(id)).status).toBe('cancelled');
+    });
+  }
+
   test('with the indexer down, My orders is rebuilt from the placement records and the node, and the order can still be cancelled', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock);

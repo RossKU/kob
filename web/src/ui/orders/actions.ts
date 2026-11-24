@@ -77,7 +77,7 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
       // A pair order's covenant id may also own strays of its quote token B, with its own family
       // and extension commitment.
       const b = secondTokenOf(resolved.order.state);
-      const { views, unknown } = await straysOfOrder(s, entry.id, strays);
+      const { views, unknown, cut } = await straysOfOrder(s, entry.id, strays);
       // Strays of any other token are foreign. They are kept apart with the program their state was
       // proven under, or reported as unproven.
       const split = splitStrayViews(views, resolved.order.state, curveFactsOf(resolved.order.state)?.unbound ? (resolved.custody?.covenantId ?? null) : null);
@@ -87,7 +87,7 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
       const snap: OrderSnapshot = { ...snap0, ...(split.foreign.length ? { foreign: split.foreign } : {}), ...(split.unproven.length ? { foreignUnproven: split.unproven } : {}) };
       // A stray whose state cannot be rebuilt, because the extension commitment is unknown, is not
       // swept either. Say so rather than lose it silently.
-      return await onNode(unknown || mine.length < mapped.length ? { ...snap, straysUnknown: true } : snap);
+      return await onNode(unknown || mine.length < mapped.length ? { ...snap, straysUnknown: true, ...(cut ? { straysCut: true } : {}) } : snap);
     }
     if (resolved.status === 'old-template') throw new SnapshotError('old-template', `order ${entry.id} was placed with an order template this build does not pin`);
     if (resolved.status === 'unknown') throw new SnapshotError('state-unknown', `order ${entry.id}: its current state could not be found on the node`);
@@ -105,18 +105,21 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
  * neither source could be read, and `strays === null` is a failed list fetch. A cancel may then
  * leave strays behind, so the plan carries a warning (`cancel.strays-unknown`) for the record.
  */
-async function straysOfOrder(s: Services, id: Hex, strays: readonly StrayView[] | null): Promise<{ views: TokenUtxoView[]; unknown: boolean }> {
+async function straysOfOrder(s: Services, id: Hex, strays: readonly StrayView[] | null): Promise<{ views: TokenUtxoView[]; unknown: boolean; cut: boolean }> {
   const fromList = (strays ?? []).filter((x) => x.owner === id && !x.spent);
   if (s.indexer && typeof s.indexer.tokenUtxos === 'function') {
     try {
       const per = await s.indexer.tokenUtxos({ owner: id, limit: 200 });
-      // A list cut at its page bound may miss strays, so the cancel warns as for an unread list.
-      if (per) return { views: per.filter((u) => u.role === 'stray' && !u.spent && u.owner === id), unknown: per.truncated === true };
+      // A list cut at its page bound may miss strays. The indexer answers, so a sweep can be made
+      // first: an ending cancel stops on it (`stopOnUnreadStrays`).
+      if (per) return { views: per.filter((u) => u.role === 'stray' && !u.spent && u.owner === id), unknown: per.truncated === true, cut: per.truncated === true };
     } catch {
-      return { views: fromList, unknown: true };
+      // Not asked: the indexer is down or the page is in standalone mode. The cancel goes on, and
+      // its confirmation says what could not be checked (R8B-M1).
+      return { views: fromList, unknown: true, cut: false };
     }
   }
-  return { views: fromList, unknown: strays === null };
+  return { views: fromList, unknown: strays === null, cut: false };
 }
 
 /**
@@ -174,12 +177,15 @@ export const strandedCount = (plans: readonly CancelPlan[]): number =>
   plans.flatMap((p) => (p.ok ? p.issues : [])).reduce((a, i) => a + (i.code === 'cancel.strays-abandoned' ? Number(i.params?.count ?? 0) : i.code === 'cancel.stray-other-extension' ? 1 : 0), 0);
 
 /**
- * A cancel, refund or replacement that ends an order while the order's stray list could not be
- * read stops: whatever the order owns would be lost with it, and nothing says what (R8F4-2). An
- * amend in place keeps the order, and its strays with it.
+ * A cancel, refund or replacement that ends an order while the indexer answered with a stray list
+ * cut at its page bound stops: a sweep in place can be made first (R8F4-2). An amend in place keeps
+ * the order, and its strays with it. A list that could not be asked at all (the indexer down, the
+ * page in standalone mode) does not stop it: the maker must always be able to get the order and
+ * its custody back with only the node and the records, and strays are what others sent, so the
+ * confirmation states that they could not be checked instead (`straysUnchecked`, R8B-M1).
  */
 export function stopOnUnreadStrays(plan: CancelPlan): CancelPlan {
-  if (!plan.ok || !plan.issues.some((i) => i.code === 'cancel.strays-unknown') || plan.issues.some((i) => i.code.startsWith('cancel.amend-in-place'))) return plan;
+  if (!plan.ok || !plan.issues.some((i) => i.code === 'cancel.strays-unknown' && i.params?.cut === 1) || plan.issues.some((i) => i.code.startsWith('cancel.amend-in-place'))) return plan;
   return { ...plan, ok: false, request: null, built: null, issues: plan.issues.map((i) => (i.code === 'cancel.strays-unknown' ? { ...i, severity: 'error' as const } : i)) };
 }
 
@@ -188,6 +194,9 @@ export function stopOnUnreadStrays(plan: CancelPlan): CancelPlan {
  * proven state or under a program this app cannot spend): the token UTXOs that are lost for good
  * when the order closes. The final confirmation states them before anything is signed (R8F4-2).
  */
+/** The stray list of the order a plan ends could not be asked: the confirmation says so (R8B-M1). */
+export const straysUnchecked = (p: CancelPlan): boolean => p.ok && p.issues.some((i) => i.code === 'cancel.strays-unknown' && i.params?.cut !== 1) && !p.issues.some((i) => i.code.startsWith('cancel.amend-in-place'));
+
 export const lostStrays = (p: CancelPlan): number => (p.ok ? p.issues.filter((i) => i.code === 'cancel.stray-other-token').length : 0);
 
 /**
