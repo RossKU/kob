@@ -1654,6 +1654,38 @@ test('a payment that could pay for more than 200 fill amounts is skipped as a hi
   assert.deepEqual(bot.payHints(id), [50_000_000 - 1_500_007]);
 });
 
+// R6T-3: without --force, mm-bot drop takes an ask only on the node's word that it ended, or past
+// the end rule (2 h past its expiry).
+test('drop refuses, without --force, an ask the node cannot find when no fill was reported (R6T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const a = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    // A fill of an odd amount the indexer never reports; it hides the ask too.
+    c.orders[a].amount -= 7;
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a]);
+    await bot.cycle();
+    assert.equal(bot.state.orders[a].unconfirmed, true);
+    const r = await bot.operatorDrop(a);
+    assert.equal(r.ok, false, r.message);
+    assert.equal(r.node.status, 'gone');
+    assert.match(r.message, /the indexer reported no fill of it and no cancel the bot sent shows on the node.*the most suspicious case.*--force/);
+    assert.ok(bot.state.orders[a], 'kept');
+    // Past the end rule (2 h after its expiry) it drops without --force.
+    bot.state.orders[a].expiresAt = Date.now() - PROVEN_KEEP_AFTER_EXPIRY_MS - 1000;
+    const late = await bot.operatorDrop(a);
+    assert.equal(late.ok, true, late.message);
+    assert.equal(bot.state.orders[a], undefined);
+  } finally {
+    reset();
+  }
+});
+
 // R6T-6: in a STOP or IDLE pull the pull's own cancels go out before the pass over the proven asks.
 test('a STOP sends the pull\'s cancels before the pass over the proven asks (R6T-6)', { timeout: 180_000 }, async () => {
   reset();

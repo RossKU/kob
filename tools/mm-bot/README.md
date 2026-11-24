@@ -110,9 +110,12 @@ On testnet-10 it is a warning.
   first, from the bot's record with every amount it knows (and `n`), prints the answer, and refuses while the node
   shows the order live or cannot be asked. The node finds a partly filled ask only at an amount it is told, so check
   the amount left first (`mm-bot unresolved` writes the listed records to `<dataDir>/unresolved-orders.json` for
-  `kob recover --from`). Without `--force` it also refuses when the lookup proves nothing (the order's template is not
-  yet proven on the node) or when the indexer reported fills of the order since its last placement or amend (it may be
-  live at an amount the search did not reach). A dropped order that is still live stays fillable, and the bot no
+  `kob recover --from`). Without `--force` it drops an ask only when the node showed that it ended (a cancel the bot
+  sent shows on the node) or the record is past the end rule of a proven ask (2 h past its expiry); otherwise it
+  refuses and says why: the lookup proves nothing (the order's template is not yet proven on the node), the indexer
+  reported fills of the order since its last placement or amend, or it reported none (the most suspicious case: an ask
+  leaves its script only by a fill, a cancel or a refund, so the indexer may have withheld a fill); in each case it may
+  be live at an amount the search did not reach. A dropped order that is still live stays fillable, and the bot no
   longer cancels it (no pull, IDLE or STOP reaches it): every drop is appended to `<dataDir>/dropped-orders.json`
   (the order's record in the shape `kob recover --from` reads, with its amounts, fills, last transaction, the time and
   why), so `kob recover --from <dataDir>/dropped-orders.json --amount-left <id>=<n> [--cancel]` can still find and cancel it. The limits stay as they are, and bounded: a proof needs only the payments after the ask's

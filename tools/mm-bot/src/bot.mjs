@@ -1180,10 +1180,16 @@ export class Bot {
     if (r.status === 'unknown') return { ok: false, node: r, message: `the node could not be asked about ${short(id)} (${r.why}): not dropped` };
     const what = r.status === 'foreign' ? 'names another maker' : `is not found on the node at the amounts ${hints.join(', ') || '(a bid: its script)'}${isAsk(s) ? ' (the search is not exhaustive)' : ''}`;
     const fills = (s.fills ?? []).filter((f) => f.at == null || s.ownAt == null || f.at > s.ownAt);
-    const doubt = r.status !== 'gone' ? null
-      : !r.verified ? `it was looked up under an order template not yet proven on the node (no order of its kind found live under it), so not finding it proves nothing`
-        : isAsk(s) && fills.length ? `the indexer reported ${fills.length} fill(s) of it since its last placement or amend (${fills.reduce((a, f) => a + f.amount, 0)} base units in all): it may be live at an amount left the search did not reach`
-          : null;
+    // Without --force an ask is dropped only when the node showed that it ended (its cancel
+    // confirmed) or its record is past the end rule of a proven ask (2 h past its expiry) (R6T-3).
+    const expiry = s.expiresAt ?? (s.proven ? s.proven.at + this.life().lifeMs : null);
+    const settled = (r.status === 'gone' && r.verified && (r.spent || this.cancelConfirmed(s))) || (expiry != null && Date.now() >= expiry + PROVEN_KEEP_AFTER_EXPIRY_MS);
+    const doubt = settled ? null
+      : r.status === 'foreign' ? (isAsk(s) ? 'the node names another maker at its script, which is no proof that the ask ended' : null)
+        : !r.verified ? `it was looked up under an order template not yet proven on the node (no order of its kind found live under it), so not finding it proves nothing`
+          : isAsk(s) && fills.length ? `the indexer reported ${fills.length} fill(s) of it since its last placement or amend (${fills.reduce((a, f) => a + f.amount, 0)} base units in all): it may be live at an amount left the search did not reach`
+            : isAsk(s) ? 'the indexer reported no fill of it and no cancel the bot sent shows on the node, yet an ask leaves its script only by a fill, a cancel or a refund: the indexer may have withheld a fill, and the ask may be live at an amount left the search did not reach (the most suspicious case)'
+              : null;
     const warn = 'A dropped order that is still live stays fillable, and the bot no longer cancels it (not by a pull, IDLE or STOP).';
     if (doubt && !force) {
       return { ok: false, node: r, message: `${short(id)} ${what}, but ${doubt}: not dropped. Check it first (kob recover --from ${this.p.unresolved} --amount-left ${id}=<amount left>, after mm-bot unresolved), then drop it with --force. ${warn}` };
