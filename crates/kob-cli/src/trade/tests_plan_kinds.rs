@@ -1275,3 +1275,35 @@ fn a_pair_market_buy_always_needs_the_acknowledgement() {
     let p = plan_order(&e, &buy);
     assert!(p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED_ACKNOWLEDGED"), "{:?}", p.issues);
 }
+
+/// R8F3c-3, R8F3c-7: an OCO plan shows its stop and the worst price its stop fills at, and promises the proceeds at the
+/// worst of its legs, not at the take-profit. An if-done plan shows its committed exit: legs, minimum fill and tip, with
+/// the merge cost a repeat adds to it.
+#[test]
+fn oco_and_if_done_plans_show_every_leg_and_the_worst_case() {
+    let m = market(TemplateId::Kcc20Ref);
+    let e = env(&m);
+    let p = valid(
+        &e,
+        Intent::Cond(CondIntent {
+            stop: Some(200_000_000),
+            take_profit: Some(300_000_000),
+            ..cond(CondKind::Oco, Side::Sell, 10_000)
+        }),
+    );
+    let s = cask(&p.states[0]);
+    let d = p.disclosure.as_ref().unwrap();
+    assert!(s.stop_floor() < s.stop_price && s.stop_price < s.tp_price);
+    assert_eq!(d.all_in_total, s.proceeds(10_000, s.stop_floor()), "at least: the stop's band end, the worst leg");
+    let lines = super::place::plan_lines(&p, &m, None);
+    let has = |pre: &str| lines.iter().any(|l| l.starts_with(pre));
+    assert!(has("take-profit price: ") && has("stop price: ") && has("worst price of any leg: "), "{lines:?}");
+    assert!(lines.iter().any(|l| l.starts_with("stop price: ") && l.contains("sells down to")), "{lines:?}");
+    assert!(!has("limit / worst price"), "{lines:?}");
+    let p = valid(&e, Intent::Ifd(IfdIntent { exit_tip: 25_000, ..rep(Side::Buy, 240_000_000, 300_000_000, Some(2)) }));
+    let lines = super::place::plan_lines(&p, &m, None);
+    for want in ["committed exit: sells", "  exit take-profit price: ", "  exit minimum fill: ", "pays the merge of each repeat"] {
+        assert!(lines.iter().any(|l| l.contains(want)), "{want}: {lines:?}");
+    }
+    assert_eq!(p.disclosure.as_ref().unwrap().merge_tip, merge_tip_rate(MERGE_COST_BUY_FIRST, 1000, 2_500));
+}

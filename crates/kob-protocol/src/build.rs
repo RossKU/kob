@@ -457,7 +457,7 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
             if e.scale != i.scale {
                 return invalid("if-done exit must quote at the entry's scale");
             }
-            if i.rpt_amount > 0 && (e.tp_price <= 0 || e.tp_price - e.tip <= i.price + i.tip) {
+            if i.rpt_amount > 0 && (e.tp_price <= 0 || (e.tp_price as i128 - e.tip as i128) <= (i.price as i128 + i.tip as i128)) {
                 return invalid("a repeating buy-first entry needs a take-profit that beats the entry (all-in)");
             }
         }
@@ -491,13 +491,13 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
             // The exit holds the proceeds plus the prefund of its amount, which must cover its
             // worst leg. The rates are per whole token. The exit's spend is rounded down and the
             // entry's proceeds and prefund up, so the rates bound every fill.
-            if i.proceeds_rate() + i.prefund < e.worst() + e.tip {
+            if (i.proceeds_rate() as i128 + i.prefund as i128) < (e.worst() as i128 + e.tip as i128) {
                 return invalid("prefund does not cover the exit's worst buy-back (its stop band or limit)");
             }
             if i.exit_carrier < e.delivery_carrier {
                 return invalid("exitCarrier must cover the exit's deliveryCarrier");
             }
-            if i.rpt_amount > 0 && (e.tp_price <= 0 || i.proceeds_rate() <= e.tp_price + e.tip) {
+            if i.rpt_amount > 0 && (e.tp_price <= 0 || i.proceeds_rate() as i128 <= e.tp_price as i128 + e.tip as i128) {
                 return invalid("a repeating sell-first entry needs a take-profit that beats the entry (all-in)");
             }
         }
@@ -972,33 +972,113 @@ fn holder_change(
     Ok(TokenState::user(of, amount, owner, ext).with_borrow(b))
 }
 
-/// The custody of an order: owned by the order's covenant id and holding exactly `amount`.
+/// The custody of an order: exactly the token state the order pins for it.
 ///
-/// Anything else owned by the id is a stray and never stands in for the custody.
-fn check_custody(c: &TokenUtxo, order_cov: Option<[u8; 32]>, token: Token, amount: i64) -> Result<()> {
+/// That is a UTXO of `token` owned by the order's covenant id, holding exactly `amount`, with the
+/// extension commitment `ext` the order pins (KCC-20; KRON has none) and no borrow setting
+/// ([`TokenState::custody`]). Anything else owned by the id is a stray and never stands in for the
+/// custody: a cancel that spent a look-alike of another class would end the covenant and strand
+/// the real custody for ever. Every builder that spends a custody or a bought-custody checks it
+/// here, so none can be handed a decoy.
+pub(crate) fn check_custody(c: &TokenUtxo, order_cov: Option<[u8; 32]>, token: Token, amount: i64, ext: [u8; 32]) -> Result<()> {
     check_token_input(c, token)?;
     // A KRON token UTXO holds at most 10^9 base units, since both pinned KRON programs refuse more,
     // so such a custody cannot exist.
     kron_output(token.1.family(), c.state.amount(), "a KRON custody")?;
-    if Some(c.state.owner()) != order_cov || !c.state.is_covenant_owned() {
+    let Some(cov) = order_cov.filter(|cov| c.state.owner() == *cov && c.state.is_covenant_owned()) else {
         return invalid("custody token is not owned by its order");
-    }
+    };
     if c.state.amount() != amount {
         return invalid(format!(
             "custody holds {} base units, the order's amountLeft needs exactly {amount} (a stray is never custody)",
             c.state.amount()
         ));
     }
+    if token.1.family() == Family::Kcc20 && c.state.extension() != ext {
+        return invalid("the custody carries another extension commitment than the order pins");
+    }
+    if c.state != TokenState::custody(token.1.family(), amount, cov, ext) {
+        return invalid("the custody's state is not exactly the one its order pins (no borrow setting, a zero guard)");
+    }
     Ok(())
 }
 
-/// An order's custody carries the extension commitment the order pins.
+/// The extension commitment an order pins for each custody (token, exact amount) it holds.
 ///
-/// This applies to KCC-20, since a KRON token has none. Units of the token's covenant id with
-/// another commitment are another token, and the order's covenant refuses them.
-pub(crate) fn check_custody_ext(c: &TokenUtxo, ext: [u8; 32]) -> Result<()> {
-    if matches!(c.state, TokenState::Kcc20(_)) && c.state.extension() != ext {
-        return invalid("the custody carries another extension commitment than the order pins");
+/// Every token-holding kind pins one ([`AnyState::custody_ext`]); a state that cannot name it
+/// (a sell-first entry whose committed exit does not decode) is refused rather than guessed.
+fn pinned_custodies(s: &AnyState, custodies: Vec<(Token, i64)>) -> Result<Vec<(Token, i64, [u8; 32])>> {
+    custodies
+        .into_iter()
+        .map(|(t, amount)| {
+            let e = s.custody_ext(t.0).ok_or_else(|| {
+                Error::Invalid(format!("the order's state pins no extension commitment for its {} custody", t.1.name()))
+            })?;
+            Ok((t, amount, e))
+        })
+        .collect()
+}
+
+/// A token UTXO an order's state holds: its token and its exact state (owned by the order's
+/// covenant id, the amount and the extension commitment the state pins, no borrow setting).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldCustody {
+    pub token: TokenRef,
+    pub state: TokenState,
+    /// A mode-1 order's bought-custody, not a custody it sells from.
+    pub bought: bool,
+}
+
+/// Every token UTXO the state of the order `order_cov` holds: one custody per token it holds,
+/// then a mode-1 bought-custody.
+///
+/// A spend that ends the order (a cancel, a refund) must spend each of them exactly, since nothing
+/// can spend a token owned by a covenant id that no longer exists (`KCC20.sil`, the
+/// `OWNER_COVENANT_ID` branch). The builders hold their inputs to this list; a decoder checks a
+/// spend against it ([`check_releases_held`]). An unbound curve names its token from its custody,
+/// so pass the bound state.
+pub fn held_custodies(s: &AnyState, order_cov: [u8; 32]) -> Result<Vec<HeldCustody>> {
+    let (_, custodies, _) = own_tokens(s)?;
+    let mut v: Vec<HeldCustody> = custodies
+        .into_iter()
+        .map(|(t, amount, ext)| HeldCustody {
+            token: TokenRef { covenant_id: t.0, program: t.1 },
+            state: TokenState::custody(t.1.family(), amount, order_cov, ext),
+            bought: false,
+        })
+        .collect();
+    if let Some(b) = bought_of(s)? {
+        v.push(HeldCustody {
+            token: TokenRef { covenant_id: b.token.0, program: b.token.1 },
+            state: b.state(order_cov),
+            bought: true,
+        });
+    }
+    Ok(v)
+}
+
+/// Checks that the token inputs of a spend that ends the order `order_cov` release everything its
+/// state holds ([`held_custodies`]), each by its whole state: token, owner, amount and class.
+pub fn check_releases_held(s: &AnyState, order_cov: [u8; 32], inputs: &[TokenUtxo]) -> Result<()> {
+    let mut used = vec![false; inputs.len()];
+    for h in held_custodies(s, order_cov)? {
+        let hit = inputs
+            .iter()
+            .enumerate()
+            .find(|(k, t)| !used[*k] && t.utxo.covenant_id == Some(h.token.covenant_id) && t.state == h.state);
+        match hit {
+            Some((k, _)) => used[k] = true,
+            None => {
+                return invalid(format!(
+                    "the spend ends the order without its {} of exactly {} base units of {} (extension commitment {}): nothing could ever spend it",
+                    if h.bought { "bought-custody" } else { "custody" },
+                    h.state.amount(),
+                    crate::json::to_hex(&h.token.covenant_id),
+                    crate::json::to_hex(&h.state.extension())
+                ))
+            }
+        }
     }
     Ok(())
 }
@@ -1215,17 +1295,17 @@ fn build_create_pair(request: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx
 /// An order's own tokens, its custodies (token, exact amount) and the program suffix of its roles.
 ///
 /// A pair order owns A and B, and a KAS kind its token. See [`own_tokens`].
-type OwnTokens = (Vec<Token>, Vec<(Token, i64)>, String);
+type OwnTokens = (Vec<Token>, Vec<(Token, i64, [u8; 32])>, String);
 
 fn own_tokens(s: &AnyState) -> Result<OwnTokens> {
     if s.is_pair() {
         let (a, b) = pair_programs(s)?;
         let custodies = s.custodies().into_iter().map(|(c, amount)| (if c == a.0 { a } else { b }, amount)).collect();
-        return Ok((vec![a, b], custodies, pair_suffix(a, b)));
+        return Ok((vec![a, b], pinned_custodies(s, custodies)?, pair_suffix(a, b)));
     }
     let token = order_token(s)?;
     let custodies = s.custody_amount().filter(|a| *a > 0).map(|a| vec![(token, a)]).unwrap_or_default();
-    Ok((vec![token], custodies, format!("@{}", token.1.name())))
+    Ok((vec![token], pinned_custodies(s, custodies)?, format!("@{}", token.1.name())))
 }
 
 /// Builds a [`CancelOrder`], the maker's cancel with an optional replacement.
@@ -1274,7 +1354,12 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
         records: &r.records,
         fee: &r.fee,
     };
-    cancel_with(subject, &order.utxo, parts, budgets)
+    let built = cancel_with(subject, &order.utxo, parts, budgets)?;
+    // the one rule the decoders check too: the cancel releases all the state holds, each exactly
+    let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+    let taken: Vec<TokenUtxo> = r.custody.iter().chain(r.prefund.iter()).chain(r.strays.iter()).cloned().collect();
+    check_releases_held(&named, order_cov, &taken)?;
+    Ok(built)
 }
 
 /// The signing plan of the maker's cancel of an order.
@@ -1313,11 +1398,11 @@ struct CancelParts<'a> {
 /// What the maker's cancel of one order needs.
 ///
 /// That is its maker, its own tokens (A and B for a pair order), the custodies it holds (token,
-/// exact amount), and the order input's signing plan and budget role.
+/// exact amount, pinned extension commitment), and the order input's signing plan and budget role.
 struct CancelSubject {
     maker: [u8; 32],
     tokens: Vec<Token>,
-    custodies: Vec<(Token, i64)>,
+    custodies: Vec<(Token, i64, [u8; 32])>,
     plan: SigPlan,
     role: String,
 }
@@ -1355,8 +1440,8 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, request: CancelParts<'_>, bu
     if given.len() < custodies.len() {
         return invalid("token-holding order: custody token UTXO required");
     }
-    for (c, (tok, amount)) in given.into_iter().zip(&custodies) {
-        check_custody(c, Some(order_cov), *tok, *amount)?;
+    for (c, (tok, amount, ext)) in given.into_iter().zip(&custodies) {
+        check_custody(c, Some(order_cov), *tok, *amount, *ext)?;
         put(&mut groups, c, "custody")?;
         draft.add_token_input(c, *tok, Witness::CovenantId)?;
     }
@@ -1410,12 +1495,16 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, request: CancelParts<'_>, bu
         draft.absorber = absorber_for(&rep.order, rep.value, outs[0]);
         let default_carrier = groups.iter().find_map(|g| g.3.first().copied()).unwrap_or(0);
         let mut parts = vec![];
-        for (tok, amount) in rep_custodies {
+        for (tok, amount, pinned) in rep_custodies {
             let g = groups.iter_mut().find(|g| g.0 == tok).expect("same tokens");
             if amount > g.1 {
                 return invalid(format!("the replacement needs {amount} base units; custody, strays and top-up hold {}", g.1));
             }
             let e = g.2.ok_or_else(|| Error::Invalid("the replacement needs tokens (custody or top-up)".into()))?;
+            // its covenant refuses a custody of another class, so such a replacement could never fill
+            if tok.1.family() == Family::Kcc20 && pinned != e {
+                return invalid("the replacement pins another extension commitment than the tokens it takes carry");
+            }
             let carrier = kas_out(
                 rep.token_carrier.unwrap_or(g.3.first().copied().unwrap_or(default_carrier)) as i64,
                 "replacement tokenCarrier",
@@ -1490,6 +1579,8 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             if c.utxo.covenant_id != Some(next.token_cov_id) {
                 return invalid("the amend of an unbound curve must name the token of its custody");
             }
+            // the amended curve pins its custody's class, else its covenant refuses every fill of it
+            check_custody(c, Some(cov), order_token(&r.amended)?, prev.amount_left, next.extension_commitment)?;
         }
     }
     let token = order_token(&order.state)?;
@@ -1565,10 +1656,7 @@ pub fn build_claim_order(r: &ClaimOrder, budgets: BudgetFn) -> Result<BuiltTx> {
         return invalid(format!("{} takes {max_in} token inputs: the bought-custody and {} wallet UTXOs", t.1.name(), max_in - 1));
     }
     let c = &r.bought_custody;
-    check_custody(c, Some(order_cov), t, b.amount)?;
-    if !b.is(c, order_cov) {
-        return invalid("bought-custody: its state is not exactly the order's (no borrowing, a zero guard, the order's commitment)");
-    }
+    check_custody(c, Some(order_cov), t, b.amount, b.ext).map_err(|e| Error::Invalid(format!("bought-custody: {e}")))?;
     let (_, _, suffix) = own_tokens(s)?;
     let mut draft = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(maker)))?;
     let id = s.template_id();
@@ -1611,7 +1699,7 @@ pub fn build_claim_order(r: &ClaimOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     if let Some(p) = &r.place {
         check_new_order(&p.order)?;
         let (_, custodies, _) = own_tokens(&p.order)?;
-        if p.order.maker() != maker || custodies.is_empty() || custodies.iter().any(|(x, _)| *x != t) {
+        if p.order.maker() != maker || custodies.is_empty() || custodies.iter().any(|(x, _, _)| *x != t) {
             return invalid("the placed order is the maker's and holds only the claimed token in custody");
         }
         if pinned_ext(&p.order, t.0).is_some_and(|e| e != b.ext) {
@@ -1624,7 +1712,7 @@ pub fn build_claim_order(r: &ClaimOrder, budgets: BudgetFn) -> Result<BuiltTx> {
         let (outs, new_id) = draft.add_genesis(auth, vec![(p.value, p.order.spk())], Some(p.order.template_id()))?;
         let carrier = kas_out(p.token_carrier.unwrap_or(c.utxo.amount) as i64, "the placed custody's carrier")?;
         let mut parts = vec![];
-        for (_, amount) in custodies {
+        for (_, amount, _) in custodies {
             if amount > left {
                 return invalid(format!("the placed order needs {amount} base units; the claim holds {left}"));
             }
@@ -1728,8 +1816,8 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
         if given.len() < custodies.len() {
             return invalid("token-holding order: custody token UTXO required");
         }
-        for (c, (tok, amount)) in given.iter().zip(&custodies) {
-            check_custody(c, Some(cov), *tok, *amount)?;
+        for (c, (tok, amount, ext)) in given.iter().zip(&custodies) {
+            check_custody(c, Some(cov), *tok, *amount, *ext)?;
         }
         for t in given.into_iter().chain(&it.strays) {
             let tok = tokens.iter().copied().find(|x| t.utxo.covenant_id == Some(x.0)).unwrap_or(tokens[0]);
@@ -1980,8 +2068,7 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
             let c = r.bought_custody.as_ref().ok_or_else(|| {
                 Error::Invalid("a mode-1 bid holding bought tokens: its bought-custody (boughtCustody) is required".into())
             })?;
-            check_custody(c, Some(order_cov), token, b)?;
-            check_custody_ext(c, order.state.extension_commitment().expect("a KCC-20 bid"))?;
+            check_custody(c, Some(order_cov), token, b, order.state.extension_commitment().expect("a KCC-20 bid"))?;
             let at = draft.add_token_input(c, token, Witness::CovenantId)?;
             debug_assert_eq!(at, 1);
             for f in &r.funding {
@@ -1994,10 +2081,9 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
         }
         (Some(amount), None) if amount > 0 => {
             let c = r.custody.as_ref().ok_or_else(|| Error::Invalid("token-holding order: custody token UTXO required".into()))?;
-            check_custody(c, Some(order_cov), token, amount)?;
-            if let Some(e) = pinned_ext(&order.state, token.0) {
-                check_custody_ext(c, e)?;
-            }
+            let ext = pinned_ext(&order.state, token.0)
+                .ok_or_else(|| Error::Invalid("the order's state pins no extension commitment for its custody".into()))?;
+            check_custody(c, Some(order_cov), token, amount, ext)?;
             draft.add_token_input(c, token, Witness::CovenantId)?;
             for f in &r.funding {
                 draft.add_p2pk(f);
@@ -2065,11 +2151,8 @@ fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx
     if matches!(&order.state, AnyState::KobPair(_) | AnyState::KobCondPair(_)) && custodies.is_empty() {
         return invalid("a pair order without a custody is cancel-only");
     }
-    for (c, (tok, amount)) in given.iter().zip(&custodies) {
-        check_custody(c, Some(order_cov), *tok, *amount)?;
-        if let Some(e) = pinned_ext(&order.state, tok.0) {
-            check_custody_ext(c, e)?;
-        }
+    for (c, (tok, amount, ext)) in given.iter().zip(&custodies) {
+        check_custody(c, Some(order_cov), *tok, *amount, *ext)?;
         draft.add_token_input(c, *tok, Witness::CovenantId)?;
     }
     for f in &request.funding {
@@ -2081,12 +2164,12 @@ fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx
     match &order.state {
         AnyState::KobIfdPair(_) => {
             draft.add_output(pos(keep as i64, "refund payout")?, p2pk_spk(&maker), None);
-            for (c, (tok, _)) in given.iter().zip(&custodies) {
+            for (c, (tok, _, _)) in given.iter().zip(&custodies) {
                 draft.add_token_output(*tok, c.state.with_user_owner(maker), c.utxo.amount)?;
             }
         }
         _ => {
-            let (c, (tok, _)) = (given[0], custodies[0]);
+            let (c, (tok, _, _)) = (given[0], custodies[0]);
             draft.add_token_output(tok, c.state.with_user_owner(maker), keep + c.utxo.amount)?;
             if let Some((t, b)) = release {
                 let (value, state) = pair::refund_release(&order.state, b);
@@ -3161,8 +3244,7 @@ impl LegCtx<'_> {
 fn plan_ask(cx: &LegCtx, order: &OrderUtxo<AskState>, custody: &TokenUtxo, t: Option<i64>, exts: &mut Exts) -> Result<LegPlan> {
     let LegCtx { lay, index: i, token, family, amount: n, lock, utxo, utxo_daa, value: order_value, cov_id, .. } = *cx;
     let state = &order.state;
-    check_custody(custody, Some(cov_id), token, state.custody_amount())?;
-    check_custody_ext(custody, state.extension_commitment)?;
+    check_custody(custody, Some(cov_id), token, state.custody_amount(), state.extension_commitment)?;
     exts.merge(token.0, custody.state.extension())?;
     if lock < state.active_from {
         return invalid(format!("ask at leg {i} is not active before DAA {}", state.active_from));
@@ -3235,8 +3317,7 @@ pub(crate) fn curve_bound(s: &CurveAskState, custody: &TokenUtxo) -> CurveAskSta
 fn plan_curve_ask(cx: &LegCtx, order: &OrderUtxo<CurveAskState>, custody: &TokenUtxo, exts: &mut Exts) -> Result<LegPlan> {
     let LegCtx { lay, index: i, token, amount: n, lock, utxo, value: order_value, cov_id, .. } = *cx;
     let state = &order.state;
-    check_custody(custody, Some(cov_id), token, state.amount_left)?;
-    check_custody_ext(custody, state.extension_commitment)?;
+    check_custody(custody, Some(cov_id), token, state.amount_left, state.extension_commitment)?;
     exts.merge(token.0, custody.state.extension())?;
     if state.is_unbound() && custody.utxo.transaction_id != utxo.transaction_id {
         return invalid("an unbound curve takes only a custody created in the order's own transaction (its token's genesis)");
@@ -3569,8 +3650,7 @@ fn delivery_plan(
             if d.bought > 0 {
                 let c =
                     given.and_then(|g| g.custody.as_ref()).ok_or_else(|| Error::Invalid("the bought-custody is required".into()))?;
-                check_custody(c, Some(order_cov), token, d.bought)?;
-                check_custody_ext(c, ext)?;
+                check_custody(c, Some(order_cov), token, d.bought, ext)?;
                 p.have_kas = c.utxo.amount as i64;
                 p.on_delivery = 0;
                 p.released = 0;
@@ -3750,8 +3830,7 @@ fn plan_cond_ask(
 ) -> Result<LegPlan> {
     let LegCtx { batch, lay, index: i, token, family, amount: n, lock, utxo, utxo_daa, value: order_value, cov_id, .. } = *cx;
     let state = &order.state;
-    check_custody(custody, Some(cov_id), token, state.custody_amount())?;
-    check_custody_ext(custody, state.extension_commitment)?;
+    check_custody(custody, Some(cov_id), token, state.custody_amount(), state.extension_commitment)?;
     exts.merge(token.0, custody.state.extension())?;
     if lock < state.active_from {
         return invalid("conditional ask not active yet");
@@ -4020,10 +4099,8 @@ fn plan_cond_bid_merge(
     kron_output(family, new_amount, "the merged entry's custody")?;
     let (cust_state, cust_value, token_in) = if entry_state.amount_left > 0 {
         let entry_custody = m.custody.as_ref().ok_or_else(|| Error::Invalid("the merged entry's custody is required".into()))?;
-        check_custody(entry_custody, merged_entry.utxo.covenant_id, token, entry_state.custody_amount())?;
-        // The entry's custody carries its committed exit's commitment, i.e.
-        // this exit's.
-        check_custody_ext(entry_custody, state.extension_commitment)?;
+        // The entry's custody carries its committed exit's commitment, i.e. this exit's.
+        check_custody(entry_custody, merged_entry.utxo.covenant_id, token, entry_state.custody_amount(), state.extension_commitment)?;
         exts.merge(token.0, entry_custody.state.extension())?;
         (entry_custody.state.with_amount(new_amount), entry_custody.utxo.amount, lay.at[&(i, Slot::Entry)])
     } else {
@@ -4173,8 +4250,7 @@ fn plan_ifd_ask(
 ) -> Result<LegPlan> {
     let LegCtx { batch, lay, index: i, token, family, amount: n, lock, utxo_daa, value: order_value, cov_id, strict, .. } = *cx;
     let state = &order.state;
-    check_custody(custody, Some(cov_id), token, state.custody_amount())?;
-    check_custody_ext(custody, state.exit()?.extension_commitment)?;
+    check_custody(custody, Some(cov_id), token, state.custody_amount(), state.exit()?.extension_commitment)?;
     exts.merge(token.0, custody.state.extension())?;
     if lock < state.active_from {
         return invalid("if-done ask not active yet");
@@ -4582,10 +4658,17 @@ fn add_taker_tokens(
 ) -> Result<()> {
     for t in &lay.tokens {
         let (sold, bought) = token_flow(plans, *t)?;
-        let supplied: i64 = batch.taker_tokens.iter().filter(|x| x.utxo.covenant_id == Some(t.0)).map(|x| x.state.amount()).sum();
-        let net = sold + supplied - bought;
+        // checked: the taker's and the orders' numbers (R8F1c-3)
+        let supplied = batch
+            .taker_tokens
+            .iter()
+            .filter(|x| x.utxo.covenant_id == Some(t.0))
+            .try_fold(0i64, |a, x| a.checked_add(x.state.amount()))
+            .ok_or_else(|| Error::Invalid("the taker's token amounts overflow".into()))?;
+        let have = add(sold, supplied, "token amounts")?;
+        let net = sub(have, bought, "token amounts")?;
         if net < 0 {
-            return invalid(format!("the batch delivers {bought} token base units but only {} are available", sold + supplied));
+            return invalid(format!("the batch delivers {bought} token base units but only {have} are available"));
         }
         if net > 0 {
             let to = batch.receivers.iter().find(|r| r.covenant_id == t.0).map(|r| r.pubkey).or(batch.taker).or(change);
@@ -4826,7 +4909,11 @@ fn update_plan(
                 if k < 1 {
                     return invalid("the evidence justifies no trailing step");
                 }
-                let stop = state.stop_price + k * state.trail_step;
+                // a counterparty's numbers: checked, an error rather than a wrap (R8F1c-3)
+                let stop = k
+                    .checked_mul(state.trail_step)
+                    .and_then(|d| state.stop_price.checked_add(d))
+                    .ok_or_else(|| Error::Invalid("the trailed stop overflows".into()))?;
                 (
                     AnyState::KobCondAsk(CondAskState { stop_price: stop, ..state.clone() }).into_family(family),
                     "trail",
@@ -4850,7 +4937,10 @@ fn update_plan(
                 if k < 1 {
                     return invalid("the evidence justifies no trailing step");
                 }
-                let stop = state.stop_price - k * state.trail_step;
+                let stop = k
+                    .checked_mul(state.trail_step)
+                    .and_then(|d| state.stop_price.checked_sub(d))
+                    .ok_or_else(|| Error::Invalid("the trailed stop overflows".into()))?;
                 (
                     AnyState::KobCondBid(CondBidState { stop_price: stop, ..state.clone() }).into_family(family),
                     "trail",

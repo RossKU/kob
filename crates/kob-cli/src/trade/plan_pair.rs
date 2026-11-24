@@ -358,6 +358,7 @@ pub(crate) fn place_pair_order(env: &Env, pair: &PairPart, mut issues: Vec<Issue
         expected_price: spec.expected_price,
         worst_price: spec.worst_price,
         tip: spec.tip,
+        merge_tip: 0,
         carriers,
         kas_locked,
         tokens_escrowed: escrow_a,
@@ -594,7 +595,8 @@ pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
         pair,
         log,
         PairSpec {
-            all_in_total: b_of(amount, limit_price),
+            // at the worst of the legs, the stop's band end included (R8F3c-3)
+            all_in_total: b_of(amount, worst),
             order: AnyState::KobCondPair(st.clone()),
             exit: None,
             lines,

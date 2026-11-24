@@ -200,7 +200,8 @@ pub fn get_from(what: &str, indexer: &str, path: &str, headers: &[(&str, &str)],
 pub fn get_ok(indexer: &str, path: &str, timeout: Duration) -> Result<Value, String> {
     let (status, v) = get(indexer, path, timeout)?;
     if status != 200 {
-        let msg = v.pointer("/error/message").and_then(Value::as_str).unwrap_or("");
+        // the server's words: through the one sanitiser, bounded (R8F3c-2)
+        let msg = crate::text::clean_long(v.pointer("/error/message").and_then(Value::as_str).unwrap_or(""), 400);
         return Err(format!("indexer {}{}: HTTP {status} {msg}", shown(indexer), path.split('?').next().unwrap_or("")));
     }
     Ok(v)

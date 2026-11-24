@@ -37,6 +37,8 @@ impl Out {
     }
 
     fn put(&mut self, line: &str) {
+        // the feed's text is the executor's: shown through the one sanitiser, as every print (R8F3c-2)
+        let line = crate::text::clean_out(line);
         if writeln!(self.sink, "{line}").and_then(|_| self.sink.flush()).is_err() {
             self.broken = true;
         }
@@ -44,6 +46,7 @@ impl Out {
 
     fn put_err(&mut self, line: &str) {
         // A failing stderr, such as a closed one, is not a reason to stop.
+        let line = crate::text::clean_out(line);
         let _ = writeln!(self.err, "{line}").and_then(|_| self.err.flush());
     }
 

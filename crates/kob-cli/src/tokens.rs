@@ -133,13 +133,19 @@ pub fn indexer_rows(v: &Value) -> Result<Vec<Row>, String> {
             _ => "-".into(),
         };
         rows.push(Row {
-            ticker: t.get("ticker").and_then(Value::as_str).unwrap_or("").to_string(),
+            // the indexer's and kascov's words: through the one sanitiser (R8F3c-2)
+            ticker: crate::text::clean(t.get("ticker").and_then(Value::as_str).unwrap_or("")),
             cov: to_hex(&cov),
             decimals: t.get("decimals").and_then(Value::as_u64).map(|d| d as u32),
             program,
             asks: t.get("open_asks").and_then(Value::as_u64),
             bids: t.get("open_bids").and_then(Value::as_u64),
-            warn: strings("warnings").into_iter().filter(|w| w != "genesis_unverified").chain(strings("powers")).collect(),
+            warn: strings("warnings")
+                .into_iter()
+                .filter(|w| w != "genesis_unverified")
+                .chain(strings("powers"))
+                .map(|w| crate::text::clean(&w))
+                .collect(),
             source: "indexer",
         });
     }
@@ -158,7 +164,7 @@ pub fn kascov_rows(list: &Value, have: &std::collections::BTreeSet<String>) -> R
                 return None;
             }
             Some(Row {
-                ticker: t.get("claimed_ticker").and_then(Value::as_str).unwrap_or("").to_string(),
+                ticker: crate::text::clean(t.get("claimed_ticker").and_then(Value::as_str).unwrap_or("")),
                 cov,
                 decimals: t.get("claimed_decimals").and_then(Value::as_u64).map(|d| d as u32),
                 program: kascov_program(t),
@@ -422,7 +428,7 @@ pub fn view(
         if r.ticker.is_empty() && held.contains(&r.cov) && asked < DECLARATION_BUDGET {
             asked += 1;
             if let Ok(Some(d)) = data::declaration(indexer, &cov) {
-                r.ticker = d.symbol.unwrap_or_default();
+                r.ticker = crate::text::clean(&d.symbol.unwrap_or_default());
                 if r.decimals.is_none() {
                     r.decimals = d.decimals;
                 }

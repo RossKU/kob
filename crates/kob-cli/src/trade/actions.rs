@@ -535,6 +535,13 @@ pub fn build_replace(
         });
         return Ok((built, true, notes));
     }
+    if live.foreign > 0 {
+        return Err(format!(
+            "the order's covenant id owns {} stray UTXO(s) of other tokens, which a cancel-replace would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace",
+            live.foreign,
+            to_hex(&live.cov)
+        ));
+    }
     // The tokens that the replacement must hold come from the old custody, the strays and, when
     // short, free tokens.
     let mut tokens: Vec<TokenUtxo> = vec![];
@@ -549,8 +556,14 @@ pub fn build_replace(
             .iter()
             .cloned()
             .partition(|s| s.utxo.covenant_id != Some(token) || m.family == kob_protocol::Family::Kron || s.state.extension() == ext);
+        // A cancel-replace ends the old covenant id: a stray it cannot take would be locked for ever
+        // (R8F3c-4), and one transfer moves one class of a token.
         if !other.is_empty() {
-            notes.push(format!("{} stray token UTXO(s) with another extension commitment stay behind", other.len()));
+            return Err(format!(
+                "the order's covenant id owns {} token UTXO(s) of another extension commitment, which a cancel-replace cannot take and would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace",
+                other.len(),
+                to_hex(&live.cov)
+            ));
         }
         strays = same;
         let have: i64 = held.iter().map(|h| h.state.amount()).sum::<i64>()
@@ -617,9 +630,6 @@ pub fn build_replace(
     let extra = built.tx.outputs.first().map(|o| o.value as i128).unwrap_or(0) - value as i128;
     if !(0..=TINY_CHANGE_MAX as i128).contains(&extra) {
         return Err(format!("the built replacement holds {extra} sompi more than planned"));
-    }
-    if live.foreign > 0 {
-        notes.push(format!("{} stray UTXO(s) of other tokens stay with the old covenant id (kob cancel returns them)", live.foreign));
     }
     notes.push("cancel + replace: the order gets a new covenant id".into());
     Ok((built, false, notes))
@@ -718,6 +728,12 @@ pub fn run_replace(args: &[String]) -> i32 {
         if let Some(a) = rep.amount_left() {
             lines.push(format!("amount: {}", units::tokens(a as i128, &u)));
         }
+        // the amended legs and every value that changed (R8F3c-7)
+        if let Some(l) = super::place::cond_legs(&rep) {
+            let px = |x: i64| units::price_per_whole(x, &u, rep.scale(), units::KAS_DECIMALS, "KAS");
+            lines.extend(super::place::leg_lines(&l, &px).into_iter().map(|l| format!("  {l}")));
+        }
+        lines.extend(changed_lines(&live.order.state, &rep, m, None));
         let mut issues: Vec<Issue> = notes.into_iter().map(|n| issue("REPLACE_NOTE", Severity::Info, n)).collect();
         issues.extend(ms.iter().filter_map(|m| m.listing_issue(true)));
         Ok((
@@ -780,6 +796,16 @@ fn replan_replace(
     let b = ms.get(1);
     let ua = a.unit();
     let scale = s.scale();
+    // The plan places prices at the market's scale: an order of another scale would be re-placed
+    // 10^k off, so it is not re-planned (R8F3c-8).
+    if scale != a.scale {
+        return Err(format!(
+            "the order prices at {scale} base units per whole token and the market of {} at {}: it is not re-planned (cancel it and place anew)",
+            a.name(),
+            a.scale
+        )
+        .into());
+    }
     let price = |k: &str| -> Result<Option<i64>, Fail> {
         p.get(k)
             .map(|v| match b {
@@ -849,6 +875,7 @@ fn replan_replace(
     let (built, _, more) = build_replace(live, &rep, value, &env.funding, &token_utxos, ms, &signer.pubkey, &fee, token_carrier)?;
     let mut lines = order_lines(live, ms);
     lines.push(format!("replacement: {} holding {}", rep.template_id().name(), units::kas(value as i128)));
+    lines.extend(changed_lines(s, &rep, a, b));
     lines.extend(super::place::plan_lines(&plan, a, b).into_iter().map(|l| format!("  {l}")));
     let mut issues: Vec<Issue> = plan.issues.iter().filter(|i| i.severity != Severity::Error).cloned().collect();
     issues.extend(notes);
@@ -1460,6 +1487,106 @@ fn check_take_token(pin: Option<[u8; 32]>, state: &AnyState) -> Result<(), Strin
     ))
 }
 
+/// How a term reads: a price per whole token, base units, or a DAA score.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Term {
+    Price,
+    Tokens,
+    Daa,
+}
+
+/// The terms of an order a replace can change, in the order's own prices.
+fn term_values(s: &AnyState) -> Vec<(&'static str, i64, Term)> {
+    let mut v = vec![];
+    match s {
+        AnyState::KobAsk(x) | AnyState::KobAskKron(x) => v.extend([("price", x.price, Term::Price), ("tip", x.tip, Term::Price)]),
+        AnyState::KobBid(x) | AnyState::KobBidKron(x) => v.extend([("price", x.price, Term::Price), ("tip", x.tip, Term::Price)]),
+        AnyState::KobPair(x) => v.push(("price", x.price, Term::Price)),
+        _ => {}
+    }
+    if let Some(l) = super::place::cond_legs(s) {
+        v.extend([
+            ("take-profit", l.tp, Term::Price),
+            ("stop", l.stop, Term::Price),
+            ("stop's worst price", l.stop_worst, Term::Price),
+        ]);
+        v.push(("tip", l.tip, Term::Price));
+    }
+    if let Some(a) = s.amount_left() {
+        v.push(("amount", a, Term::Tokens));
+    }
+    v.push(("minimum fill", s.min_fill(), Term::Tokens));
+    if let Some((daa, _)) = s.expiry() {
+        v.push(("expiry DAA", daa, Term::Daa));
+    }
+    v
+}
+
+/// Every term the replacement changes, old and new, each read at its own order's scale (R8F3c-8).
+fn changed_lines(old: &AnyState, new: &AnyState, a: &TokenMarket, b: Option<&TokenMarket>) -> Vec<String> {
+    let ua = a.unit();
+    let show = |s: &AnyState, x: i64, t: Term| match t {
+        Term::Price => match b {
+            Some(bm) => units::price_per_whole(x, &ua, s.scale(), bm.decimals, &bm.name()),
+            None => units::price_per_whole(x, &ua, s.scale(), units::KAS_DECIMALS, "KAS"),
+        },
+        Term::Tokens => units::tokens(x as i128, &ua),
+        Term::Daa => x.to_string(),
+    };
+    let before = term_values(old);
+    let mut v = vec![];
+    for (k, x, t) in term_values(new) {
+        match before.iter().find(|o| o.0 == k) {
+            Some(o) if o.1 == x => {}
+            Some(o) => v.push(format!("changed: {k} {} -> {}", show(old, o.1, t), show(new, x, t))),
+            None => v.push(format!("new: {k} {}", show(new, x, t))),
+        }
+    }
+    v
+}
+
+/// What a take buys or sells must be the market's token (R8F3c-5): the order's token program and,
+/// for KCC-20, the extension commitment it pins are the ones of the token the lists name. Units of
+/// another class under the same covenant id are another token, which the token's market does not
+/// accept. When no list names the class, it is the order's own, and the plan says so.
+fn check_take_market(state: &AnyState, ms: &[TokenMarket]) -> Result<Vec<String>, String> {
+    let mut notes = vec![];
+    for m in ms {
+        let (tpl, ext) = match state.pair_tokens() {
+            Some(p) if p.a.cov_id == m.cov => (Some(p.a.tpl_hash), p.a.ext),
+            Some(p) if p.b.cov_id == m.cov => (Some(p.b.tpl_hash), p.b.ext),
+            Some(_) => return Err(format!("the order does not trade {}: refused, nothing signed", m.name())),
+            None => (state.token_tpl_hash(), state.custody_ext(m.cov).or_else(|| state.extension_commitment())),
+        };
+        if tpl != Some(m.tpl_hash) {
+            return Err(format!(
+                "the order's token program is not the one of {} ({}): another program under the same covenant id is another token; refused, nothing signed",
+                m.name(),
+                m.program.name()
+            ));
+        }
+        if m.family != kob_protocol::Family::Kcc20 {
+            continue;
+        }
+        let e = ext.ok_or("the order names no extension commitment for its token: refused, nothing signed")?;
+        if m.ext_source == market::ExtSource::Order {
+            notes.push(format!(
+                "token class: extension commitment {} (the order's own: no list names one for {}, and units of another class under the same id are another token)",
+                to_hex(&e),
+                m.name()
+            ));
+        } else if e != m.ext {
+            return Err(format!(
+                "the order trades units of extension commitment {}, not {}, the class of {}: another class under the same covenant id is another token; refused, nothing signed",
+                to_hex(&e),
+                to_hex(&m.ext),
+                m.name()
+            ));
+        }
+    }
+    Ok(notes)
+}
+
 /// Runs `kob take`.
 pub fn run_take(args: &[String]) -> i32 {
     let flags = ["--amount", "--carrier", "--token", bound::MAX_FLAG, bound::MIN_FLAG];
@@ -1484,6 +1611,8 @@ pub fn run_take(args: &[String]) -> i32 {
         check_take_token(pin, &live.order.state)?;
         let ms = markets_of(&c, &live)?;
         let m = &ms[0];
+        // what is taken is the market's token: its program and its class (R8F3c-5)
+        let class_notes = check_take_market(&live.named(), &ms)?;
         let amount = parse_token_amount(p.get("--amount").ok_or_else(|| usage("--amount is required"))?, &m.unit(), "--amount")
             .map_err(usage)?;
         let carrier = match p.get("--carrier") {
@@ -1602,6 +1731,7 @@ pub fn run_take(args: &[String]) -> i32 {
         let unit = m.unit();
         let kas = terms.kas(amount, scale);
         let mut lines = order_lines(&live, &ms);
+        lines.extend(class_notes);
         lines.push(format!(
             "you {} {} at the order's price at DAA {lock} (the lock time)",
             if sells { "buy" } else { "sell" },

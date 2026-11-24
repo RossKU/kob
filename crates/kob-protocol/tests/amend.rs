@@ -685,7 +685,7 @@ fn claim_refusals() {
     if let TokenState::Kcc20(k) = &mut r.bought_custody.state {
         k.extension_commitment = [0x55; 32];
     }
-    refused(&r, "a custody of another commitment", "not exactly the order's");
+    refused(&r, "a custody of another commitment", "another extension commitment than the order pins");
     // wallet tokens: the maker's plain UTXOs of the bought token's commitment
     let mut r = base();
     r.tokens = vec![wallet(41, 1, MAKER_A)];

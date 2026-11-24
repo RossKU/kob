@@ -979,15 +979,17 @@ impl CondPairState {
 /// They are `0x08 amountLeft 0x08 custody 0x20 parent 0x08 rptPrice 0x08 rptPre 0x08 rptUntil 0x20
 /// sExt`.
 fn exit_tail(amount: i64, custody: i64, parent: [u8; 32], rpt_price: i64, rpt_pre: i64, until: i64, s_ext: [u8; 32]) -> Vec<u8> {
+    // sign-magnitude, as the covenant writes them (R8F1a-2); only called with zeros, to rebuild the committed prefix
+    let n = |x: i64| super::int8_bytes(x).expect("an exit field above i64::MIN");
     let mut v = vec![0x08];
-    v.extend_from_slice(&amount.to_le_bytes());
+    v.extend_from_slice(&n(amount));
     v.push(0x08);
-    v.extend_from_slice(&custody.to_le_bytes());
+    v.extend_from_slice(&n(custody));
     v.push(0x20);
     v.extend_from_slice(&parent);
     for x in [rpt_price, rpt_pre, until] {
         v.push(0x08);
-        v.extend_from_slice(&x.to_le_bytes());
+        v.extend_from_slice(&n(x));
     }
     v.push(0x20);
     v.extend_from_slice(&s_ext);

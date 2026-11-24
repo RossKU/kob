@@ -9,6 +9,26 @@
 //!   `cancel` and `sweep` take saved indexer order views with `--view FILE`.
 //! - The views `kob book`, `orders` and `balances` ([`trade`]), and `kob watch` and `kob tokens`.
 
+// Every print of the crate goes through the one sanitiser (`text::clean_out`, R8F3c-2): these
+// shadow the standard macros in every module declared below, so text from outside (an indexer's
+// ticker, a server's error, a file) can never move the cursor or rewrite the signing screen.
+macro_rules! println {
+    () => { $crate::text::emit(false, true, "") };
+    ($($t:tt)*) => { $crate::text::emit(false, true, &::std::format!($($t)*)) };
+}
+macro_rules! eprintln {
+    () => { $crate::text::emit(true, true, "") };
+    ($($t:tt)*) => { $crate::text::emit(true, true, &::std::format!($($t)*)) };
+}
+macro_rules! print {
+    ($($t:tt)*) => { $crate::text::emit(false, false, &::std::format!($($t)*)) };
+}
+macro_rules! eprint {
+    ($($t:tt)*) => { $crate::text::emit(true, false, &::std::format!($($t)*)) };
+}
+
+mod text;
+
 mod common;
 mod congestion;
 mod feecap;

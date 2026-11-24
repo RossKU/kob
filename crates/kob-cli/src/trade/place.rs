@@ -529,6 +529,47 @@ pub fn tip_per_whole(tip: i64, m: &TokenMarket) -> String {
     units::kas(tip as i128 * 10i128.pow(m.decimals) / m.scale as i128)
 }
 
+/// The legs of a conditional state, in the prices of its book: it sells, its take-profit, its stop,
+/// the worst price the stop leg fills at (the end of its band), its minimum fill and its tip.
+pub(crate) struct CondLegs {
+    pub sell: bool,
+    pub tp: i64,
+    pub stop: i64,
+    pub stop_worst: i64,
+    pub min_fill: i64,
+    pub tip: i64,
+}
+
+pub(crate) fn cond_legs(s: &AnyState) -> Option<CondLegs> {
+    let (sell, tp, stop, stop_worst, min_fill, tip) = match s {
+        AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x) => (true, x.tp_price, x.stop_price, x.stop_floor(), x.min_fill, x.tip),
+        AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => {
+            (false, x.tp_price, x.stop_price, x.stop_ceiling(), x.min_fill, x.tip)
+        }
+        AnyState::KobCondPair(x) => (x.is_ask(), x.tp_price, x.stop_price, x.stop_worst(), x.min_fill, x.tip),
+        _ => return None,
+    };
+    Some(CondLegs { sell, tp, stop, stop_worst, min_fill, tip })
+}
+
+/// The lines of a conditional state's legs: its take-profit, its stop and the worst price the stop
+/// fills at, so that the screen never shows the take-profit alone as the bound (R8F3c-3, R8F3c-7).
+pub(crate) fn leg_lines(l: &CondLegs, price: &dyn Fn(i64) -> String) -> Vec<String> {
+    let mut v = vec![];
+    if l.tp > 0 {
+        v.push(format!("take-profit price: {}", price(l.tp)));
+    }
+    if l.stop > 0 {
+        v.push(format!(
+            "stop price: {} (once triggered, the stop {} {} at worst)",
+            price(l.stop),
+            if l.sell { "sells down to" } else { "buys up to" },
+            price(l.stop_worst)
+        ));
+    }
+    v
+}
+
 /// The plan lines of a placed order.
 pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> Vec<String> {
     let Some(d) = &plan.disclosure else { return vec![] };
@@ -559,8 +600,35 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
         _ => {}
     }
     v.push(format!("amount: {}", units::tokens(d.amount as i128, &u)));
-    if let Some(p) = d.limit_price {
-        v.push(format!("limit / worst price: {}", price(p)));
+    match plan.states.first().and_then(cond_legs) {
+        // a stop leg: its price and its band's end are shown, and the bound below is the worst of the legs
+        Some(l) if l.stop > 0 => {
+            v.extend(leg_lines(&l, &price));
+            if let Some(w) = d.worst_price {
+                v.push(format!("worst price of any leg: {}", price(w)));
+            }
+        }
+        _ => {
+            if let Some(p) = d.limit_price {
+                v.push(format!("limit / worst price: {}", price(p)));
+            }
+        }
+    }
+    // the exit an if-done entry commits to: its legs, minimum fill and tip (R8F3c-7)
+    if let Some(x) = plan.states.get(1).and_then(cond_legs) {
+        v.push(format!("committed exit: {} {} when the entry fills", if x.sell { "sells" } else { "buys back" }, m.name()));
+        v.extend(leg_lines(&x, &price).into_iter().map(|l| format!("  exit {l}")));
+        v.push(format!("  exit minimum fill: {}", units::tokens(x.min_fill as i128, &u)));
+        v.push(format!(
+            "  exit tip: {} per whole {}{}",
+            tip_per_whole(x.tip, m),
+            m.name(),
+            if d.merge_tip > 0 {
+                format!(" (of which {} per whole token pays the merge of each repeat)", tip_per_whole(d.merge_tip, m))
+            } else {
+                String::new()
+            }
+        ));
     }
     if let Some(p) = d.expected_price {
         v.push(format!("expected start: {}", price(p)));
@@ -803,8 +871,10 @@ pub fn env_sized(
                 severity: Severity::Warning,
                 message: format!(
                     "{}: its extension commitment {} is from {origin}, and nothing checks it (no registry entry, and this wallet \
-                     holds none of the token): an order pins it, and only tokens of that commitment fill it; check the token's \
-                     genesis yourself",
+                     holds none of the token): an order pins it, and only tokens of that commitment fill it. What you can do: \
+                     hold a few units of the token first (this command then checks the commitment against them), or compare it \
+                     with the extension commitment of the token's genesis outputs on a block explorer. A buy order of a class \
+                     that no units carry never fills, and `kob cancel` returns its whole value",
                     m.name(),
                     to_hex(&m.ext)
                 ),

@@ -59,6 +59,11 @@ pub struct Decoded {
     pub signatures: usize,
     /// The number of signatures of other keys, which the signer refuses.
     pub foreign_signatures: usize,
+    /// Inputs that no signature of yours covers (covenant-spent custodies, strays, the orders it
+    /// fills), and the KAS they hold as the node reports it. A signature commits to its own input's
+    /// amount only, so the fee shown holds as far as the node reports these truly (R8F3-1).
+    pub unsigned_inputs: usize,
+    pub unsigned_kas: i128,
 }
 
 /// Decodes `built` from the point of view of the key `me`.
@@ -73,12 +78,18 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
         priority_fee: built.fee.fee_mode == FeeMode::Priority,
         signatures: built.sign.iter().filter(|s| s.pubkey == *me).count(),
         foreign_signatures: built.sign.iter().filter(|s| s.pubkey != *me).count(),
+        unsigned_inputs: 0,
+        unsigned_kas: 0,
     };
     // Token output states per token, in output order. The leader and KRON plans carry the next
     // states.
     let mut next: BTreeMap<[u8; 32], Vec<TokenState>> = BTreeMap::new();
     for (i, (inp, plan)) in built.tx.inputs.iter().zip(&built.plans).enumerate() {
         let value = inp.utxo.amount as i128;
+        if !built.sign.iter().any(|s| s.input_index == i && s.pubkey == *me) {
+            d.unsigned_inputs += 1;
+            d.unsigned_kas += value;
+        }
         let line = match plan {
             SigPlan::P2pk { pubkey } => {
                 if pubkey == me {
@@ -202,6 +213,14 @@ pub fn lines(d: &Decoded, units: &Units, txid: &[u8; 32]) -> Vec<String> {
         kas(d.fee as i128),
         if d.priority_fee { " (priority fee, storage mass included)" } else { "" }
     ));
+    if d.unsigned_inputs > 0 {
+        v.push(format!(
+            "  {} input{} that no signature of yours covers hold {} as the node reports it: the fee above is exact if the node is (a node \n             that reports less makes the true fee higher by the difference)",
+            d.unsigned_inputs,
+            if d.unsigned_inputs == 1 { "" } else { "s" },
+            kas(d.unsigned_kas)
+        ));
+    }
     let mut net = vec![format!("{}{}", if d.kas_net >= 0 { "+" } else { "" }, kas(d.kas_net))];
     for (cov, n) in &d.token_net {
         net.push(format!("{}{}", if *n >= 0 { "+" } else { "" }, tok(units, cov, *n)));

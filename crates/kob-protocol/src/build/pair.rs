@@ -563,13 +563,7 @@ pub(crate) fn pair_delivery(
 /// A bought-custody: T of the order's covenant id, owner scheme `0x04`, no borrowing, a zero guard,
 /// the order's commitment and exactly `bought` (bid-delivery-spec §5: known by its exact state).
 fn check_bought_custody(c: &TokenUtxo, t: Token, order_cov: [u8; 32], bought: i64, ext: [u8; 32]) -> Result<()> {
-    check_custody(c, Some(order_cov), t, bought).map_err(|e| Error::Invalid(format!("bought-custody: {e}")))?;
-    if c.state != TokenState::custody(t.1.family(), bought, order_cov, ext) {
-        return invalid(
-            "bought-custody: its state is not exactly the order's (borrowing disabled, a zero guard, the order's commitment)",
-        );
-    }
-    Ok(())
+    check_custody(c, Some(order_cov), t, bought, ext).map_err(|e| Error::Invalid(format!("bought-custody: {e}")))
 }
 
 /// A receive UTXO of the maker the order may top up, and its threshold (bid-delivery-spec §4).
@@ -763,7 +757,7 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                     state.custody
                 ));
             }
-            check_custody_ext(custody, state.s_ext)?;
+            check_custody(custody, order.utxo.covenant_id, pair_s_t(l)?.0, state.custody, state.s_ext)?;
             let t_arg = if state.slope != 0 {
                 auction_t(*t, lock, need(state.origin(utxo_daa), "decay origin")?, "decaying pair order")?
             } else {
@@ -802,7 +796,7 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
             if custody.state.amount() != state.custody {
                 return invalid("the conditional pair order's custody does not hold exactly its custody field");
             }
-            check_custody_ext(custody, state.s_ext)?;
+            check_custody(custody, order.utxo.covenant_id, pair_s_t(l)?.0, state.custody, state.s_ext)?;
             let leg = *leg as i64;
             let mut trigger = false;
             let mut t_arg = 0;
@@ -1481,8 +1475,8 @@ fn plan_cond_pair_merge(
         kron_output(a.1.family(), a_new, "the merged entry's A custody")?;
         match &m.a_custody {
             Some(x) => {
-                check_custody(x, e.utxo.covenant_id, a, entry_state.amount_left).map_err(|e| blame("entry", i, e))?;
-                check_custody_ext(x, entry_state.a_ext).map_err(|e| blame("entry", i, e))?;
+                check_custody(x, e.utxo.covenant_id, a, entry_state.amount_left, entry_state.a_ext)
+                    .map_err(|e| blame("entry", i, e))?;
                 extras.push(Extra::AtInput {
                     slot: Slot::EntryA,
                     value: x.utxo.amount,
@@ -1513,8 +1507,7 @@ fn plan_cond_pair_merge(
         kron_output(bt.1.family(), b_new, "the merged entry's B custody")?;
         match &m.b_custody {
             Some(x) => {
-                check_custody(x, e.utxo.covenant_id, bt, entry_state.custody).map_err(|e| blame("entry", i, e))?;
-                check_custody_ext(x, entry_state.b_ext).map_err(|e| blame("entry", i, e))?;
+                check_custody(x, e.utxo.covenant_id, bt, entry_state.custody, entry_state.b_ext).map_err(|e| blame("entry", i, e))?;
                 extras.push(Extra::AtInput {
                     slot: Slot::EntryB,
                     value: x.utxo.amount,
@@ -1755,8 +1748,7 @@ fn check_entry_custodies(
     let a_held = if buy { 0 } else { state.amount_left };
     match (a_custody, a_held > 0) {
         (Some(x), true) => {
-            check_custody(x, order.utxo.covenant_id, a, a_held)?;
-            check_custody_ext(x, state.a_ext)?;
+            check_custody(x, order.utxo.covenant_id, a, a_held, state.a_ext)?;
         }
         (None, false) => {}
         (Some(_), false) => return invalid("this entry holds no A custody"),
@@ -1764,8 +1756,7 @@ fn check_entry_custodies(
     }
     match (b_custody, state.custody > 0) {
         (Some(x), true) => {
-            check_custody(x, order.utxo.covenant_id, bt, state.custody)?;
-            check_custody_ext(x, state.b_ext)?;
+            check_custody(x, order.utxo.covenant_id, bt, state.custody, state.b_ext)?;
         }
         (None, false) => {}
         (Some(_), false) => return invalid("this entry holds no B custody"),
@@ -1908,7 +1899,11 @@ pub(crate) fn update_plan_pair(
                 (CondPairState { armed: 1, ..s.clone() }, 0, "arm", 0)
             } else {
                 let k = s.trail_k(ev).ok_or_else(|| Error::Invalid("the evidence justifies no trailing step".into()))?;
-                let stop = if s.is_ask() { s.stop_price + k * s.trail_step } else { s.stop_price - k * s.trail_step };
+                // checked: a counterparty's numbers (R8F1c-3)
+                let d = k.checked_mul(s.trail_step);
+                let stop =
+                    if s.is_ask() { d.and_then(|d| s.stop_price.checked_add(d)) } else { d.and_then(|d| s.stop_price.checked_sub(d)) }
+                        .ok_or_else(|| Error::Invalid("the trailed stop overflows".into()))?;
                 (CondPairState { stop_price: stop, ..s.clone() }, k, "trail", s.trail_wait.max(0) as u64)
             };
             let mut argv = vec![nb(0)];

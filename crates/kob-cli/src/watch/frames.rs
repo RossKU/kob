@@ -24,8 +24,9 @@ pub fn clock(unix_secs: u64) -> String {
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
 }
 
-fn text<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
-    v.get(k).and_then(Value::as_str)
+/// A string field of a frame: the executor's words, through the one sanitiser (R8F3c-2).
+fn text(v: &Value, k: &str) -> Option<String> {
+    v.get(k).and_then(Value::as_str).map(crate::text::clean)
 }
 
 /// A number that the executor writes as a decimal string or a JSON number.
@@ -50,7 +51,7 @@ pub fn fill_line(data: &Value, info: Option<&TokenInfo>) -> String {
         Some(2) => "bid",
         _ => "?",
     };
-    let token = text(data, "token").map(str::to_string);
+    let token = text(data, "token");
     let amount = int(data, "amount");
     let price = int(data, "price");
     let (amount_text, price_text) = match info {
@@ -74,8 +75,8 @@ pub fn fill_line(data: &Value, info: Option<&TokenInfo>) -> String {
     if let Some(p) = int(data, "payout") {
         line.push_str(&format!("  paid {}", units::kas(p)));
     }
-    line.push_str(&format!("  order {}", text(data, "order").unwrap_or("?")));
-    line.push_str(&format!("  tx {}", text(data, "txid").unwrap_or("?")));
+    line.push_str(&format!("  order {}", text(data, "order").unwrap_or_else(|| "?".into())));
+    line.push_str(&format!("  tx {}", text(data, "txid").unwrap_or_else(|| "?".into())));
     if let Some(d) = int(data, "daa") {
         line.push_str(&format!("  daa {d}"));
     }
@@ -96,7 +97,7 @@ pub fn cursor_line(data: &Value) -> String {
 pub fn health_line(data: &Value) -> String {
     let mut s = format!(
         "health  {}  daa {}  node {}  lag {}",
-        text(data, "state").unwrap_or("?"),
+        text(data, "state").unwrap_or_else(|| "?".into()),
         opt(int(data, "cursor_daa")),
         opt(int(data, "node_daa")),
         opt(int(data, "lag_daa"))
@@ -129,7 +130,7 @@ pub fn resync_line(data: &Value) -> String {
 ///
 /// It shows the type, channel and data on one line.
 pub fn generic_line(frame: &Value) -> String {
-    let ty = text(frame, "type").unwrap_or("?");
+    let ty = text(frame, "type").unwrap_or_else(|| "?".into());
     let ch = text(frame, "channel").map(|c| format!(" [{c}]")).unwrap_or_default();
     format!("{ty}{ch}  {}", frame.get("data").map_or(String::new(), Value::to_string))
 }

@@ -607,7 +607,7 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
     // keeps the state as it is on chain (its amend binds it).
     let named = crate::recover::named_state(&state, Some(txid), view.custody.as_ref())?;
     // The custodies and the own strays.
-    let targets = crate::recover::custody_targets(&named, *cov, view.ext)?;
+    let targets = crate::recover::custody_targets(&named, *cov)?;
     let bought_target = bought_target(&named, *cov)?;
     let mut spks = vec![ospk.clone()];
     spks.extend(targets.iter().map(|t| t.1.clone()));
@@ -627,7 +627,15 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
     };
     let mut stray_cands = vec![];
     let mut foreign = 0;
-    for s in view.strays.iter().filter(|s| !s.spent) {
+    // The view's custody entries are candidates like its strays: the custody is what the order's
+    // state pins, found at its script on the node (R8F3c-1), and anything else the order owns is a stray.
+    let mut seen_views: Vec<([u8; 32], u32)> = vec![];
+    let named_views = view.strays.iter().chain(view.custody.iter()).chain(view.custody_b.iter()).chain(view.bought.iter());
+    for s in named_views.filter(|s| !s.spent) {
+        if seen_views.contains(&(s.txid, s.index)) {
+            continue;
+        }
+        seen_views.push((s.txid, s.index));
         if !own_tokens.contains(&s.token) {
             foreign += 1;
             continue;
@@ -645,34 +653,50 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
         .get(&spk_bytes(&ospk))
         .and_then(|us| us.iter().find(|u| u.txid == txid && u.index == index && u.covenant_id == Some(*cov)))
         .ok_or("stale view: the node holds no unspent output of the order at its current outpoint")?;
+    // Every UTXO at a custody's script holds exactly its state: the first (the view's, when it is
+    // one of them) is the custody, the others are twins that go with the strays.
     let mut held = vec![];
+    let mut twins: Vec<TokenUtxo> = vec![];
     for (k, (st, spk, token)) in targets.iter().enumerate() {
-        let tv = if k == 0 { &view.custody } else { &view.custody_b };
-        let tv = tv.as_ref().ok_or("the view names no custody UTXO for this token-holding order")?;
-        let u = at
-            .get(&spk_bytes(spk))
-            .and_then(|us| us.iter().find(|u| u.txid == tv.txid && u.index == tv.index && u.covenant_id == Some(*token)))
-            .ok_or("the order's custody is not on the node (stale view)")?;
-        held.push(TokenUtxo { utxo: utxo_of(u), state: st.clone() });
+        let tv = if k == 0 { view.custody.as_ref() } else { view.custody_b.as_ref() };
+        let mut all = crate::order::all_at(&at, spk, *token, tv);
+        if all.is_empty() {
+            return Err(format!(
+                "the node holds no custody of exactly the state the order pins ({} base units of {}, extension commitment {}, owned by the order){}",
+                st.amount(),
+                to_hex(token),
+                to_hex(&st.extension()),
+                tv.map(|c| format!("; the indexer names {} instead", crate::common::outpoint_str(&c.txid, c.index))).unwrap_or_default()
+            ));
+        }
+        held.push(TokenUtxo { utxo: all.remove(0), state: st.clone() });
+        twins.extend(all.into_iter().map(|u| TokenUtxo { utxo: u, state: st.clone() }));
     }
-    // The bought-custody: the view's UTXO of the role `bought`, exactly `bought` base units, on the node.
-    let bought = match (&bought_target, &view.bought) {
-        (None, _) => None,
-        (Some(_), None) => return Err("the view names no bought-custody UTXO for this order (it holds bought tokens)".into()),
-        (Some((st, spk, token)), Some(bv)) => {
-            let u = at
-                .get(&spk_bytes(spk))
-                .and_then(|us| us.iter().find(|u| u.txid == bv.txid && u.index == bv.index && u.covenant_id == Some(*token)))
-                .ok_or("the order's bought-custody is not on the node (stale view)")?;
-            Some(TokenUtxo { utxo: utxo_of(u), state: st.clone() })
+    // The bought-custody: exactly `bought` base units of the order's class, owned by the order, on the node.
+    let bought = match &bought_target {
+        None => None,
+        Some((st, spk, token)) => {
+            let mut all = crate::order::all_at(&at, spk, *token, view.bought.as_ref());
+            if all.is_empty() {
+                return Err("the node holds no bought-custody of exactly the order's `bought` (it holds bought tokens)".into());
+            }
+            let b = TokenUtxo { utxo: all.remove(0), state: st.clone() };
+            twins.extend(all.into_iter().map(|u| TokenUtxo { utxo: u, state: st.clone() }));
+            Some(b)
         }
     };
-    let mut strays = vec![];
+    let taken: Vec<([u8; 32], u32)> =
+        held.iter().chain(bought.iter()).chain(twins.iter()).map(|t| (t.utxo.transaction_id, t.utxo.index)).collect();
+    let mut strays = twins;
     for (s, st, spk) in stray_cands {
+        if taken.contains(&(s.txid, s.index)) {
+            continue;
+        }
         if let Some(u) = crate::order::on_node(&at, &spk, &s) {
             strays.push(TokenUtxo { utxo: u, state: st });
         }
     }
+    crate::order::check_input_values(&view, held.iter().chain(bought.iter()).chain(strays.iter()))?;
     let mut held = held.into_iter();
     Ok(Live {
         cov: *cov,
