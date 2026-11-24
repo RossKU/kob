@@ -1138,12 +1138,31 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
       : issue('sweep.later-slots', 'info', `${xs.length} stray token UTXO(s) do not fit this transaction and stay with the order for another sweep`, params));
   };
   const cs = custodiesOf(st);
+  // The order lives on, so every custody its state holds must be in the snapshot, which the node
+  // confirmed at the script the state implies (node-verify.ts). A view that leaves one out, and
+  // perhaps lists it as a stray, must never have it swept: the order would keep its amount with no
+  // custody, and nothing could fill, refund or cancel it again (R8FX-1).
+  if (((cs[0]?.amount ?? 0n) > 0n && !snap.custody) || (curveFactsOf(st)?.unbound && !unboundCustodyToken(snap))) {
+    return failed([issue('cancel.custody-missing', 'error', 'the order\'s custody token UTXO is unknown: refresh the order from the indexer or node', { covenantId: cov })], [cov]);
+  }
+  if ((cs[1]?.amount ?? 0n) > 0n && !snap.prefund) {
+    return failed([issue('cancel.prefund-missing', 'error', 'the order\'s prefund custody (its second token UTXO) is unknown: refresh the order from the indexer or node', { covenantId: cov })], [cov]);
+  }
+  // A held custody is never a stray, whatever list it came from. A twin of the same state at another
+  // outpoint is one, and the custody stays.
+  const heldAt = new Set([snap.custody, snap.prefund, snap.boughtCustody].flatMap((u) => (u ? [outpointOf(u)] : [])));
+  // A twin (exactly a held custody's state at another outpoint) is not told apart from the custody
+  // by the transaction's bytes, so the decoder refuses to sweep it: it stays, and a cancel takes it.
+  const heldState = new Set([snap.custody, snap.prefund].flatMap((u) => (u ? [`${u.covenantId ?? ''}|${JSON.stringify(u.state)}`] : [])));
+  const twins = snap.strays.filter((s) => !heldAt.has(outpointOf(s)) && heldState.has(`${s.covenantId ?? ''}|${JSON.stringify(s.state)}`));
+  const strayList = snap.strays.filter((s) => !heldAt.has(outpointOf(s)) && !twins.includes(s));
+  if (twins.length) issues.push(issue('sweep.twin-stays', 'info', `${twins.length} stray token UTXO(s) identical to the order's custody stay with the order: a cancel takes them back`, { count: twins.length, amount: totalAmount(twins), ...tokenOfAll(twins) }));
   const toks = ownTokenFacts(st);
   const ownIds = toks.map((t) => t.covenantId);
   const picks = toks.map((t) => {
     const held = custodiesOfToken(snap, cs, t.covenantId);
     const ext = (held[0] ? extensionOfState(held[0].state) : null) ?? t.ext ?? (t.role === 'base' ? extensionOf(st) : null);
-    return { t, pick: pickStrays(snap.strays.filter((s) => s.covenantId === t.covenantId), ext, tokenSlotsFor(env.kob, t.tplHash)?.inputs ?? 3) };
+    return { t, pick: pickStrays(strayList.filter((s) => s.covenantId === t.covenantId), ext, tokenSlotsFor(env.kob, t.tplHash)?.inputs ?? 3) };
   });
   leaveLater(picks.flatMap((x) => x.pick.otherExt), 'extension');
   leaveLater(picks.flatMap((x) => x.pick.over), 'slots');
@@ -1154,7 +1173,7 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   };
   // A stray of another token passed among the order's own, from a caller's snapshot, is never built
   // as one and is reported.
-  for (const s of snap.strays.filter((x) => !ownIds.includes(x.covenantId ?? ''))) unprovenIssue({ outpoint: outpointOf(s), amount: big(s.state.amount), token: s.covenantId ?? null });
+  for (const s of strayList.filter((x) => !ownIds.includes(x.covenantId ?? ''))) unprovenIssue({ outpoint: outpointOf(s), amount: big(s.state.amount), token: s.covenantId ?? null });
   for (const u of snap.foreignUnproven ?? []) unprovenIssue(u);
   const foreign: ForeignStrays[] = [];
   for (const g of snap.foreign ?? []) {

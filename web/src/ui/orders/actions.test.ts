@@ -11,7 +11,7 @@ import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import type { ActionRequest } from '../../kob/types';
 import { FakeChain, MAKER, TOKEN, goldenRequest, keyUtxo, orderViewOf, placeGolden, signAndValidate, snapshotOfRecovered, strayFor, testAddress, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, snapshotFor, strandedCount, strayToTokenUtxo } from './actions';
+import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, planSweepFor, snapshotFor, strandedCount, strayToTokenUtxo } from './actions';
 import { buildEntries, describeEntry, type OrderEntry } from './orders-model';
 
 const kob = loadKobNode();
@@ -274,6 +274,47 @@ describe('strays a cancel would leave behind for good (R8F4-2)', () => {
     expect(plan.ok).toBe(true);
     expect(lostStrays(plan)).toBe(1);
     expect(abandonsStrays(plan)).toBe(false);
+  });
+});
+
+describe('a sweep never moves the custody of the order it keeps (R8FX-1)', () => {
+  it('the indexer leaves the custody out, lists it as a stray and says side 2: the record path finds the custody, and the sweep moves only true strays', async () => {
+    const a = place('create.ask');
+    const real = a.snap.custody!;
+    const stray = strayFor(a.snap, 4n, 92);
+    const evil = { ...orderViewOf(kob, { ...a.snap, custody: null, strays: [real, stray] }), side: 2 };
+    // the hostile per-owner list names the custody as a stray too
+    const listed = [real, stray].map((u) => ({ ...tokenUtxoView(u, 'stray'), owner: a.rec.covenantId }));
+    const s = services({ chain: withStrays(chainOf(a), [stray]), indexer: { order: async () => evil, tokenUtxos: async () => listed } });
+    const { plan } = await planSweepFor(s, MAKER.pk, entryOf(a));
+    validate(plan);
+    const spent = plan.built!.tx.inputs.map((i) => `${i.transactionId}:${i.index}`);
+    expect(spent).toContain(`${stray.transactionId}:${stray.index}`);
+    expect(spent).not.toContain(`${real.transactionId}:${real.index}`);
+  });
+
+  it('without a record the snapshot has no custody and the sweep stops', async () => {
+    const a = place('create.ask');
+    const real = a.snap.custody!;
+    const evil = { ...orderViewOf(kob, { ...a.snap, custody: null, strays: [real] }), side: 2 };
+    const { plan } = await planSweepFor(services({ chain: chainOf(a), indexer: { order: async () => evil } }), MAKER.pk, entryOf(a, true, false));
+    expect(plan.ok).toBe(false);
+    expect(plan.issues.map((i) => i.code)).toContain('cancel.custody-missing');
+  });
+
+  it('a twin of the custody (the same state at another outpoint) stays; the custody stays; other strays are swept', async () => {
+    const a = place('create.ask');
+    const real = a.snap.custody!;
+    const twin: TokenUtxo = { ...real, transactionId: 'ab'.repeat(32), index: 3 };
+    const stray = strayFor(a.snap, 4n, 92);
+    const view = orderViewOf(kob, { ...a.snap, strays: [twin, stray] });
+    const { plan } = await planSweepFor(services({ chain: withStrays(chainOf(a), [twin, stray]), indexer: { order: async () => view } }), MAKER.pk, entryOf(a));
+    validate(plan);
+    const spent = plan.built!.tx.inputs.map((i) => `${i.transactionId}:${i.index}`);
+    expect(spent).toContain(`${stray.transactionId}:${stray.index}`);
+    expect(spent).not.toContain(`${twin.transactionId}:${twin.index}`);
+    expect(spent).not.toContain(`${real.transactionId}:${real.index}`);
+    expect(plan.issues.map((i) => i.code)).toContain('sweep.twin-stays');
   });
 });
 

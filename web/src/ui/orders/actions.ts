@@ -11,7 +11,7 @@ import {
 } from '../../kob/cancel';
 import { confirmSnapshotOnNode } from '../../kob/node-verify';
 import { resolveRecord, retiredOf, type RecordKind, type RecordStore } from '../../kob/records';
-import { curveFactsOf, familyOfKind, quoteCovIdOf, tokenCovIdOf } from '../../kob/order-facts';
+import { curveFactsOf, custodiesOf, familyOfKind, quoteCovIdOf, tokenCovIdOf } from '../../kob/order-facts';
 import { isLiveStatus, type Position } from '../../kob/positions';
 import { custodyState, extensionOfState } from '../../kob/token-state';
 import type { BuiltTx, Family, Hex, TokenUtxo } from '../../kob/types';
@@ -58,10 +58,12 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
         const ret = retiredOf(s.kob, { kind: detail.contract as RecordKind, templateHash: detail.template_hash });
         const snap0 = snapshotFromOrderView(detail);
         const snap = ret ? { ...snap0, retired: ret.hash } : snap0;
-        // An ask without a known custody UTXO cannot be cancelled from the indexer's data alone.
-        // The node lookup below may find it.
-        const needsCustody = entry.view?.side === 1 || detail.side === 1;
-        if (!needsCustody || snap.custody || !entry.record) return await onNode(snap);
+        // An order whose state holds a custody the view does not name cannot be acted on from the
+        // indexer's data alone: the node lookup of the record finds it at the script the state
+        // implies. Whether it holds one is read from the decoded state, never from a field the
+        // indexer controls such as `side` (R8FX-1).
+        const needsCustody = custodiesOf(snap0.order.state).some((c, k) => c.amount > 0n && (k === 0 ? !snap0.custody : !snap0.prefund));
+        if (!needsCustody || !entry.record) return await onNode(snap);
       }
     } catch (e) {
       indexerFailure = e;
