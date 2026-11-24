@@ -244,7 +244,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 |---|---|---|
 | `network` | `mainnet` | `mainnet` or `testnet-10` |
 | `node` | `null` | wRPC URL; `null`: `KOB_NODE_WRPC`, else the CLI's two public nodes. Mainnet needs a JSON wRPC URL (`check`, `run` and `once` refuse without one). The bot passes it to every CLI call too, so it then trusts that one node instead of the CLI's two public nodes that must agree: run your own |
-| `indexer` | `null` | KOB indexer URL; `null`: the network's public one |
+| `indexer` | `null` | KOB indexer URL (https:// on mainnet); `null`: the network's public one |
 | `kobCli` | `kob` | path of the CLI |
 | `keyFile` | `null` | key file; `null`: `KOB_KEY` |
 | `dataDir` | `./run` | state, logs, STOP |
