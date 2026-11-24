@@ -788,6 +788,18 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   that re-pins those kinds and `KobIfdBid` / `KobIfdPair`. Decision 2026-11-18: deferred to the first template generation
   after mainnet (the 2026-11-18 generation did not carry it). Until then the wallet can cap the trail with a take-profit and
   recommend `minTouch` 100 %.
+  A sell trail raised past `MAX_STOP` (with no take-profit) also fails every stop-leg fill, so the indexer marks the order
+  `bad_state`: it leaves the book and no keeper refunds it at expiry; its maker can still cancel it (audit R9FA2-2). The
+  same `trailMax` closes it.
+- **The sell-custody check requires a zero guard** (first template generation after mainnet; audits R9FA-1, R9FA2-1). The
+  order covenants compare a sell custody on owner, scheme 4, borrow setting 0, class and amount, but not on its borrow
+  guard, and copy the spent custody's guard to the rest: `KobAsk.sil:327`, `KobCurveAsk.sil:182`, `KobCondAsk.sil:509`,
+  `KobIfdAsk.sil:285` and `:581`, `KobCondPair.sil:785` with `:1084` and `:1154`, `KobIfdPair.sil:663`, `:668` (via
+  `heldGx`, `:274-293`) and `:832`. With borrowing disabled the guard is inert, so nothing is lost, but a unit someone
+  sends with a non-zero guard can stand in for the custody. Every custody the covenants create themselves (if-done exits,
+  merges into an empty entry, bought-custodies) already has a zero guard; the KRON twins have no guard. Until then the
+  tools end such an order with the unit the covenant accepts (cancel, position cancel, refund), never fill from it, and
+  never sweep it away from a live order.
 - Once armed, a stop is only a limit bounded by its band (§2.1). A quote placed beyond the stop to
   trigger it must rest there for R, open to every matcher, before its fill counts; the threshold
   sets how much of it must trade.
