@@ -167,7 +167,9 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   book anyone can post into. `--no-dust-sell` is still accepted and does nothing.
 - **The indexer judges the node it follows by the clock.** Whether the chain authority keeps up is decided by the cursor
   block's verified header time against the host clock alone: within 90 s it keeps up; above that its lag must fall by
-  90 s in every 3 minutes, or another node takes over (with a single node, `/v1/health` says so). New in `/v1/health`:
+  90 s in every 3 minutes, and once it has kept up it may spend at most 5 minutes in an hour above 90 s, or another node
+  takes over (with a single node, `/v1/health` says so). A node deposed for it that held back chain its successor then
+  served is kept away 10 minutes, doubling up to 6 hours. New in `/v1/health`:
   `authority_pace` (`keeping_up`, `gaining`, `failing`, `unknown`) and `chain_proofs_off`; `ok`, `/v1/health/ready`,
   `caught_up` and `within_lag_tolerance` are false while the authority is `failing`, and `caught_up` also needs the cursor
   block within 90 s of the host clock. New metrics `kob_indexer_authority_failing` and `kob_indexer_chain_proofs_off`.

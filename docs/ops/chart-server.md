@@ -337,7 +337,7 @@ stretch stay invisible (Part B, 7.4). To keep the history whole after a long out
   `catching_up`, `node_unavailable`, `gap`), `lag_seconds`, `alarms`, `book_complete`, `authority_pace`, and while catching up
   `catch_up` (pace and ETA). `authority_pace.state` says whether the node the index follows keeps up with real time, judged by
   the cursor block's age on this host's clock alone (keep the clock on NTP): `failing` means it held the index more than 90 s
-  behind without gaining for 3 minutes; with public nodes it is then replaced at once, and `ok` is false until the index keeps up
+  behind without gaining for 3 minutes, or for more than 5 minutes in an hour after it had kept up; with public nodes it is then replaced at once, and `ok` is false until the index keeps up
   again (docs/ops/executor.md, Part C, *Whether the chain authority keeps up*). `chain_proofs_off: true` means
   `[chain_proof] enabled = false`: leave the proofs on for a public server.
   `GET /v1/health/ready` answers 200 when the store is following **or catching up with a lag below the first alarm threshold (1 hour by default)**
