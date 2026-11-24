@@ -297,8 +297,8 @@ Every key the handler returns:
 | `caught_up` | bool | `state = following`, `node_daa` known, not `stale`, and `authority_pace` said `keeping_up` within the last 90 s (the cursor block at most 90 s old by the local clock, whatever the node says of its position). The matcher and keepers plan only against a caught-up store (or within the tolerance below). |
 | `within_lag_tolerance` | bool | `caught_up`, or `following` / `catching_up` with a lag of at most `lag_tolerance_daa` (when that is above 0), not `stale`, and the cursor block within 90 s by the local clock as for `caught_up`. What the matcher, keepers and maintenance gate on. |
 | `lag_tolerance_daa` | number | The tolerance in DAA: `max_lag_secs` (default 30) times `daa_per_second` (10) = 300; 0 means strict (only `following`). |
-| `lag_daa` | number or `null` | `node_daa` minus `cursor_daa` (not below 0); `null` while `node_daa` is unknown. |
-| `lag_seconds` | number or `null` | `lag_daa / daa_per_second` (integer division; `daa_per_second` default 10), and at least the age in seconds of the cursor's chain block by the local clock (`cursor_time_unix_ms`), so a node that claims to be just ahead of an old cursor does not hide the lag; `null` with `lag_daa`. A host clock that runs ahead shows that much lag. |
+| `lag_daa` | number or `null` | `node_daa` minus `cursor_daa` (not below 0); `null` while `node_daa` is unknown. The node's position is its own unverified claim: shown for information, it decides none of `ok`, `ready`, `stale`, `alarms` or `lag_seconds`. |
+| `lag_seconds` | number or `null` | The age in seconds of the cursor's chain block by the local clock (`cursor_time_unix_ms`, the block's verified header time): the quantity the follower's progress rule judges. No node's claim enters it, so a node can neither hide the lag (a position just ahead of an old cursor) nor feign it (a position far ahead of a current cursor). `null` while the cursor block's time is unknown. A host clock that runs ahead shows that much lag. |
 | `lag_blue` | number or `null` | Blue score between the cursor and the node's sink at the last request; `null` before it is measured. |
 | `alarms` | array | One entry `{"lag_hours_at_least": h, "lag_seconds": s}` per configured threshold the lag has reached. Thresholds are the top-level `lag_alarm_hours` (default `[1, 6, 12, 24]`). Empty while `lag_seconds` is unknown. |
 | `settle_depth_daa` | number | The depth (in DAA) at which a view counts as `settled`; default 100. |
@@ -371,7 +371,7 @@ A load-balancer probe. No parameters. Body: `{"ready": bool, "reason": string, "
 | `200` | `ok` | `state` is `following` or `catching_up`, `lag_seconds` is known, and the lag is below the smallest `lag_alarm_hours` threshold (default 1 hour; with no thresholds configured the lag check is skipped). |
 | `503` | `no progress for 10 minutes` | `following` / `catching_up` but `stale`. |
 | `503` | `the chain authority does not keep up with real time` | `following` / `catching_up` but `authority_pace.state` is `failing`. |
-| `503` | `node position unknown` | `following` / `catching_up` but `node_daa` is not known yet. |
+| `503` | `the cursor block's time is not known yet` | `following` / `catching_up` but `lag_seconds` is `null` (the cursor block's time is learnt at the first step). |
 | `503` | `indexer lag above the first alarm threshold` | `following` / `catching_up` with `lag_seconds` at or above the smallest threshold times 3600. |
 | `503` | `indexer is not following the chain` | any other state (`starting`, `node_unavailable`, `gap`, `stopped`). |
 

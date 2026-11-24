@@ -336,7 +336,7 @@ stretch stay invisible (Part B, 7.4). To keep the history whole after a long out
 * The status line in the log every 10 seconds (`--status-secs`): `status: indexer following, caught up (N DAA behind the node), ...`; with public
   nodes it ends with both hosts and their state. `WARNING:` names what needs you.
 * `GET /v1/health` (locally `http://127.0.0.1:8090/v1/health`, publicly through the tunnel): `state` (`following`,
-  `catching_up`, `node_unavailable`, `gap`), `lag_seconds`, `alarms`, `book_complete`, `authority_pace`, and while catching up
+  `catching_up`, `node_unavailable`, `gap`), `lag_seconds` (the cursor block's age by this host's clock; `lag_daa` is the node's own claim), `alarms`, `book_complete`, `authority_pace`, and while catching up
   `catch_up` (pace and ETA). `authority_pace.state` says whether the node the index follows keeps up with real time, judged every
   second by the cursor block's age on this host's wall clock alone, while the node is answering too (keep the clock on
   NTP): `failing` means it held the index more than 90 s

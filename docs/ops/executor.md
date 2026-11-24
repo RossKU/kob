@@ -3371,13 +3371,22 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   more (14.6 s of chain a second measured; even one at 5 times real time gains 720 s a period), so it is `gaining`, `ok`,
   until it is within 90 s. **Whose time it is:** only time the follower spends waiting on the authority runs the
   period's clock and the budget below. Time it waits on another node (the cross-checking node's copies of KOB
-  transactions, its answers the authority's wait for) or on itself (its database, its own parsing and proof checks, the
-  backoff after its own failure: a storage error, `commit failed`, `database:`, a failed rewind) does not, and the lag it
-  adds moves the period's starting lag up by as much, so it is not the authority's either. The backoff after the
-  authority's own failure and the pause between polls are the authority's. A gap of more than 30 s (`PAUSE_CAP`), on the
-  monotonic clock or between it and the wall clock (the process stopped, the host suspended, a disk that hung, a step of
-  the wall clock), starts the period again from the lag at that moment. A new authority (a handover, a failover switch,
-  a restart of kobd) begins with no period. **A step is bounded too:** the small calls a follower makes at every step
+  transactions, and the backoff after kobd's own refusal to apply an answer no cross-checking node vouched for yet,
+  which ends after `single_after`, 120 s, at most) or on itself (its database, its own parsing and proof checks, the
+  backoff after its own database or storage failure) does not, and the lag it adds moves the period's starting lag up
+  by as much, so it is not the authority's either. Whose time it is comes only from kobd's own code, never from what a
+  node sent: every error, timeout or malformed answer of a call to the authority is the authority's, whatever its text
+  says, and so are the backoff after it and the pause between polls (R7C1-M1). While the authority is asked at the same
+  time as another node (lane proofs while the copies are compared), the time is the authority's. A wait given up in the
+  middle (the step aborted) leaves no label behind (R7C1-M2), kobd's own work is never given up half done, and the
+  bookkeeping of a batch already in the store (the cursor's time, the health report, the floor, the notices) is
+  finished before a step can be given up (R7C1-L1). **A backstop bounds the mix:** a period that began more than **30
+  minutes** ago by the wall clock (`PERIOD_WALL_MAX`), the lag still above 90 s, fails whoever's time it was: the
+  authority is handed over, or with no other node `/v1/health` says `failing`. A gap of more than 30 s (`PAUSE_CAP`), on
+  the monotonic clock or between it and the wall clock (the process stopped, the host suspended, a step of the wall
+  clock), starts the period again from the lag at that moment, the backstop's clock too; a database task that took that
+  long (a disk that hung) starts the period again but not the backstop's clock. A new authority (a handover, a failover
+  switch, a restart of kobd) begins with no period. **A step is bounded too:** the small calls a follower makes at every step
   (the sink, the DAG info, a header, a lane proof) have 30 s (`SMALL_CALL_TIMEOUT`), and a timeout counts against the
   node; `rpc_timeout_secs` (180 s) is left for the large windows of a catch-up. **What a node can hold back, at most:**
   the index within 90 s of real time for good (`ok`, the web uses it); above that, one period: about 270 s of lag from
@@ -3385,8 +3394,8 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   it answers or holds an answer back. **Excursions:** once an authority has kept up (its lag within 90 s), the time the
   follower waits on it with the lag above 90 s is limited to **300 s in any rolling hour** (`EXCURSION_BUDGET`,
   `EXCURSION_WINDOW`); past it, it is `failing` and handed over as for a failed period. Whether it kept up and what it
-  spent follow the node, not the stint: a node that gets the role back within the hour (after a dropped connection, say)
-  carries them on. A node that swings the lag above the tolerance and back within each period (each swing must be
+  spent follow the node, not the stint: a node that gets the role back within the hour (after a dropped connection, or
+  after it was deposed) carries them on (R7C1-L2). A node that swings the lag above the tolerance and back within each period (each swing must be
   followed by a whole period within 90 s) therefore gets two swings at most: before its deposal it holds the lag above
   120 s for at most about 240 s of an hour (two excursions of 180 s and 120 s, each spending its first 30 s rising from
   90 s to 120 s), about 7 %. The catch-up of a stint that began behind is not an excursion (only the period rule applies

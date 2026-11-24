@@ -193,12 +193,17 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   answering): within 90 s it keeps up; above that its lag must fall by
   90 s in every 3 minutes, and once it has kept up it may spend at most 5 minutes in an hour above 90 s, or another node
   takes over (with a single node, `/v1/health` says so). Only the time kobd waits on that node counts: its own database
-  work, a full disk or a slow cross-checking node is not the node's. A public node deposed for it that held back chain
+  work, a full disk or a slow cross-checking node is not the node's; which time is whose comes from kobd's own code, never
+  from the text of a node's answer, and a stretch above 90 s that lasts 30 minutes by the wall clock fails whoever's
+  time it was. A public node deposed for it that held back chain
   its successor then served is kept away 10 minutes, doubling up to 6 hours; nodes the operator configured are never
   kept away. The small node calls of each step (the sink, the DAG info, a header) now time out after 30 s. New in `/v1/health`:
   `authority_pace` (`keeping_up`, `gaining`, `failing`, `unknown`) and `chain_proofs_off`; `ok`, `/v1/health/ready`,
   `caught_up` and `within_lag_tolerance` are false while the authority is `failing`, and `caught_up` also needs the cursor
-  block within 90 s of the host clock. New metrics `kob_indexer_authority_failing`, `kob_indexer_chain_proofs_off` and
+  block within 90 s of the host clock. **Changed:** `lag_seconds` in `/v1/health` and `/v1/health/ready` is now only the
+  cursor block's age by the host clock (it was at least that, or the node's DAA claim when larger), so a node can no
+  longer make the index look behind; it is `null`, and `ready` answers 503 `the cursor block's time is not known yet`,
+  until that time is known. `lag_daa` stays, the node's unverified claim. New metrics `kob_indexer_authority_failing`, `kob_indexer_chain_proofs_off` and
   `kob_indexer_cross_check_alone_seconds_total` (also `cross_check_alone_secs_total` in `/v1/health`). On Unix kobd and
   kob take group and other write off the umask at the start, so the log, the data directory and `--state-dir` pass the
   start check whatever the shell's umask.
