@@ -151,6 +151,11 @@ export function openTokenIdentity(summary: SigningSummary, registry: TokenRegist
   // A first order. The scale is the one the user entered, because no order of the token tells one
   // yet. It is shown with its decimals.
   for (const info of tokens) {
+    if (info && info.openList === true && info.openScale === 'orders') {
+      // the unit is the indexer's market scale (R9FB3-2): said next to the amounts
+      rows.push(row('scale-' + info.covenantId, tr('confirm.openScale.label', { token: longId(info.covenantId) }), tr('confirm.openScale.indexer', { decimals: info.decimals }), 'warn', tr('confirm.openScale.indexerDetail')));
+      continue;
+    }
     if (!info || info.openList !== true || info.openScale !== 'entered') continue;
     const token = longId(info.covenantId);
     rows.push(row('scale-' + info.covenantId, tr('confirm.openScale.label', { token }), tr('confirm.openScale.value', { decimals: info.decimals }), 'warn', tr('confirm.openScale.detail')));

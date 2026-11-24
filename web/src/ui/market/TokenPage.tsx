@@ -492,6 +492,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             </Section>
           ) : info && row.tradable ? (
             <div data-testid="ticket-container">
+              {/* the unit of a token that declares none is the indexer's market scale: said, never shown as the token's own (R9FB3-2) */}
+              {info.openScale === 'orders' ? <Banner tone="info" data-testid="ticket-scale-indexer">{t('market.ticket.scaleIndexer', { decimals: info.decimals })}</Banner> : null}
               {info.openScale === 'entered' ? (
                 <Banner tone="info" data-testid="first-order-entered">
                   {t('market.first.entered', { decimals: info.decimals })}{' '}

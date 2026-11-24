@@ -63,7 +63,9 @@ describe('a pair of open-list tokens is decoded against the registry plus both',
     expect(s.blocking).toEqual([]);
     expect(codes(s.warnings)).not.toContain('token-unlisted');
     const id = openTokenIdentity(s, registry);
-    expect(id.rows.map((r) => r.id).sort()).toEqual([`ext-${A}`, `ext-${B}`].sort());
+    expect(id.rows.map((r) => r.id).filter((x) => x.startsWith('ext-')).sort()).toEqual([`ext-${A}`, `ext-${B}`].sort());
+    // each unit that is the indexer's market scale is said so (R9FB3-2)
+    expect(id.rows.map((r) => r.id).filter((x) => x.startsWith('scale-')).sort()).toEqual([`scale-${A}`, `scale-${B}`].sort());
     expect(id.blocking).toEqual([]);
   });
 
@@ -71,7 +73,7 @@ describe('a pair of open-list tokens is decoded against the registry plus both',
     const registry = registryOfJob(empty, { openTokens: [open(pair.base)] });
     const s = decode(registry);
     expect(codes(s.warnings)).toContain('token-unlisted');
-    expect(openTokenIdentity(s, registry).rows.map((r) => r.id)).toEqual([`ext-${A}`]);
+    expect(openTokenIdentity(s, registry).rows.map((r) => r.id).filter((x) => x.startsWith('ext-'))).toEqual([`ext-${A}`]);
   });
 
   it('a registry token next to an open-list quote: the registry entry stays, the quote alone has a row', () => {
@@ -79,7 +81,7 @@ describe('a pair of open-list tokens is decoded against the registry plus both',
     const reg: TokenRegistry = { ...empty, tokens: [entry], byCovenantId: new Map([[A, entry]]) };
     const registry = registryOfJob(reg, { openTokens: [open(pair.quote)] });
     expect(registry.byCovenantId.get(A)).toBe(entry);
-    expect(openTokenIdentity(decode(registry), registry).rows.map((r) => r.id)).toEqual([`ext-${B}`]);
+    expect(openTokenIdentity(decode(registry), registry).rows.map((r) => r.id).filter((x) => x.startsWith('ext-'))).toEqual([`ext-${B}`]);
   });
 
   it('no open-list token: the registry itself', () => {
