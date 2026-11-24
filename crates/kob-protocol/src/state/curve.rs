@@ -112,7 +112,8 @@ impl CurveAskState {
 
     /// The units sold so far.
     pub fn sold(&self) -> i64 {
-        self.total - self.amount_left
+        // saturating: a hostile state reads as a bound `walk` refuses, never a wrap (R8F1c-3)
+        self.total.saturating_sub(self.amount_left)
     }
 
     /// The current level: `(total - amountLeft) / levelSize`.
@@ -172,8 +173,8 @@ impl CurveAskState {
         if self.level_size <= 0 {
             return 0;
         }
-        let to = (self.level() + CURVE_MAX_CROSS as i64).saturating_mul(self.level_size);
-        (to - self.sold()).min(self.amount_left).max(0)
+        let to = self.level().saturating_add(CURVE_MAX_CROSS as i64).saturating_mul(self.level_size);
+        to.saturating_sub(self.sold()).min(self.amount_left).max(0)
     }
 
     /// The level price of the next unit (`None` when sold out or past the table).
@@ -200,9 +201,12 @@ impl CurveAskState {
             v.push(0x20);
             v.extend_from_slice(b);
         };
-        let int = |v: &mut Vec<u8>, i: i64| {
+        // 8-byte script numbers, sign-magnitude as the covenant reads them (R8F1a-2)
+        let n = |i: i64| super::int8_bytes(i).ok_or_else(|| err("a curve number has no 8-byte script number (i64::MIN)"));
+        let int = |v: &mut Vec<u8>, i: i64| -> Result<(), StateError> {
             v.push(0x08);
-            v.extend_from_slice(&i.to_le_bytes());
+            v.extend_from_slice(&n(i)?);
+            Ok(())
         };
         b32(&mut v, &self.maker);
         b32(&mut v, &self.token_cov_id);
@@ -218,13 +222,13 @@ impl CurveAskState {
             self.total,
             self.amount_left,
         ] {
-            int(&mut v, i);
+            int(&mut v, i)?;
         }
         b32(&mut v, &self.extension_commitment);
         debug_assert_eq!(v.len(), CURVE_TABLE_AT);
         v.extend(push_header(8 * self.table.len())?);
         for p in &self.table {
-            v.extend_from_slice(&p.to_le_bytes());
+            v.extend_from_slice(&n(*p)?);
         }
         Ok(v)
     }
@@ -256,7 +260,8 @@ impl CurveAskState {
             if b[at] != 0x08 {
                 return Err(err(format!("byte {at}: expected an 8-byte push, got {:#04x}", b[at])));
             }
-            *x = i64::from_le_bytes(b[at + 1..at + 9].try_into().expect("8"));
+            *x = super::int8_value(b[at + 1..at + 9].try_into().expect("8"))
+                .ok_or_else(|| err(format!("byte {at}: a negative zero")))?;
             at += 9;
         }
         if b[at] != 0x20 {
@@ -277,7 +282,10 @@ impl CurveAskState {
         if b.len() != at + h + len || len == 0 || len % 8 != 0 || push_header(len)?.len() != h {
             return Err(err(format!("the table push is not a minimal push of whole entries ({} bytes)", b.len() - at)));
         }
-        let table = b[at + h..].chunks(8).map(|c| i64::from_le_bytes(c.try_into().expect("8"))).collect();
+        let table = b[at + h..]
+            .chunks(8)
+            .map(|c| super::int8_value(c.try_into().expect("8")).ok_or_else(|| err("a table entry is a negative zero")))
+            .collect::<Result<Vec<i64>, _>>()?;
         let [tpl_prefix_len, tpl_suffix_len, scale, min_fill, tip, active_from, level_size, total, amount_left] = ints;
         let s = CurveAskState {
             maker,

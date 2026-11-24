@@ -141,8 +141,41 @@ fn block_values(id: TemplateId, d: Delivery) -> Vec<i64> {
     all[..delivery_block(id).unwrap().fields.len()].to_vec()
 }
 
+/// The `0x08` pushes of `values` as the covenants write them (`x as byte[8]`): the engine's own 8-byte script numbers.
 fn int_pushes(values: &[i64]) -> Vec<u8> {
-    values.iter().flat_map(|v| std::iter::once(0x08u8).chain(v.to_le_bytes())).collect()
+    values.iter().flat_map(|v| std::iter::once(0x08u8).chain(engine_int8(*v))).collect()
+}
+
+fn engine_int8(x: i64) -> Vec<u8> {
+    kaspa_txscript::serialize_i64(x, Some(8)).unwrap().to_vec()
+}
+
+/// R8F1a-2: the block fields are 8-byte script numbers, sign-magnitude as the covenants read and write them (the
+/// engine's own codec), never two's complement. "Negative zero" (0 on chain, written by no covenant) is refused rather
+/// than read as `i64::MIN`, and `i64::MIN` has no 8-byte form.
+#[test]
+fn block_fields_are_sign_magnitude_script_numbers() {
+    for x in [0, 1, -1, 2, -2, 0x7f, 0x80, -0x80, 255, -255, 1 << 40, -(1 << 40), 0x80 << 48, i64::MAX, -i64::MAX] {
+        let b = int8_bytes(x).unwrap();
+        assert_eq!(b.to_vec(), engine_int8(x), "{x}");
+        assert_eq!(int8_value(b), Some(x), "{x}");
+        assert_eq!(kaspa_txscript::deserialize_i64(&b).unwrap(), x, "{x}");
+    }
+    assert_eq!(int8_bytes(-1), Some([1, 0, 0, 0, 0, 0, 0, 0x80]));
+    assert_eq!(int8_bytes(i64::MIN), None);
+    let nz = [0, 0, 0, 0, 0, 0, 0, 0x80u8];
+    assert_eq!(kaspa_txscript::deserialize_i64(&nz).unwrap(), 0, "the chain reads negative zero as 0");
+    assert_eq!(int8_value(nz), None);
+    for (id, ..) in SPEC {
+        let b = delivery_block(id).unwrap();
+        let s = with_block(&compiled(id), d(-1, -2, -3, -4));
+        let span = s.try_encode_layout(StateLayout::Delivery).unwrap();
+        assert_eq!(&span[b.legacy_len + 1..b.legacy_len + 9], &engine_int8(-1)[..], "{}: mode -1", id.name());
+        assert_eq!(typed_layout(id, &span).unwrap().0, s, "{}", id.name());
+        let mut bad = span.clone();
+        bad[b.legacy_len + 1..b.legacy_len + 9].copy_from_slice(&nz);
+        assert!(typed_layout(id, &bad).is_err(), "{}: a negative zero mode is refused, never read as i64::MIN", id.name());
+    }
 }
 
 fn any_block(r: &mut Rng) -> Delivery {

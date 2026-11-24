@@ -372,9 +372,40 @@ pub(crate) fn encode_fields(
     }
     for k in appended {
         out.push(0x08);
-        out.extend_from_slice(&block_values.get(*k).copied().unwrap_or(0).to_le_bytes());
+        let x = block_values.get(*k).copied().unwrap_or(0);
+        let b =
+            int8_bytes(x).ok_or_else(|| StateError::Codec(name, format!("{}: `{k}` = {x} has no 8-byte script number", id.name())))?;
+        out.extend_from_slice(&b);
     }
     Ok(out)
+}
+
+/// An 8-byte script number as the covenants write it (`x as byte[8]`, `serialize_i64(x, Some(8))`):
+/// the magnitude little endian, the sign in the top bit of the last byte (sign-magnitude, not two's
+/// complement). `i64::MIN` has no such form.
+pub(crate) fn int8_bytes(x: i64) -> Option<[u8; 8]> {
+    if x == i64::MIN {
+        return None;
+    }
+    let mut b = x.unsigned_abs().to_le_bytes();
+    if x < 0 {
+        b[7] |= 0x80;
+    }
+    Some(b)
+}
+
+/// Reads an 8-byte script number as the covenants do (`int(byte[8](..))`, R8F1a-2).
+///
+/// "Negative zero" (`00 .. 00 80`) is 0 on chain, but no covenant writes it and 0 encodes as
+/// `00 .. 00`: a state holding it could not be rebuilt byte for byte, so it is refused (`None`).
+pub(crate) fn int8_value(b: [u8; 8]) -> Option<i64> {
+    let mut m = b;
+    m[7] &= 0x7f;
+    match (b[7] & 0x80 != 0, i64::from_le_bytes(m)) {
+        (true, 0) => None,
+        (true, v) => Some(-v),
+        (false, v) => Some(v),
+    }
 }
 
 /// Decodes the state span of the template `id` into its field map, and tells its layout.
@@ -410,7 +441,8 @@ pub(crate) fn decode_fields(
             if bytes[at] != 0x08 {
                 return Err(StateError::Codec(name, format!("`{f}` is not an 8-byte push (opcode {:#04x})", bytes[at])));
             }
-            let x = i64::from_le_bytes(bytes[at + 1..at + INT_PUSH].try_into().expect("8"));
+            let x = int8_value(bytes[at + 1..at + INT_PUSH].try_into().expect("8"))
+                .ok_or_else(|| StateError::Codec(name, format!("`{f}` is a negative zero (not a canonical script number)")))?;
             fields.insert(f.to_string(), ArtifactValue::Int(x));
         }
     }
@@ -1806,7 +1838,7 @@ impl CondAskState {
     }
     /// The band floor (the stop-leg's worst price).
     pub fn stop_floor(&self) -> i64 {
-        self.stop_price - band(self.stop_price, self.slip_bps)
+        self.stop_price.saturating_sub(band(self.stop_price, self.slip_bps))
     }
     /// Leg price at time `t`: leg 0 is the take-profit, leg 1 the stop.
     ///
@@ -1849,9 +1881,10 @@ impl CondAskState {
         if self.trail_step <= 0 {
             return 0;
         }
-        let mut steps = (rp - self.trail_gap - self.stop_price).div_euclid(self.trail_step);
+        // saturating: a hostile state yields a bound the caller's checked step refuses, never a wrap (R8F1c-3)
+        let mut steps = rp.saturating_sub(self.trail_gap).saturating_sub(self.stop_price).div_euclid(self.trail_step);
         if self.tp_price > 0 {
-            steps = steps.min((self.tp_price - 1 - self.stop_price).div_euclid(self.trail_step));
+            steps = steps.min(self.tp_price.saturating_sub(1).saturating_sub(self.stop_price).div_euclid(self.trail_step));
         }
         steps.max(0)
     }
@@ -1954,9 +1987,9 @@ impl CondBidState {
         if self.trail_step <= 0 {
             return 0;
         }
-        let steps = (self.stop_price - self.trail_gap - rp).div_euclid(self.trail_step);
+        let steps = self.stop_price.saturating_sub(self.trail_gap).saturating_sub(rp).div_euclid(self.trail_step);
         let floor = self.tp_price.max(0);
-        let floor_steps = (self.stop_price - floor - 1).div_euclid(self.trail_step);
+        let floor_steps = self.stop_price.saturating_sub(floor).saturating_sub(1).div_euclid(self.trail_step);
         steps.min(floor_steps).max(0)
     }
 }
@@ -2022,13 +2055,15 @@ fn repeat_tail(parent: [u8; 32], rpt_price: i64, rpt_pre: Option<i64>, until: i6
     let mut script = vec![0x20];
     script.extend_from_slice(&parent);
     script.push(0x08);
-    script.extend_from_slice(&rpt_price.to_le_bytes());
+    // only called with zeros, to rebuild the committed prefix
+    let n = |x: i64| int8_bytes(x).expect("a repeat field above i64::MIN");
+    script.extend_from_slice(&n(rpt_price));
     if let Some(p) = rpt_pre {
         script.push(0x08);
-        script.extend_from_slice(&p.to_le_bytes());
+        script.extend_from_slice(&n(p));
     }
     script.push(0x08);
-    script.extend_from_slice(&until.to_le_bytes());
+    script.extend_from_slice(&n(until));
     script
 }
 
@@ -2198,7 +2233,7 @@ impl IfdAskState {
     ///
     /// It is the `rptPrice` of a booked exit.
     pub fn proceeds_rate(&self) -> i64 {
-        self.price - self.tip
+        self.price.saturating_sub(self.tip)
     }
     /// Entry quote at time `t` (`None` where the covenant's arithmetic fails).
     pub fn price_at(&self, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
