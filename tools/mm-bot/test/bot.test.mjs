@@ -1975,3 +1975,39 @@ test('a cancel-replace whose replacement is filled in full later still ends the 
     reset();
   }
 });
+
+// R7T-5: the CLI build is read every cycle and before a drop, so a `kob` swapped under a running
+// bot never lets the whole-fill end touch the orders the earlier build placed.
+test('a kob binary swapped under the running bot: no whole-fill end for the earlier build\'s asks; drop reads the build too (R7T-5, R7T-I1)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup({}, WHOLE);
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 4; i++) await bot.cycle();
+    const a = askIds(bot).sort()[0];
+    bot.kob.env.FAKE_KOB_VERSION = 'kob 9.9.9 (another build)';
+    const c = chain();
+    delete c.orders[a];
+    c.ended[a] = 'filled';
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a]);
+    await bot.cycle();
+    assert.equal(bot.cliVersion, 'kob 9.9.9 (another build)', 'read again');
+    assert.ok(bot.state.orders[a], 'not ended on a whole-fill lookup by another build');
+    assert.ok(!bot.state.recent[a]);
+    // The earlier build is back; a stopped bot's drop reads it and applies the whole-fill rule.
+    delete bot.kob.env.FAKE_KOB_VERSION;
+    const again = new Bot(bot.cfg);
+    again.log.quiet = true;
+    again.kob = bot.kob;
+    again.nodeOutputs = async () => [];
+    again.state.templates = bot.state.templates;
+    again.state.templates.cli = 'kob 0.0.0 (fake build)';
+    again.state.templates.kinds = { KobAsk: { hash: TPL.KobAsk, verified: true }, KobBid: { hash: TPL.KobBid, verified: true } };
+    const r = await again.operatorDrop(a);
+    assert.equal(r.ok, true, r.message);
+  } finally {
+    reset();
+  }
+});

@@ -13,7 +13,8 @@ const tx = 'ab'.repeat(32);
 export const TPL = { KobAsk: 'a5'.repeat(32), KobBid: 'b5'.repeat(32) };
 const doc = (extra) => JSON.stringify({ action: 'place limit sell', network: 'testnet-10', plan: {}, issues: [], transaction: { txid: tx, fee: '427000' }, new_covenant_ids: ['cd'.repeat(32)], result: null, ...extra }, null, 2);
 
-if (args[0] === '--version') { process.stdout.write('kob 0.0.0 (fake build)\n'); process.exit(0); }
+// FAKE_KOB_VERSION: another build swapped in under the running bot (R7T-5).
+if (args[0] === '--version') { process.stdout.write(`${process.env.FAKE_KOB_VERSION ?? 'kob 0.0.0 (fake build)'}\n`); process.exit(0); }
 if (mode === 'usage') {
   process.stderr.write('error: the amount needs a unit\n');
   process.exit(2);

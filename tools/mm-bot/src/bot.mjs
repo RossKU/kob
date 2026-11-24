@@ -143,6 +143,18 @@ export class Bot {
     this.nodeOutputs = isJsonWrpc(cfg.node) ? (address, key) => keyOutputs(cfg.node, address, key) : null;
   }
 
+  /**
+   * The CLI build (`kob --version`), read again each cycle and before a drop (R7T-5). A new build
+   * starts its own template proofs; the whole-fill end applies only to orders placed by the build
+   * that answers now. A CLI that does not answer leaves it null: no whole-fill end, the proofs kept.
+   */
+  async readCliVersion() {
+    const v = await this.kob.version();
+    if (v && this.cliVersion && v !== this.cliVersion) this.log.info(`the kob CLI changed: ${this.cliVersion} -> ${v}; its order templates are proven again, and the orders placed by the earlier build are no longer ended on a whole-fill lookup`);
+    if (v && this.state.templates.cli !== v) this.state.templates = { cli: v, kinds: {} };
+    this.cliVersion = v || null;
+  }
+
   stopRequested() {
     return this.stopSignal || existsSync(this.p.stop);
   }
@@ -192,11 +204,9 @@ export class Bot {
     if (!stop) this.logReference(snap);
 
     // A template hash is proven for one CLI build: another build may place under another one.
-    if (this.cliVersion === undefined) {
-      this.cliVersion = await this.kob.version();
-      const t = this.state.templates;
-      if (!this.cliVersion || t.cli !== this.cliVersion) this.state.templates = { cli: this.cliVersion, kinds: {} };
-    }
+    // Read every cycle, before any end decision relies on it (R7T-5): a `kob` binary swapped
+    // under the running bot places under its own templates.
+    await this.readCliVersion();
     this.state.blind = (this.state.blind ?? []).filter((b) => now - b.at < BLIND_KEEP_MS);
     // An order an older version adopted from the indexer is not the bot's (R3T-2).
     for (const [id, s] of Object.entries(this.state.orders)) {
@@ -1327,6 +1337,8 @@ export class Bot {
     if (!s.unconfirmed && !s.parked && !s.proven) return { ok: false, node: null, message: `${short(id)} is not unresolved: the bot tracks it and ends it by itself` };
     const bal = await this.kob.balances(this.cfg.token.covenantId);
     this.maker = bal.maker;
+    // The build that answers now decides whether the whole-fill end applies (R7T-I1, R7T-5).
+    await this.readCliVersion();
     const v = await this.idx.order(id).catch(() => null);
     if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
     const hints = isAsk(s) ? [...new Set([...this.hintsOf(id), ...(Number.isSafeInteger(amountLeft) && amountLeft > 0 ? [amountLeft] : [])])] : [];
