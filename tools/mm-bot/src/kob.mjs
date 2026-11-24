@@ -38,6 +38,18 @@ const NOISE = /^dry run: nothing signed/;
 // the log (R7T-1), through `onNote`.
 const NOTE = /blocks are contended/;
 
+/**
+ * True when the CLI's last error line says nothing was sent (R9T-4): a refusal before signing or
+ * submitting, or a failed engine validation. A submit error (`error: submit: <the node's text>`)
+ * may have been sent whatever the node's text says, so it never counts, as in kob-mcp.
+ */
+export function sentNothing(stderr) {
+  const lines = String(stderr ?? '').split(' | ').map((l) => l.trim()).filter(Boolean);
+  const last = [...lines].reverse().find((l) => /^error\b/i.test(l)) ?? lines.at(-1) ?? '';
+  if (/\bsubmit:/i.test(last)) return false;
+  return /nothing signed|nothing submitted|nothing sent|engine validation failed/i.test(last);
+}
+
 /** A long stderr cut in the middle: the last line, where the CLI says what failed, stays (T-13). */
 export const cutMiddle = (s, n) => (s.length <= n ? s : `${s.slice(0, Math.floor(n / 4))} .. ${s.slice(s.length - (n - Math.floor(n / 4) - 4))}`);
 
@@ -106,7 +118,7 @@ export class Kob {
     const r = await this.exec([...args, ...extra, '--yes']);
     // A failed --yes may have been sent all the same (a lost reply, a node that relays and answers
     // with an error): `sentFee` is its planned fee, to count, unless the CLI says nothing was sent.
-    const sentFee = /nothing signed|nothing submitted|nothing sent|engine validation failed/i.test(r.stderr) ? null
+    const sentFee = sentNothing(r.stderr) ? null
       : Number(r.json?.transaction?.fee ?? r.json?.fee ?? 0) || plannedFee || null;
     // `doc` names what may have gone out (its covenant ids and states): the --yes run's plan, else the dry run's.
     if (r.code !== 0) return { ok: false, error: `exit ${r.code}: ${r.stderr || 'no output'}`, doc: r.json ?? planDoc, sentFee };

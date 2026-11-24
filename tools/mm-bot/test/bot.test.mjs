@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { Bot, PROVEN_KEEP_AFTER_EXPIRY_MS, PROVEN_LOOKUPS, PROVEN_MAX, PROVEN_PASS_BATCH } from '../src/bot.mjs';
 import { DEFAULTS } from '../src/config.mjs';
-import { cutMiddle, Kob } from '../src/kob.mjs';
+import { cutMiddle, Kob, sentNothing } from '../src/kob.mjs';
 import { paths } from '../src/store.mjs';
 import { VERSION_LINE } from './cli-docs.mjs';
 
@@ -2080,6 +2080,7 @@ test('an exact amend not found at either state stays in flight (R8T-4)', () => {
   bot.resolveInflight(s, { status: 'live', txid: 'f1'.repeat(32) });
   assert.equal(s.inflight.length, 0, 'the node holds it at its own outpoint');
 });
+
 // Round 9: quotes never rest as auctions; the CLI's new refusals are ordinary outcomes.
 test('quotes are placed and amended with --crossing reject; a level through the market waits, not counted as a refusal', { timeout: 120_000 }, async () => {
   reset();
@@ -2171,3 +2172,40 @@ test('whole fills: an amend beaten by a full fill is settled on the node at once
   }
 });
 
+// R9T-4: "nothing sent" is the CLI's last error line, and never a submit error's text.
+test('sentNothing reads the last error line, and a submit error is never nothing sent (R9T-4)', () => {
+  assert.equal(sentNothing('error: the plan has errors: nothing signed'), true);
+  assert.equal(sentNothing('note: x | error: the new price crosses the market (best bid at 1): refused, nothing signed. Pass --crossing limit'), true);
+  assert.equal(sentNothing('error: submit: the node says: nothing sent, try later'), false, 'the node\'s text');
+  assert.equal(sentNothing('error: submission failed: orphan'), false);
+});
+
+// R9T-5, R9T-6: refusals count in consecutive cycles only; the alert is once, then daily.
+test('amend refusals count in consecutive cycles only, and alert once (R9T-5, R9T-6)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, dir } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const a = askIds(bot).sort()[0];
+    const s = bot.state.orders[a];
+    // A refusal long ago does not join one now.
+    s.amendRefusals = 1;
+    s.amendRefusedCycle = bot.cycles - 50;
+    bot.kob.env.FAKE_KOB_STRAYS = a;
+    bot.kob.env.FAKE_KOB_CANCEL_FAIL = '1'; // twins over the slots: the node cancel fails too
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle();
+    assert.equal(s.amendRefusals, 1, 'a fresh count');
+    for (let i = 0; i < 6; i++) {
+      for (const x of Object.values(bot.state.orders)) if (x.pending?.kind === 'reread') x.pending = null;
+      await bot.cycle();
+    }
+    assert.equal(alertsOf(dir).filter((x) => x.reason === 'amend-refused').length, 1, 'one alert, then one a day');
+    assert.match(alertsOf(dir).find((x) => x.reason === 'amend-refused').message, /filled or refunded at its expiry/);
+  } finally {
+    delete bot.kob.env.FAKE_KOB_STRAYS;
+    delete bot.kob.env.FAKE_KOB_CANCEL_FAIL;
+    reset();
+  }
+});

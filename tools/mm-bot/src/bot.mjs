@@ -199,6 +199,7 @@ export class Bot {
   /** One cycle. Returns 'stopped' once the bot has stopped. */
   async cycle() {
     const c = this.cfg;
+    this.cycles = (this.cycles ?? 0) + 1;
     const now = Date.now();
     const stop = this.stopRequested();
     const snap = stop ? { ok: false, reason: 'stopping', jump: 0, used: [], dropped: [], venues: {} } : await readReference(c, this.refMemory, now);
@@ -1540,9 +1541,15 @@ export class Bot {
       // shown, never matched.
       const s = this.state.orders[a.id];
       if (a.kind === 'amend' && s && !r.sentFee && !this.dryRun) {
-        s.amendRefusals = (s.amendRefusals ?? 0) + 1;
+        // In consecutive cycles only (R9T-5): an old refusal and a passing one are no pattern.
+        s.amendRefusals = s.amendRefusedCycle != null && this.cycles - s.amendRefusedCycle <= 1 ? (s.amendRefusals ?? 0) + 1 : 1;
+        s.amendRefusedCycle = this.cycles;
         if (s.amendRefusals >= AMEND_REFUSALS) {
-          this.alert('warn', 'amend-refused', `Order ${short(a.id)} (${a.side} L${a.level}): the CLI refused its amend ${s.amendRefusals} times (${r.error}); it is cancelled through the node and its level placed again.`);
+          // One alert, then one a day while it goes on (R9T-6: a cancel can fail too).
+          if (s.amendAlertAt == null || Date.now() - s.amendAlertAt > 86_400_000) {
+            s.amendAlertAt = Date.now();
+            this.alert('warn', 'amend-refused', `Order ${short(a.id)} (${a.side} L${a.level}): the CLI refused its amend ${s.amendRefusals} times (${r.error}); it is cancelled through the node and its level placed again. If that cancel fails too (more units of the order's own custody sent to it than one transaction moves), kob can neither amend nor cancel it: it stays at its terms until it is filled or refunded at its expiry, and nothing is lost.`);
+          }
           s.amendRefusals = 0;
           this.save();
           return this.run1({ kind: 'cancel', id: a.id, side: a.side, level: a.level, reason: 'its amend is refused' });
