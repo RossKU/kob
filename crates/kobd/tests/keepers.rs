@@ -699,3 +699,77 @@ fn a_mode1_bid_refund_needs_the_exact_bought_custody() {
         assert!(r.skipped.iter().any(|(_, w)| w.contains("bought-custody")), "{:?}", r.skipped);
     }
 }
+
+/// R8FX2-1: the operator's own-order sweep (`--sweep-own-strays`) is held to the fee bound of every job. Strays whose KAS
+/// carriers are tuned so that the sweep only fits a block without its change make the fee pass leave the change out, and
+/// the operator's funding coin would go to the fee. Such a sweep is not signed (and is counted); one whose change fits is.
+/// Before, the sweep had no profit check and, at the floor rate, no fee cap: it was signed with the coin as its fee.
+#[test]
+fn an_own_order_sweep_whose_change_does_not_fit_is_not_signed() {
+    let cfg = KeeperConfig { sweep_own_strays: true, ..KeeperConfig::default() };
+    // An own if-done entry (its sweep needs the funding coin) with four foreign groups (four junk tokens sent to it), each
+    // one unit of carrier `v`: one output each, near the covenant output minimum.
+    let run = |v: u64| {
+        let mut entry = l_ifd_bid(3, IfdBidState { rpt_amount: 9 * WHOLE, ..ifd_bid(MATCHER, P260, 4 * WHOLE, T3) }, 1_000);
+        entry.foreign = (0..4u8)
+            .map(|k| {
+                let mut g = foreign_of(cid(3), 77);
+                let tok = [0x60 + k; 32];
+                g.token.covenant_id = tok;
+                g.utxos[0].utxo.covenant_id = Some(tok);
+                g.utxos[0].utxo.transaction_id = [0x5a + k; 32];
+                g.utxos[0].utxo.amount = v;
+                g
+            })
+            .collect();
+        keep_with(vec![entry], NOW, &cfg, false, 1)
+    };
+    // (a job was built, its change is in it)
+    let has_change = |r: &KeeperReport| r.jobs.iter().any(|j| j.built.fee.change_output.is_some());
+    // The largest carrier at which the sweep has no change output: between it and the smallest with one lies the
+    // window where only the change does not fit.
+    let (mut lo, mut hi) = (kob_protocol::tx::COVENANT_OUTPUT_MIN, 200 * KAS);
+    assert!(has_change(&run(hi)), "a sweep with large carriers keeps its change");
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if has_change(&run(mid)) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let mut folded_seen = false;
+    for v in lo.saturating_sub(64)..=lo {
+        let r = run(v);
+        for j in &r.jobs {
+            let f = &j.built.fee;
+            assert!(
+                f.change_output.is_some() || f.fee.saturating_sub(f.min_fee) <= kob_protocol::tx::DUST_OUTPUT_MIN,
+                "carrier {v}: a sweep was signed whose change went to the fee ({} sompi, {} targeted)",
+                f.fee,
+                f.min_fee
+            );
+        }
+        folded_seen |= r.jobs.is_empty() && r.skipped.iter().any(|(_, w)| w.contains("fee bound"));
+    }
+    assert!(folded_seen, "the window where only the change does not fit was found (below {hi})");
+}
+
+/// R8FX2-5: a twin of an order's custody (a unit with exactly the custody's state at another outpoint) is never swept: the
+/// builder refuses a sweep that takes it. The keeper leaves it where it is and sweeps the other strays. Before, it put
+/// the twin in, the builder refused the whole sweep, and every other stray of the token stayed for ever.
+#[test]
+fn an_own_order_sweep_leaves_a_custody_twin_and_sweeps_the_rest() {
+    let mut own = l_ask(2, ask(MATCHER, P250, 5 * WHOLE, T3));
+    let mut twin = own.custody.clone().expect("an ask holds a custody");
+    twin.utxo.transaction_id = [0x6d; 32];
+    let mut other = custody(3 * WHOLE, cid(2), 1_500);
+    other.utxo.transaction_id = [0x6e; 32];
+    own.strays = vec![twin, other];
+    let cfg = KeeperConfig { sweep_own_strays: true, ..KeeperConfig::default() };
+    let r = keep_with(vec![own], NOW, &cfg, false, 1);
+    assert_eq!(kinds(&r), vec![(JobKind::Sweep, cid(2))], "skipped: {:?}", r.skipped);
+    let Action::SweepOrder(req) = &r.jobs[0].action else { panic!() };
+    assert_eq!(req.strays.len(), 1, "the twin stays");
+    assert_eq!(req.strays[0].utxo.transaction_id, [0x6e; 32]);
+}
