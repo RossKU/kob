@@ -137,6 +137,8 @@ test('a lock listed on a merged branch and dropped before the merge: refused, th
   const rec = JSON.parse(readFileSync(join(d, 'out/deployment.json'), 'utf8'));
   assert.deepEqual(rec.locks.map((l) => l.hash), [cur.hash]);
   assert.deepEqual(rec.withdrawn_locks, [w], 'carried over');
+  // Every build says it aloud, with its reason (R7T-4).
+  assert.ok(ok.stderr.includes(`WITHDRAWN lock template KobLockAuto ${oldHash}`) && ok.stderr.includes(w.why), ok.stderr);
   assert.match(readFileSync(join(d, 'out/DEPLOYMENT.md'), 'utf8'), /Withdrawn lock templates/);
   // Deleting the entry later refuses again; so does withdrawing a template that is listed.
   commit(d, [cur], 'drop the withdrawal');
