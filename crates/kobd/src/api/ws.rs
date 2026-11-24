@@ -430,8 +430,12 @@ async fn session(mut socket: WebSocket, app: Arc<App>, _guard: WsGuard) {
                 }
                 if subs.contains(&Channel::Health) {
                     let s = app.state.health.snapshot();
+                    // The present of the public reads (the verified cursor advanced by the wall clock), never the node's
+                    // claimed DAA (R8C2a-I3).
+                    let present = app.ctx().node_daa;
                     let f = frame(&Channel::Health, "health", json!({
-                        "state": s.state, "cursor_daa": s.cursor_daa, "node_daa": s.node_daa, "lag_daa": s.lag_daa(),
+                        "state": s.state, "cursor_daa": s.cursor_daa, "node_daa": present,
+                        "lag_daa": present.map(|p| p.saturating_sub(s.cursor_daa)),
                         "newer_release_seen": s.newer_release_seen,
                     }));
                     if !send(&mut socket, &f).await {
