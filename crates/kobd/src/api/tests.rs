@@ -3452,6 +3452,8 @@ async fn every_public_read_ends_at_the_read_budget() {
         format!("/v1/fills?token={t}&limit=200"),
         format!("/v1/orders?token={t}&status=cancelled&limit=200"),
         format!("/v1/orders?maker={}&status=active&limit=200", h(MAKER)),
+        format!("/v1/orders?maker={}&token={t}&status=active&limit=200", h(MAKER)),
+        format!("/v1/pairs/{}/{}/orders?limit=200", h(BASE), h(QUOTE)),
         format!("/v1/orders/{}", h(0x51)),
         format!("/v1/orders/{}/events?limit=200", h(0x51)),
         format!("/v1/strays?maker={}&limit=200", h(MAKER)),
@@ -3465,10 +3467,22 @@ async fn every_public_read_ends_at_the_read_budget() {
         "/v1/creator-locks?due=1800000000000".to_string(),
     ];
     let app = router(e.state.clone());
+    // the reads an honest flow needs (a ticket's book and depth, its own orders of the token, one order, the token list, a
+    // pair's orders) answer whatever the junk aimed at their filters (R8C2b-I5): the 10^6 junk orders are the maker's, of
+    // the token
+    let honest = |r: &str| {
+        r == "/v1/tokens"
+            || r.starts_with("/v1/books/")
+            || r.starts_with("/v1/depth/")
+            || r.contains("&token=")
+            || r.ends_with(&h(0x51))
+            || r.contains("/orders?limit")
+    };
     // the real budget: bounded answers or a refusal, quickly
     for r in &routes {
         let started = std::time::Instant::now();
         let (s, v) = get(&app, r).await;
+        assert!(!honest(r) || s == StatusCode::OK, "an honest read is refused over the junk: {r}: {s} {v}");
         let ok = s == StatusCode::OK
             || s == StatusCode::NOT_FOUND
             || (s == StatusCode::SERVICE_UNAVAILABLE && v["error"]["code"] == "read_budget");

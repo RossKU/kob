@@ -256,7 +256,17 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   a book takes as fillable come from the store's verified cursor, advanced by the clock, at most 90 s ahead.
 - `/v1/pairs/{base}/{quote}/candles` answers `404` for a token no order names. `/v1/depth` says `truncated` and leaves out
   its worst level when two scales' prices round to one level.
-- An order view that cannot be rendered answers `404`, never `500`, and such an order is in no book.
+- An order view that cannot be rendered answers `404`, never `500`, and such an order is in no book. A fault of the store
+  itself (I/O, corruption, a full disk) answers `503 storage` with `Retry-After: 1`: retry, the order is not unknown.
+- **New: `GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`**, the live orders of one pair, newest first, paged as
+  `/v1/orders`; it reads only that pair's orders, so a client no longer reads both tokens' whole lists to find them.
+- `/v1/tokens` answers `{"tokens": [...], "truncated": bool}`: `truncated` is true when the open list was cut at 5,000 rows
+  (the tokens the chain proves come first). A token's `market_scale` is taken from its 16 oldest orders.
+- `/v1/stats?since=` says `"actors_truncated": true` when `traders` or `executors` of the range reached 50,000 (the counts
+  stop there); the all-time counts are exact.
+- A curve whose only fill KIP-9 allows is its whole rest is ranked and shown by that fill (never one unit at its low
+  price), and a curve's depth stops at the level its executors cannot reach (its 8-level window past the table or below its
+  tip).
 - `kob` follows the live-order list to its end (up to 200 pages); a list it cannot finish raises the own-orders guard instead
   of being taken as whole. `kob orders`, `kob balances` and `kob sweep --all` follow their lists the same way and say when
   one is incomplete (see below).

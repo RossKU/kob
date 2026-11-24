@@ -199,6 +199,7 @@ mod tests {
             "/v1/token-events",
             "/v1/pairs/ab/cd/book",
             "/v1/pairs/ab/cd/fills",
+            "/v1/pairs/ab/cd/orders",
         ] {
             assert_eq!(get(p, ""), live, "{p}");
         }

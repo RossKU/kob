@@ -90,6 +90,7 @@ fn id(conn: &Connection, h: &[u8]) -> i64 {
 
 /// Orders `from..to` of one shape, each with its order UTXO and state, and its exact custody when
 /// `custody`. Covenant ids are `prefix` and the number, the price `price0 + i` (none for `None`).
+#[derive(Clone)]
 struct Seed<'a> {
     prefix: &'a str,
     contract: &'a str,
@@ -1921,6 +1922,60 @@ fn a_status_read_reaches_old_rows_under_every_filter() {
     }
 }
 
+/// R8C2b-1: a maker's status list of one token in history order walks only that maker's orders of that token. 2,000
+/// cancelled orders of maker M on token T lie behind N, then 2 N, newer cancelled orders that share one of the two filters
+/// (other makers on T, and M on other tokens): reading every page costs the same VM steps, and the pages end in time.
+#[test]
+fn a_maker_token_status_read_is_bounded() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let other = [0x5c; 32];
+    let s = Seed {
+        prefix: "z",
+        contract: "KobAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(AnyState::KobAsk(ask(1, 100_000_000)).encode()),
+        price0: Some(100_000_000),
+        remaining: 10 * WHOLE,
+        custody: false,
+        listed: false,
+        maker: pk(1),
+    };
+    seed(&conn, &s, 0, 2_000);
+    let n = 10_000;
+    let more = |from: i64, a: &'static str, b: &'static str| {
+        seed(&conn, &Seed { prefix: a, maker: pk(2), ..s.clone() }, from, from + n);
+        seed(&conn, &Seed { prefix: b, token: other, ..s.clone() }, from + n, from + 2 * n);
+        conn.execute("UPDATE order_state SET status = 'cancelled' WHERE status = 'open'", []).unwrap();
+    };
+    let ctx = ctx();
+    let f = OrderFilter { maker: Some(pk(1).to_vec()), token: Some(Hash32(TOKEN_COV)), status: Some("cancelled".into()) };
+    let read_all = || {
+        let (mut cursor, mut found, mut pages) = (None, 0, 0);
+        loop {
+            let page = orders(&conn, &ctx, &f, 200, cursor.take()).unwrap();
+            found += page.items.len();
+            pages += 1;
+            assert!(pages <= 2_000 / 200 + 3, "{pages} pages and not done ({found} found)");
+            match page.next_cursor {
+                Some(c) => cursor = parse_order_cursor(&c),
+                None => break,
+            }
+        }
+        found
+    };
+    more(2_000, "y", "x");
+    let (found, few) = steps(&conn, read_all);
+    assert_eq!(found, 2_000);
+    more(2_000 + 2 * n, "w", "v");
+    let (found, many) = steps(&conn, read_all);
+    assert_eq!(found, 2_000);
+    flat("orders?maker&token&status, history order", few, many);
+}
+
 /// R7C2b-1: a maker's own takes make no price and are never walked: the price reads range over the priced fills through
 /// their index, so N then 2 N self-takes in front of one priced fill cost the same VM steps for the trades, the
 /// statistics, a pair chart's carry (a window after them) and a lean store's chart.
@@ -2068,6 +2123,80 @@ fn a_rising_bid_and_a_bundled_curve_do_not_set_the_touch() {
     assert_eq!(book_side_sorted(&conn, &ctx, &token, 1, Some(1), false).unwrap().0[0].0 .0, 100_000_000, "the honest best ask");
 }
 
+/// R8C2a-1: a curve whose only valid fill is its whole rest (KIP-9 leaves no partial fill: seven units at a tenth of the
+/// best bid pay less than an output's minimum) is ranked and shown by that fill, the mean of its 8 units, not by one unit
+/// at the low price. Before, `take_min` was the covenant's minimum fill (1) and the curve set a crossed best ask.
+#[test]
+fn a_curve_whose_only_fill_is_its_rest_does_not_set_the_touch() {
+    use kob_protocol::state::CurveAskState;
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let maintain = || crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    maintain();
+    let (token, ctx) = (Hash32(TOKEN_COV), ctx());
+    let honest = serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap();
+    let bb = &honest["best_bid"];
+    let p0 = bb.as_i64().or_else(|| bb.as_str().and_then(|s| s.parse().ok())).expect("an honest best bid") / 10;
+    let (hh, p, sf) = tok_fields(T3);
+    let mut table = vec![1_200_000_000_000_000i64];
+    table.extend([p0; 7]);
+    table.push(10_000_000_000_000_000);
+    let c = CurveAskState {
+        maker: pk(9),
+        token_cov_id: TOKEN_COV,
+        token_tpl_hash: hh,
+        tpl_prefix_len: p,
+        tpl_suffix_len: sf,
+        scale: SCALE,
+        min_fill: 1,
+        tip: 0,
+        active_from: 0,
+        level_size: 1,
+        total: 9,
+        amount_left: 8,
+        extension_commitment: EXT,
+        table,
+    };
+    let mean = crate::model::curve_fill_price(&c, 8).expect("the whole rest walks");
+    seed(
+        &conn,
+        &Seed {
+            prefix: "z",
+            contract: "KobCurveAsk",
+            side: 1,
+            token: TOKEN_COV,
+            quote: None,
+            parent: None,
+            state: Some(AnyState::KobCurveAsk(c).encode()),
+            price0: Some(p0),
+            remaining: 8,
+            custody: true,
+            listed: true,
+            maker: pk(9),
+        },
+        0,
+        1,
+    );
+    maintain();
+    let (take_min, key): (i64, f64) = conn
+        .query_row(
+            "SELECT b.take_min, b.key FROM book_live b JOIN orders o ON o.id = b.order_id WHERE o.contract = 'KobCurveAsk'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(take_min, 8, "the only fill is the whole rest");
+    assert_eq!(key, mean as f64 / SCALE as f64, "ranked by the mean of its 8 units (per base unit)");
+    let now = serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap();
+    for k in ["best_bid", "best_ask", "mid", "spread_bps"] {
+        assert_eq!(now[k], honest[k], "{k}");
+    }
+    let b = serde_json::to_value(book(&conn, &ctx, &token, 200, false).unwrap()).unwrap();
+    let asks = b["asks"].as_array().unwrap();
+    assert!(asks.iter().all(|a| a["price"].as_str() != Some(p0.to_string().as_str())), "no ask at {p0}: {asks:?}");
+}
+
 /// R8: a curve keeps its whole depth. An ordinary curve of 50 levels (a minimum fill no larger than a level) shows its 50
 /// levels, each at its own price and size; the book of depth 200 and the levels the statistics count both see them all.
 #[test]
@@ -2145,4 +2274,204 @@ fn a_fill_copied_without_its_priced_flag_gets_it_at_the_next_open() {
     assert_eq!(priced, 1);
     let ctx = ctx();
     assert_eq!(market::trades(&conn, &ctx, &Hash32(TOKEN_COV), Some(3), None, 10).unwrap().items.len(), 1);
+}
+
+/// R8C2b-2: the token list is bounded by its cap, whatever orders its open tokens have. 5,000 then 10,000 unproven
+/// covenant ids that placements recorded under a strict program, each with 50 orders: the list stays under a fixed VM
+/// step ceiling well below the read budget, keeps the registry's token first, and says `truncated` once it is cut.
+#[test]
+fn the_token_list_does_not_fail_with_open_tokens() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let (hh, ..) = tok_fields(T3);
+    let list = allowlist().with_strict_templates([(
+        Hash32(hh),
+        crate::tokens::StrictTemplate { id: "t3".into(), family: kob_protocol::Family::Kcc20, powers: vec![] },
+    )]);
+    let template = id(&conn, &kob_protocol::artifacts::pinned_hash(TemplateId::KobBid));
+    let maker = id(&conn, &pk(7));
+    let add = |from: i64, to: i64| {
+        let n = "WITH RECURSIVE n(t) AS (SELECT ?1 UNION ALL SELECT t + 1 FROM n WHERE t < ?2 - 1)";
+        let tok = "CAST(printf('f%031d', t) AS BLOB)";
+        conn.execute(&format!("{n} INSERT OR IGNORE INTO ids (h) SELECT {tok} FROM n"), params![from, to]).unwrap();
+        conn.execute(
+            &format!("{n} INSERT INTO token_events (token_cov_id, tpl_hash, kind, txid, block_seq, daa) SELECT {tok}, ?3, 'seen', x'00', 1, 1 FROM n"),
+            params![from, to, hh.to_vec()],
+        )
+        .unwrap();
+        // 50 orders of each token, none listed (placed and cancelled: they stay in the history)
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1) \
+             INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, min_fill, price, tip, \
+             in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed) \
+             SELECT CAST(printf('o%031d', i) AS BLOB), 'KobBid', ?3, 1, 2, ?4, \
+             (SELECT id FROM ids WHERE h = CAST(printf('f%031d', i / 50) AS BLOB)), 1000, 1, 1, 0, 1, 1, x'00', 1 + i, 1 + i, 0 FROM n",
+            params![from * 50, to * 50, template, maker],
+        )
+        .unwrap();
+    };
+    // well below the read budget (5,000,000), whatever orders each token has
+    const CEILING: u64 = 4_000_000;
+    add(0, 5_000);
+    let ((tokens, truncated), few) = steps(&conn, || token_list_page(&conn, &list).unwrap());
+    assert_eq!(tokens[0].covenant_id, Hash32(TOKEN_COV).to_hex(), "the registry's token first");
+    assert_eq!(tokens.len(), 5_001);
+    assert!(!truncated);
+    add(5_000, 10_000);
+    let ((tokens, truncated), many) = steps(&conn, || token_list_page(&conn, &list).unwrap());
+    eprintln!("tokens: {few} VM steps with 5,000 open tokens, {many} with 10,000 (50 orders each)");
+    assert_eq!(tokens[0].covenant_id, Hash32(TOKEN_COV).to_hex(), "the registry's token first");
+    assert!(truncated, "cut at the cap, and says so");
+    assert!(tokens.len() <= 1 + OPEN_TOKEN_ROWS_MAX as usize);
+    assert!(few <= CEILING && many <= CEILING, "{few} / {many} VM steps");
+}
+
+/// R8C2b: a pair's order list (`GET /v1/pairs/{a}/{b}/orders`) reads only that pair's live rows: 30 orders of A / B, then
+/// N and 2 N live pair orders of A with another quote and of another base with B in front of them. Every page costs
+/// the same VM steps, the pages end in time, and they return the pair's 30 orders, newest first, each once.
+#[test]
+fn a_pair_order_list_reads_only_its_pair() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let (a, b, c, d) = (TOKEN_COV, [0x5b; 32], [0x5c; 32], [0x5d; 32]);
+    let s = Seed {
+        prefix: "p",
+        contract: "KobPair",
+        side: 1,
+        token: a,
+        quote: Some(b),
+        parent: None,
+        state: None,
+        price0: None,
+        remaining: 10,
+        custody: false,
+        listed: true,
+        maker: pk(6),
+    };
+    seed(&conn, &s, 0, 30);
+    let (ha, hb, ctx) = (Hash32(a), Hash32(b), ctx());
+    let read_all = || {
+        let (mut cursor, mut seen, mut pages) = (None, Vec::new(), 0);
+        loop {
+            let page = pair_orders(&conn, &ctx, &ha, &hb, 7, cursor.take()).unwrap();
+            seen.extend(page.items.iter().map(|o| (o.genesis.block_seq, o.covenant_id.clone())));
+            pages += 1;
+            assert!(pages <= 30 / 7 + 2, "{pages} pages and not done");
+            match page.next_cursor {
+                Some(c) => cursor = parse_order_cursor(&c),
+                None => break,
+            }
+        }
+        seen
+    };
+    let n = 10_000;
+    seed(&conn, &Seed { prefix: "q", quote: Some(c), ..s.clone() }, 30, 30 + n);
+    seed(&conn, &Seed { prefix: "r", token: d, ..s.clone() }, 30 + n, 30 + 2 * n);
+    let (seen, few) = steps(&conn, read_all);
+    assert_eq!(seen.len(), 30);
+    assert!(seen.windows(2).all(|w| w[0] > w[1]), "newest first, each once");
+    seed(&conn, &Seed { prefix: "t", quote: Some(c), ..s.clone() }, 30 + 2 * n, 30 + 4 * n);
+    seed(&conn, &Seed { prefix: "u", token: d, ..s.clone() }, 30 + 4 * n, 30 + 6 * n);
+    let (again, many) = steps(&conn, read_all);
+    assert_eq!(again, seen);
+    flat("pair orders", few, many);
+}
+
+/// R8C2b-3 and R8C2b-5: one maker's crosses in one block time, and pair-order fills newer than the token's last KAS fill,
+/// do not grow the price reads. N then 2 N cross fills of one transaction pair each (both sides of one maker, so each is
+/// skipped by the newest-price look-back), all at one block time, and N then 2 N pair fills (no KAS price): the statistics
+/// (the newest price before the window, whose cross check is one seek of a transaction's fills) and a chart without `to`
+/// (the newest priced fill time, one seek of the priced fills) cost the same VM steps.
+#[test]
+fn crosses_and_pair_fills_do_not_grow_the_price_reads() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let token = Hash32(TOKEN_COV);
+    let (oid, tid): (i64, i64) =
+        (conn.query_row("SELECT id FROM orders WHERE contract = 'KobAsk' LIMIT 1", [], |r| r.get(0)).unwrap(), id(&conn, &TOKEN_COV));
+    let t0 = 1_700_006_400_000i64;
+    // one honest KAS trade, a day before the crosses
+    conn.execute(
+        "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail) \
+         VALUES (?1, 1, 1, ?2, x'01', 0, 'fill', ?3, 1, 1000, 100000000, 0, '{}')",
+        params![oid, t0 - 86_400_000, tid],
+    )
+    .unwrap();
+    let add = |from: i64, to: i64| {
+        // crosses: the two sides of one transaction, one maker, all at the block time t0
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1) \
+             INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail) \
+             SELECT ?3, 2, 2, ?5, CAST(printf('c%031d', i / 2) AS BLOB), i % 2, 'fill', ?4, 1 + i % 2, 1000, 100000000, 0, '{}' FROM n",
+            params![from, to, oid, tid, t0],
+        )
+        .unwrap();
+        // pair-order fills of the token as base: no KAS price, newer than every KAS fill
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1) \
+             INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail) \
+             SELECT ?3, 3, 3, ?5 + 1000 + i, CAST(printf('q%031d', i) AS BLOB), 0, 'fill', ?4, 1, 1000, NULL, 0, '{}' FROM n",
+            params![from, to, oid, tid, t0],
+        )
+        .unwrap();
+    };
+    let measure = || -> Vec<(&'static str, u64)> {
+        vec![
+            ("newest price before the window", steps(&conn, || market::last_trade_before_for_tests(&conn, &token, t0 + 1)).1),
+            ("newest priced fill time (a chart without to)", steps(&conn, || market::newest_fill_ts_for_tests(&conn, &token)).1),
+        ]
+    };
+    let n = 4_000;
+    add(0, n);
+    let few = measure();
+    add(n, 2 * n);
+    let many = measure();
+    for ((name, a), (_, b)) in few.iter().zip(&many) {
+        flat(name, *a, *b);
+    }
+}
+
+/// R8C2b-I4 and R8C2b-4: a fill without a side is marked unpriced (0, never NULL, so it is not recomputed at every open),
+/// and the all-time actor counts are two counter rows that the triggers keep equal to the table, through inserts and
+/// deletes and a reopening.
+#[test]
+fn a_sideless_fill_is_unpriced_and_the_actor_counts_are_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    let count = |conn: &Connection| -> (i64, i64, i64, i64) {
+        let q = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        (
+            q("SELECT COUNT(*) FROM actors WHERE kind = 1"),
+            q("SELECT n FROM counters WHERE name = 'actors:1'"),
+            q("SELECT COUNT(*) FROM actors WHERE kind = 2"),
+            q("SELECT n FROM counters WHERE name = 'actors:2'"),
+        )
+    };
+    {
+        let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+        honest_book(&conn);
+        let oid: i64 = conn.query_row("SELECT id FROM orders WHERE contract = 'KobAsk' LIMIT 1", [], |r| r.get(0)).unwrap();
+        conn.execute("INSERT INTO scripts (id, spk) VALUES (78, x'0000')", []).unwrap();
+        conn.execute(
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail, executor_id) \
+             VALUES (?1, 1, 1, 1700000000000, x'02', 0, 'fill', ?2, NULL, 1000, 100000000, 0, '{}', 78)",
+            params![oid, id(&conn, &TOKEN_COV)],
+        )
+        .unwrap();
+        let priced: Option<i64> = conn.query_row("SELECT priced FROM order_events WHERE txid = x'02'", [], |r| r.get(0)).unwrap();
+        assert_eq!(priced, Some(0), "a fill without a side makes no price, and is marked so");
+        let (m, mc, e, ec) = count(&conn);
+        assert!(m > 0 && e == 1, "{m} makers, {e} executors");
+        assert_eq!((m, e), (mc, ec));
+        let all = activity::activity(&conn, None).unwrap();
+        assert_eq!((all.traders, all.executors), (m, e));
+        conn.execute("DELETE FROM order_events WHERE txid = x'02'", []).unwrap();
+        let (m, mc, e, ec) = count(&conn);
+        assert_eq!((m, e, mc, ec), (mc, 0, m, 0));
+    }
+    let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+    let (m, mc, e, ec) = count(&conn);
+    assert_eq!((m, e), (mc, ec), "recounted at the open");
 }

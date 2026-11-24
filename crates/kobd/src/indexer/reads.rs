@@ -279,8 +279,10 @@ fn claims_another_program(conn: &Connection, token: &[u8], tpl: &[u8]) -> DbResu
     })
 }
 
-/// Most of a token's orders (oldest first) that [`market_scale`] reads.
-pub const MARKET_SCALE_SCAN_MAX: i64 = 1_000;
+/// Most of a token's orders (oldest first) that [`market_scale`] reads. Small (R8C2b-2): the list reads it for each of up
+/// to [`OPEN_TOKEN_ROWS_MAX`] open tokens, so each costs a few dozen index entries whatever orders anyone placed on it;
+/// the first orders of a market set its scale, so the oldest few say it.
+pub const MARKET_SCALE_SCAN_MAX: i64 = 16;
 
 /// The price scale of the market of a token without `decimals`.
 ///
@@ -376,10 +378,20 @@ pub fn proven_programs(conn: &Connection, token: &[u8]) -> DbResult<Vec<Vec<u8>>
 /// The open part holds the tokens without a registry entry.
 pub const OPEN_TOKEN_ROWS_MAX: i64 = 5_000;
 
-/// The tokens of `GET /v1/tokens`: the allowlist's tokens, then the open list.
-///
-/// Each view carries the open ask and bid counts and the decimals of its token.
+/// The tokens of `GET /v1/tokens`: the allowlist's tokens, then the open list ([`token_list_page`] without its
+/// `truncated`).
 pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<TokenView>> {
+    Ok(token_list_page(conn, tokens)?.0)
+}
+
+/// The tokens of `GET /v1/tokens`: the allowlist's tokens, then the open list, and whether the open list was cut at
+/// [`OPEN_TOKEN_ROWS_MAX`] (R8C2b-2: the list says `truncated` and keeps the tokens the chain proves first, never fails).
+///
+/// Each view carries the open ask and bid counts and the decimals of its token. The work per open token is a constant
+/// number of index seeks ([`MARKET_SCALE_SCAN_MAX`], the two side counts of fillable book rows), so the whole list is
+/// bounded by the cap, whatever orders and placements its tokens have.
+pub fn token_list_page(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<(Vec<TokenView>, bool)> {
+    let mut truncated = false;
     // The orders the books list: each side of each listed token is counted from the rows of its live
     // book that a taker can fill at the store's DAA score (`book_live`, `open` 1: exact custody, not
     // possibly frozen, an amount left, a pinned template, inside its window), by the index alone. At
@@ -440,7 +452,9 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
         // The strict-list programs the rows name, per token. Rows come in token order, rows of
         // listed orders first.
         let mut claimed: Vec<ClaimedPrograms<'_>> = Vec::new();
-        for (cov, tpl, _fam) in open_token_rows(conn, OPEN_TOKEN_ROWS_MAX as usize)? {
+        let (rows, cut) = open_token_rows(conn, OPEN_TOKEN_ROWS_MAX as usize)?;
+        truncated = cut;
+        for (cov, tpl, _fam) in rows {
             let (Ok(cov32), Ok(tpl32)) = (<[u8; 32]>::try_from(cov.as_slice()), <[u8; 32]>::try_from(tpl.as_slice())) else {
                 continue;
             };
@@ -555,7 +569,7 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
             }
         }
     }
-    Ok(out)
+    Ok((out, truncated))
 }
 
 /// The scale every listed order of an open-list token must quote, when its decimals are known
@@ -656,7 +670,8 @@ type OpenTokenRow = (Vec<u8>, Vec<u8>, i64);
 /// token, then family descending (rows of listed orders first), then program. The rows of the
 /// listed orders are read one index seek each (`orders_listed_tokens`), never by reading the
 /// orders, so the read grows with the tokens and not with the history.
-fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>> {
+/// Also says whether the scan stopped at its cap (rows may be left out).
+fn open_token_rows(conn: &Connection, max: usize) -> DbResult<(Vec<OpenTokenRow>, bool)> {
     use std::cmp::Reverse;
     use std::collections::BTreeSet;
     // The scan reads up to four times the rows the list shows. Past `max`, the tokens the chain
@@ -667,6 +682,7 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
     // seen, where the scan of the events keeps the lowest hashes. The rows are put in the order
     // of the hashes below either way.
     let scan_max = max.saturating_mul(4);
+    let mut cut = false;
     // In the list's order: (token, family descending, program). It is a set, so a row named twice
     // is one row.
     let mut rows: BTreeSet<(Vec<u8>, Reverse<i64>, Vec<u8>)> = BTreeSet::new();
@@ -693,6 +709,7 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
         };
         rows.insert((t, Reverse(0), p));
         if rows.len() >= scan_max {
+            cut |= ev_cur.is_some();
             break;
         }
     }
@@ -719,6 +736,7 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
     while let Some((t, p, f)) = cur {
         if last_token.as_ref() != Some(&t) {
             if listed_rows >= scan_max {
+                cut = true;
                 break;
             }
             last_token = Some(t);
@@ -761,9 +779,9 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>>
         let room = max - keep.len();
         keep.extend(rest.into_iter().take(room));
         keep.sort();
-        return Ok(keep.into_iter().map(|(t, f, p)| (t, p, f.0)).collect());
+        return Ok((keep.into_iter().map(|(t, f, p)| (t, p, f.0)).collect(), true));
     }
-    Ok(rows.into_iter().map(|(t, f, p)| (t, p, f.0)).collect())
+    Ok((rows.into_iter().map(|(t, f, p)| (t, p, f.0)).collect(), cut))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1114,9 +1132,15 @@ pub(crate) fn curve_shown(
         let (Some(price), level) = (st.price_now(), st.level()) else { break };
         let in_level = (level.saturating_add(1)).saturating_mul(st.level_size).saturating_sub(st.sold()).min(st.amount_left);
         // the smallest fill inside the level, in closed form (no walk): the first step's is the matcher's
+        // (later steps follow the matcher's rule at that state, its 8-level window included: R8C2a-2; for a curve the numeric
+        // gate admits the window never meets a missing level or one below the tip, so this is the matcher's KIP-9 rule)
         let m = match next.take() {
             Some(m) => Some(m),
-            None => in_level_min(&st, price).filter(|m| *m <= in_level).or_else(|| curve_step_min(&st)),
+            None if window_pays(&st) => {
+                let hi = st.max_fill().min(st.amount_left - 1);
+                in_level_min(&st, price).filter(|m| *m <= in_level && *m <= hi).or_else(|| curve_step_min(&st))
+            }
+            None => curve_step_min(&st),
         };
         let Some(m) = m.filter(|m| *m > 0).map(|m| m.min(st.amount_left)) else { break };
         // fills of at least `m` take the whole level at its price (the last of them takes the rest of it); a level that
@@ -1176,29 +1200,39 @@ fn in_level_min(s: &kob_protocol::state::CurveAskState, price: i64) -> Option<i6
 /// fill can be made.
 pub(crate) fn curve_step_min(s: &kob_protocol::state::CurveAskState) -> Option<i64> {
     let floor = crate::matcher::candidate::KAS_OUTPUT_MIN;
-    let lo = s.min_fill.max(1).min(s.amount_left);
-    let top = s.max_fill();
-    let ok = |n: i64| s.proceeds(n).is_some_and(|p| p >= floor);
-    if lo <= 0 || lo > top {
+    let left = s.amount_left;
+    if left <= 0 {
         return None;
     }
-    if ok(lo) {
-        return Some(lo);
-    }
-    if !ok(top) {
-        // the whole rest, within one fill's walk, closes the order: its payout joins the order's value
-        return (top == s.amount_left && s.proceeds(top).is_some()).then_some(top);
-    }
-    let (mut a, mut b) = (lo, top);
-    while a + 1 < b {
-        let mid = a + (b - a) / 2;
-        if ok(mid) {
-            b = mid;
-        } else {
-            a = mid;
+    // as `matcher::candidate::kip9_limits` for the curve arm: a partial fill exists when the window's largest partial fill
+    // (`max_fill`, at most 8 levels, short of the rest) walks and pays KIP-9's minimum; its smallest is the first `n` that
+    // pays, at least the minimum fill
+    let pays = |n: i64| s.proceeds(n).is_some_and(|p| p >= floor);
+    let hi = s.max_fill().min(left - 1);
+    if hi >= 1 && pays(hi) {
+        let (mut a, mut b) = (0i64, hi);
+        while a + 1 < b {
+            let mid = a + (b - a) / 2;
+            if pays(mid) {
+                b = mid;
+            } else {
+                a = mid;
+            }
+        }
+        let m = s.min_fill.max(1).max(b);
+        if m <= hi {
+            return Some(m);
         }
     }
-    Some(b)
+    // no partial fill: only the whole rest, inside the window (its payout joins the order's value)
+    (left <= s.max_fill() && s.proceeds(left).is_some()).then_some(left)
+}
+
+/// Whether curve `s` has a partial fill at all by the matcher's rule: its window's largest partial fill walks and pays
+/// KIP-9's minimum ([`curve_step_min`]).
+fn window_pays(s: &kob_protocol::state::CurveAskState) -> bool {
+    let hi = s.max_fill().min(s.amount_left - 1);
+    hi >= 1 && s.proceeds(hi).is_some_and(|p| p >= crate::matcher::candidate::KAS_OUTPUT_MIN)
 }
 
 /// Most orders with a fixed quote one read of a book side takes: those a taker can fill now, best
@@ -3098,6 +3132,16 @@ fn status_count(conn: &Connection, statuses: &[&str]) -> DbResult<Option<i64>> {
 /// token, `orders_maker_genesis` for a maker, and `orders_genesis_page` otherwise. A status
 /// filter whose orders are few (`active`, `open`, `partial`: the live set) reads those orders
 /// instead and sorts them. Both give the same rows in the same order.
+/// The indexes a history-order read of a maker's orders of one token walks, as base and as quote (R8C2b-1): both
+/// filters in one index, so the read and its probe walk only the rows of both. Empty without a maker or a token.
+fn maker_token_indexes(f: &OrderFilter) -> (&'static str, &'static str) {
+    if f.maker.is_some() && f.token.is_some() {
+        (" INDEXED BY orders_maker_token_genesis", " INDEXED BY orders_maker_quote_genesis")
+    } else {
+        ("", "")
+    }
+}
+
 pub fn orders(
     conn: &Connection,
     ctx: &ReadCtx,
@@ -3159,13 +3203,14 @@ pub fn orders(
             bconds.push(format!("(o.genesis_block, o.covenant_id) < (?{}, ?{})", bargs.len() - 1, bargs.len()));
         }
         let base = bconds.join(" AND ");
+        let (by_t, by_q) = maker_token_indexes(f);
         let sql = match &f.token {
             Some(t) => {
                 bargs.push(SqlValue::Blob(t.0.to_vec()));
                 let n = bargs.len();
                 format!(
-                    "SELECT o.genesis_block, o.covenant_id FROM orders o WHERE {base} AND o.token_id = (SELECT id FROM ids WHERE h = ?{n}) \
-                     UNION ALL SELECT o.genesis_block, o.covenant_id FROM orders o WHERE {base} \
+                    "SELECT o.genesis_block, o.covenant_id FROM orders o{by_t} WHERE {base} AND o.token_id = (SELECT id FROM ids WHERE h = ?{n}) \
+                     UNION ALL SELECT o.genesis_block, o.covenant_id FROM orders o{by_q} WHERE {base} AND o.quote_id IS NOT NULL \
                      AND o.quote_id = (SELECT id FROM ids WHERE h = ?{n}) AND o.token_id IS NOT (SELECT id FROM ids WHERE h = ?{n}) \
                      ORDER BY 1 DESC, 2 DESC LIMIT 1 OFFSET {ORDERS_SCAN_MAX}"
                 )
@@ -3211,15 +3256,22 @@ pub fn orders(
             )])
         ),
         // One index-ordered read per column, merged. A pair order of A / A is read once, from the
-        // first.
-        Some(n) => format!(
-            "{ORDER_SELECT}{} UNION ALL {ORDER_SELECT}{} ORDER BY 22 DESC, 1 DESC LIMIT ?{lim}",
-            where_(&[format!("o.token_id = (SELECT id FROM ids WHERE h = ?{n})")]),
-            where_(&[
-                format!("o.quote_id = (SELECT id FROM ids WHERE h = ?{n})"),
-                format!("o.token_id IS NOT (SELECT id FROM ids WHERE h = ?{n})")
-            ])
-        ),
+        // first. With a maker too, each read walks the maker's orders of that token only (R8C2b-1).
+        Some(n) => {
+            let (by_t, by_q) = maker_token_indexes(f);
+            let from = "FROM orders o LEFT JOIN";
+            format!(
+                "{}{} UNION ALL {}{} ORDER BY 22 DESC, 1 DESC LIMIT ?{lim}",
+                ORDER_SELECT.replacen(from, &format!("FROM orders o{by_t} LEFT JOIN"), 1),
+                where_(&[format!("o.token_id = (SELECT id FROM ids WHERE h = ?{n})")]),
+                ORDER_SELECT.replacen(from, &format!("FROM orders o{by_q} LEFT JOIN"), 1),
+                where_(&[
+                    "o.quote_id IS NOT NULL".to_string(),
+                    format!("o.quote_id = (SELECT id FROM ids WHERE h = ?{n})"),
+                    format!("o.token_id IS NOT (SELECT id FROM ids WHERE h = ?{n})")
+                ])
+            )
+        }
         None if by_status => {
             format!("{ORDER_SELECT_BY_STATUS}{} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?{lim}", where_(&[]))
         }
@@ -3242,6 +3294,59 @@ pub fn orders(
             if let Ok(id) = Hash32::parse(&v.covenant_id) {
                 attach_holdings(conn, ctx, &id, v)?;
             }
+        }
+    }
+    Ok(Page { items, next_cursor })
+}
+
+/// The live-row states of `pair_live.open` a pair's order list reads, each one keyset range of `pair_live_pair`: not yet
+/// fillable, fillable, past its window, never as it stands, past its day-order deadline.
+const PAIR_OPEN_STATES: [i64; 5] = [0, 1, 2, 3, 4];
+
+/// `GET /v1/pairs/{base}/{quote}/orders`: the live orders of the pair (base A, quote B), newest first, keyset paged by
+/// `<genesis block>:<covenant id>` (R8C2b, the web's own-order check of a pair ticket). One range of `pair_live_pair` per
+/// live state, each at most `limit + 1` index entries, merged; each row is rendered as `GET /v1/orders` renders it (a
+/// template this build does not pin is left out). A page costs at most `5 (limit + 1)` index entries and `limit` order
+/// views, whatever other orders either token has: only orders of the pair itself lengthen the list, and each of them
+/// funds a fill.
+pub fn pair_orders(
+    conn: &Connection,
+    ctx: &ReadCtx,
+    base: &Hash32,
+    quote: &Hash32,
+    limit: usize,
+    cursor: Option<(i64, Vec<u8>)>,
+) -> DbResult<Page<OrderView>> {
+    let after = if cursor.is_some() { " AND (p.genesis_block, p.covenant_id) < (?3, ?4)" } else { "" };
+    let ranges: Vec<String> = PAIR_OPEN_STATES
+        .iter()
+        .map(|open| {
+            format!(
+                "SELECT * FROM (SELECT p.order_id, p.genesis_block, p.covenant_id FROM pair_live p INDEXED BY pair_live_pair \
+                 WHERE p.token_id = (SELECT id FROM ids WHERE h = ?1) AND p.quote_id = (SELECT id FROM ids WHERE h = ?2) \
+                 AND p.open = {open}{after} ORDER BY p.genesis_block DESC, p.covenant_id DESC LIMIT ?5)"
+            )
+        })
+        .collect();
+    let sql = format!("{} ORDER BY 2 DESC, 3 DESC LIMIT ?5", ranges.join(" UNION ALL "));
+    let (b, c) = cursor.map_or((None, None), |(b, c)| (Some(b), Some(c)));
+    let mut rows: Vec<(i64, i64, Vec<u8>)> = conn
+        .prepare_cached(&sql)?
+        .query_map(rusqlite::params![base.0.to_vec(), quote.0.to_vec(), b, c, limit as i64 + 1], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let next_cursor = if rows.len() > limit {
+        rows.truncate(limit);
+        rows.last().map(|(_, b, c)| format!("{b}:{}", hex::encode(c)))
+    } else {
+        None
+    };
+    let mut view = conn.prepare_cached(&format!("{ORDER_SELECT} WHERE o.id = ?1 AND {}", pinned_template()))?;
+    let mut items = Vec::with_capacity(rows.len());
+    for (id, ..) in rows {
+        if let Some(v) = view.query_row([id], |r| order_from_row(r, ctx)).optional()? {
+            items.push(v);
         }
     }
     Ok(Page { items, next_cursor })

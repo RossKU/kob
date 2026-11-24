@@ -123,6 +123,10 @@ pub struct ActivityView {
     ///
     /// Fills recorded without a funding script are not counted.
     pub executors: i64,
+    /// `traders` or `executors` of a range reached [`ACTORS_COUNT_MAX`] and stopped there (at least that many). Absent
+    /// when both are exact; an all-time count is always exact (R8C2b-4).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub actors_truncated: bool,
     /// Deprecated alias of `tips_paid`, as a string in sompi.
     ///
     /// It is not all the executors earn: see `executor_income`.
@@ -182,10 +186,13 @@ pub fn activity(conn: &Connection, since: Option<i64>) -> DbResult<ActivityView>
             })
             .optional()?,
     };
-    let (traders, executors) = match first_seq {
-        None => (0, 0),
-        Some(seq) => (actors_from(conn, 1, seq)?, actors_from(conn, 2, seq)?),
+    let (traders, executors) = match (since, first_seq) {
+        (_, None) => (0, 0),
+        // all time: two rows kept by triggers (`db::ensure_actor_counts`)
+        (None, Some(_)) => (actor_count(conn, 1)?, actor_count(conn, 2)?),
+        (Some(_), Some(seq)) => (actors_from(conn, 1, seq)?, actors_from(conn, 2, seq)?),
     };
+    let actors_truncated = since.is_some() && (traders >= ACTORS_COUNT_MAX || executors >= ACTORS_COUNT_MAX);
     if since.is_none() {
         // Every order ever stored: imported ones too, such as an order a tool wrote without its
         // `create` event, and pruned ones.
@@ -200,6 +207,7 @@ pub fn activity(conn: &Connection, since: Option<i64>) -> DbResult<ActivityView>
         fills: b.fills,
         traders,
         executors,
+        actors_truncated,
         fees_paid: b.tips.to_string(),
         tips_paid: b.tips.to_string(),
         executor_income: b.income.to_string(),
@@ -269,11 +277,22 @@ fn buckets_from(conn: &Connection, from: i64) -> DbResult<Sums> {
     Ok(s)
 }
 
-/// The actors of `kind` (1 makers, 2 executors) active at block `seq` or later.
+/// Most actors of a kind a range's count reads (R8C2b-4): a range with more says `actors_truncated`, at about 4·10^5 VM steps
+/// for both kinds, far below the read budget.
+pub const ACTORS_COUNT_MAX: i64 = 50_000;
+
+/// The actors of `kind` (1 makers, 2 executors) active at block `seq` or later, at most [`ACTORS_COUNT_MAX`].
 fn actors_from(conn: &Connection, kind: i64, seq: i64) -> DbResult<i64> {
     Ok(conn
-        .prepare_cached("SELECT COUNT(*) FROM actors WHERE kind = ?1 AND last_block >= ?2")?
+        .prepare_cached(&format!(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM actors WHERE kind = ?1 AND last_block >= ?2 LIMIT {ACTORS_COUNT_MAX})"
+        ))?
         .query_row(params![kind, seq], |r| r.get(0))?)
+}
+
+/// The actors of `kind` of all time (`counters`).
+fn actor_count(conn: &Connection, kind: i64) -> DbResult<i64> {
+    Ok(conn.query_row("SELECT COALESCE((SELECT n FROM counters WHERE name = 'actors:' || ?1), 0)", [kind], |r| r.get(0))?)
 }
 
 #[cfg(test)]

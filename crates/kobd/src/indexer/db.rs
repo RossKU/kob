@@ -230,6 +230,7 @@ fn migrate(conn: &Connection) -> DbResult<()> {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }
     ensure_kas_locked(conn)?;
+    ensure_actor_counts(conn)?;
     if backfill_candidate_bytes(conn)? {
         tracing::info!("counted the bytes of the KCC-23 candidate preparations once (kept by triggers from now on)");
     }
@@ -519,7 +520,9 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
 /// listing minimum (R6C2a-1, R6C2a-2, R6C2a-I2). 5: the least of both ends of the window (R7C2a-1, R7C2a-3), a curve ranked
 /// and shown by its smallest valid fill (`book_live.take_min`, R7C2a-2). 6: a curve's `levels` count the sequence of its
 /// successive smallest fills, its whole depth (R8).
-pub const BOOK_RULES_VERSION: u32 = 6;
+/// 7: a curve's smallest valid fill is the smallest its rules accept (the whole rest when KIP-9 leaves no partial fill:
+/// R8C2a-1).
+pub const BOOK_RULES_VERSION: u32 = 7;
 
 /// The columns of `book_live` and `pair_live` that a store an earlier build of schema 14 created lacks
 /// (`CREATE TABLE IF NOT EXISTS` keeps an existing table as it is). They are derived: added empty, they
@@ -544,8 +547,9 @@ fn ensure_live_columns(conn: &Connection) -> DbResult<()> {
 }
 
 /// The KAS locked in live order UTXOs, kept in `counters` (`kas_locked`) by triggers on `order_utxos`, so
-/// `/v1/stats?since=` reads one row instead of summing every live UTXO (R7C2b-3). Counted once on a store an earlier
-/// build wrote.
+/// `/v1/stats?since=` reads one row instead of summing every live UTXO (R7C2b-3). Recounted at every open from the live
+/// UTXOs (one range of `order_utxos_spent`): no marker of "counted" is trusted, so a store an older build wrote to after
+/// this one (whose triggers it lacked) is right again at the next open (R8C2b-I4).
 fn ensure_kas_locked(conn: &Connection) -> DbResult<()> {
     let live = |r: &str| format!("CASE WHEN {r}.spent_block IS NULL THEN COALESCE({r}.value, 0) ELSE 0 END");
     let add = |e: String| {
@@ -559,24 +563,43 @@ fn ensure_kas_locked(conn: &Connection) -> DbResult<()> {
         add(format!("{} - {}", live("NEW"), live("OLD"))),
         add(format!("-{}", live("OLD")))
     ))?;
-    let have: bool = conn.prepare("SELECT 1 FROM counters WHERE name = 'kas_locked'")?.exists([])?;
-    if !have || meta_get(conn, "kas_locked")?.as_deref() != Some("1") {
-        conn.execute(
-            "INSERT INTO counters (name, n) SELECT 'kas_locked', COALESCE(SUM(value), 0) FROM order_utxos WHERE spent_block IS NULL \
-             ON CONFLICT(name) DO UPDATE SET n = excluded.n",
-            [],
-        )?;
-        meta_set(conn, "kas_locked", "1")?;
-    }
+    conn.execute(
+        "INSERT INTO counters (name, n) SELECT 'kas_locked', COALESCE(SUM(value), 0) FROM order_utxos WHERE spent_block IS NULL \
+         ON CONFLICT(name) DO UPDATE SET n = excluded.n",
+        [],
+    )?;
+    Ok(())
+}
+
+/// The actors of each kind of all time, kept in `counters` (`actors:1` makers, `actors:2` executors) by triggers on
+/// `actors`, so the all-time `/v1/stats` reads two rows instead of counting the table (R8C2b-4). Recounted at every
+/// open (no marker is trusted).
+fn ensure_actor_counts(conn: &Connection) -> DbResult<()> {
+    let bump = |kind: &str, d: &str| {
+        format!("INSERT INTO counters (name, n) VALUES ('actors:' || {kind}, {d}) ON CONFLICT(name) DO UPDATE SET n = n + excluded.n;")
+    };
+    conn.execute_batch(&format!(
+        "CREATE TRIGGER IF NOT EXISTS actors_count_ins AFTER INSERT ON actors BEGIN {} END; \
+         CREATE TRIGGER IF NOT EXISTS actors_count_del AFTER DELETE ON actors BEGIN {} END; \
+         CREATE TRIGGER IF NOT EXISTS actors_count_upd AFTER UPDATE OF kind ON actors WHEN OLD.kind IS NOT NEW.kind BEGIN {} {} END; \
+         DELETE FROM counters WHERE name IN ('actors:1', 'actors:2'); \
+         INSERT INTO counters (name, n) SELECT 'actors:' || k, (SELECT COUNT(*) FROM actors WHERE kind = k) FROM (SELECT 1 AS k UNION ALL SELECT 2);",
+        bump("NEW.kind", "1"),
+        bump("OLD.kind", "-1"),
+        bump("OLD.kind", "-1"),
+        bump("NEW.kind", "1"),
+    ))?;
     Ok(())
 }
 
 /// Whether a fill (the row `e`, written `NEW` in a trigger and `order_events` in an update: a trigger takes no alias)
-/// makes a price: a positive amount at a price on a side, not a take its own maker's key paid for.
-const PRICED_EXPR: &str = "(e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2) AND NOT EXISTS \
+/// makes a price: a positive amount at a price on a side, not a take its own maker's key paid for. Never NULL (a NULL
+/// side is 0, not "unknown", so the row leaves `order_events_unpriced`: R8C2b-I4).
+const PRICED_EXPR: &str =
+    "COALESCE((e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2) AND NOT EXISTS \
     (SELECT 1 FROM scripts sc JOIN orders o ON o.id = e.order_id WHERE sc.id = e.executor_id AND length(sc.spk) = 36 \
      AND substr(sc.spk, 1, 3) = x'000020' AND substr(sc.spk, 36, 1) = x'ac' \
-     AND substr(sc.spk, 4, 32) = (SELECT mk.h FROM ids mk WHERE mk.id = o.maker_id)))";
+     AND substr(sc.spk, 4, 32) = (SELECT mk.h FROM ids mk WHERE mk.id = o.maker_id))), 0)";
 
 /// The stored "priced" flag of every fill (R7C2b-1): the column (an earlier store gains it), the triggers that set it at
 /// every write of a fill, its two partial indexes, and once the flag of the fills an earlier build wrote. Returns the
@@ -587,9 +610,14 @@ pub(crate) fn ensure_priced_fills(conn: &Connection) -> DbResult<usize> {
         conn.execute_batch("ALTER TABLE order_events ADD COLUMN priced INTEGER")?;
     }
     let set = format!("UPDATE order_events SET priced = {} WHERE id = NEW.id;", PRICED_EXPR.replace("e.", "NEW."));
+    // The triggers are this build's whatever an earlier build created under the same names (`IF NOT EXISTS` keeps an
+    // older body): they are recreated at every open. `order_events_priced_tx` serves the cross check of
+    // `market::NEWEST_PRICED`: one seek of a transaction's priced fills, not every fill of a block time (R8C2b-3).
+    conn.execute_batch("DROP TRIGGER IF EXISTS order_events_priced_ins; DROP TRIGGER IF EXISTS order_events_priced_upd;")?;
     conn.execute_batch(&format!(
         "CREATE INDEX IF NOT EXISTS order_events_priced ON order_events (token_id, id) WHERE kind = 'fill' AND priced = 1; \
          CREATE INDEX IF NOT EXISTS order_events_priced_ts ON order_events (token_id, ts) WHERE kind = 'fill' AND priced = 1; \
+         CREATE INDEX IF NOT EXISTS order_events_priced_tx ON order_events (token_id, txid) WHERE kind = 'fill' AND priced = 1; \
          CREATE INDEX IF NOT EXISTS order_events_unpriced ON order_events (id) WHERE kind = 'fill' AND priced IS NULL; \
          CREATE TRIGGER IF NOT EXISTS order_events_priced_ins AFTER INSERT ON order_events WHEN NEW.kind = 'fill' BEGIN {} END; \
          CREATE TRIGGER IF NOT EXISTS order_events_priced_upd AFTER UPDATE OF executor_id, amount, price, side, order_id ON order_events \

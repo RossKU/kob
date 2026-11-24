@@ -45,7 +45,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 
 ### Routes
 
-The list below is the router (`api/mod.rs`, `build()`), in registration order: 23 routes, plus `GET /v1/metrics` as the 24th
+The list below is the router (`api/mod.rs`, `build()`), in registration order: 24 routes (1-23 and 9b), plus `GET /v1/metrics` as the 24th
 only when `[api] metrics = true` (the default), the KAS price route (25) only when `[api] usd_price = true` (default false), the two logo routes (26, 27) only when `[logo_reports] enabled = true` (default false), and the two vote routes (29, 30) only when `[logo_votes] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
 (`heavy_route_cost`, default 5). "Cached" marks the reads kept in the response cache (section 5.6).
 
@@ -60,6 +60,7 @@ only when `[api] metrics = true` (the default), the KAS price route (25) only wh
 | 7 | `GET /v1/pairs/{base}/{quote}/book` | [3.7](#37-pairs) | H | yes |
 | 8 | `GET /v1/pairs/{base}/{quote}/candles` | [3.7](#37-pairs) | H | yes |
 | 9 | `GET /v1/pairs/{base}/{quote}/fills` | [3.7](#37-pairs) | H | no |
+| 9b | `GET /v1/pairs/{base}/{quote}/orders` | [3.7](#37-pairs) | H | yes |
 | 10 | `GET /v1/orders` | [3.8](#38-get-v1orders) | H | yes |
 | 11 | `GET /v1/orders/{covenant_id}` | [3.9](#39-get-v1orderscovenant_id) | 1 | no |
 | 12 | `GET /v1/orders/{covenant_id}/events` | [3.10](#310-get-v1orderscovenant_idevents) | 1 | no |
@@ -147,6 +148,7 @@ lists the omitted ones).
 | `/v1/fills` | newest first | `before=` (an event id) | id of the last fill |
 | `/v1/trades/{token}` | newest first | `before=` (a trade id) | id of the last trade |
 | `/v1/pairs/{base}/{quote}/fills` | newest first | `before=` (a fill id) | id of the last fill |
+| `/v1/pairs/{base}/{quote}/orders` | newest first | `cursor=` | `<genesis block seq>:<covenant id>` of the last item |
 | `/v1/token-utxos` | oldest first | `cursor=` | `<created block seq>:<txid>:<index>` of the last item |
 | `/v1/creator-locks` | oldest genesis first | `cursor=` | `<genesis block seq>:<covenant id>` of the last declaration read |
 | `/v1/strays`, `/v1/token-events` | newest / oldest first | none: `{"items": [...]}` only | (no cursor; `limit` is the only control) |
@@ -394,7 +396,9 @@ on a listener the public reaches ([ops/chart-server.md](ops/chart-server.md), se
 ### 3.4 `GET /v1/tokens`
 
 Tokens the indexer lists: the registry/allowlist entries plus, when a program allowlist is loaded, every token of a supported
-program that an order placement named (at most 5000 such rows). No parameters. Cached. Response `{"tokens": [TokenView]}`.
+program that an order placement named (at most 5000 such rows). No parameters. Cached. Response `{"tokens": [TokenView], "truncated": bool}`.
+`truncated` is true when the open part was cut at 5000 rows: the tokens the chain proves (a holding exists) are kept first, and the
+list never fails for its size (each token costs a fixed number of index seeks, `docs/ops/api-bounds.md`).
 
 ```
 curl -s $API/v1/tokens
@@ -407,7 +411,7 @@ curl -s $API/v1/tokens
     "registry": { "source": "file:tokens.json", "sha256": "<hex32>" },
     "genesis_verified": null, "warnings": ["genesis_unverified"], "powers": [], "template_id": "kcc20-ref-3x3",
     "open_asks": 4, "open_bids": 3, "declaration": true
-} ] }
+} ], "truncated": false }
 ```
 
 | Field | Type | Meaning |
@@ -420,7 +424,7 @@ curl -s $API/v1/tokens
 | `decimals` | number or null | The token's decimals: its verified KCC-23 declaration, else its registry entry, else the default of its token program (KaspaRocket 3); `null` when none of them says. |
 | `decimals_source` | `"declaration"`, `"registry"`, `"program"`, **omitted** | Where `decimals` come from; omitted with `decimals: null`. |
 | `scale` | number or null | The standard scale `10^decimals` (at most `10^9`) of a registry entry that has `decimals`; `null` otherwise. A token whose decimals are derived (a declaration, a program default) lists only orders at `10^min(decimals, 9)` too (reason `non_standard_scale` otherwise), so its market scale is that one. |
-| `market_scale` | number or null | Only for a token without any `decimals`: the scale of its earliest listed order, which stays the market's scale; `null` otherwise (a token with `decimals` has its scale from them). |
+| `market_scale` | number or null | Only for a token without any `decimals`: the scale of its earliest listed order (among its 16 oldest orders; the earliest order when none of them was listed), which stays the market's scale; `null` otherwise (a token with `decimals` has its scale from them). |
 | `program_ambiguous`, `candidate_templates` | `true`, array of hex; **omitted** | Present only when order placements name more than one strict-list program for the covenant id. The indexer holds no token output to tell which is the token's, so it names none: `template_hash`, `template_id`, `family` and `extension_commitment` are `null` and `candidate_templates` lists the claims. A client proves the program from a token output the node confirms, or does not trade the token. |
 | `registry` | object or null | The registry document the facts come from: `source` (`file:<file name>` without its directories, or `embedded:registry/tokens.json`) and `sha256` of its exact bytes. The operator's copy, not chain data. |
 | `genesis_verified` | bool or null | The registry's fact: every genesis output was checked against the pinned program; `null` when it does not say. |
@@ -592,6 +596,14 @@ are the bounds the two series allow, not observed trades. `pair_volume_*` and `p
 `side` is `ask` (the order sold A) or `bid`. `counterparty` is `route`, `netting` or `inventory`. `price_source` is always `none`:
 a pair fill is volume only and never sets a price. `volume_24h` counts each transaction once like the candles (a netting fill is one, `fills` counts transactions) and covers the 24 hours ending at the newer of the newest chain block
 time the indexer has recorded and its wall clock (as `/v1/stats/{token}`); `window_truncated` is true when the day held more than 20,000 pair-fill rows and the figures cover the newest ones (whole transactions only). `amount_b`, `price`, `price_num`, `price_den`, `tip_kas` may be null.
+
+**`GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`** (`limit` default 50, at most `max_page_size`; `cursor` as `/v1/orders`):
+the live orders of the pair (base A, quote B, as the pair book reads them), newest first, keyset paged. It reads only the
+pair's own live rows (`pair_live`), whatever other orders either token has: fillable or not yet, past their window, not
+fillable as they stand, past a day-order deadline. Each item is the order view of `GET /v1/orders` (section 3.8); an order
+under a template this build does not pin is left out. The reverse direction is the same route with the tokens swapped.
+Response `{"items": [OrderView], "next_cursor": "<block>:<covenant id>" | null}`. Cached (S, keyed by the pair, `cursor` and
+`limit`). `400` when `base == quote`, an id is not 32 bytes of hex or the cursor is invalid.
 
 ### 3.8 `GET /v1/orders`
 
@@ -1115,6 +1127,9 @@ one index range whatever the size of the history, and a reorg takes its blocks o
   "executor_net": "102780000000", "executor_net_txs": 118, "kas_locked": "880000000000" }
 ```
 
+* `actors_truncated` (`true`, **omitted**): present only when `traders` or `executors` of a range (`since`) reached 50,000 and the count
+  stopped there ("at least"). The all-time counts are exact (two counters kept by triggers).
+
 * `orders`: orders placed in the range, of every kind, listed or not (the chain's placements, not the book's listings): the `create` events at
   or after `since`. All time is the store's order counter.
 * `fills` (number): the fill events in the range (a transaction that fills three orders is three).
@@ -1367,6 +1382,7 @@ Every error the handlers and the guard produce is JSON:
 | 500 | `internal` | A database or serialisation error ("internal error"); logged server side. | no |
 | 503 | `overloaded` | `max_concurrent_requests` requests already in flight (rejected at once, not queued), or the client's own requests in flight and waiting are full (section 5.3). | 1 |
 | 503 | `db_busy` | SQLite reported the database busy or locked ("database busy, retry shortly"). | 1 |
+| 503 | `storage` | `GET /v1/orders/{covenant_id}` met a fault of the store itself (I/O, corruption, a full disk, memory): the order is not unknown, retry. An order the view cannot render is a `404` ("this order cannot be shown"). | 1 |
 | 503 | `read_budget` | The read ran past its budget of work (5,000,000 SQLite steps or 1.5 s of read time per request, `docs/ops/api-bounds.md`, "The read budget"); a cached key that hit it is refused for a second. No honest read comes near it. | 1 |
 | 503 | `ws_capacity` | WebSocket upgrade over `max_ws_connections`. | 5 |
 | 504 | `timeout` | The request ran longer than `request_timeout_ms` ("request timed out"). | no |
