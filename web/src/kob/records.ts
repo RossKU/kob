@@ -1005,7 +1005,8 @@ async function findCustody(
     const program = tokenProgramOf(kob, tok ? tok.tplHash : tokenTplHashOf(state));
     const family = tok ? (tok.family ?? 'kcc20') : familyOfOrder(state);
     const placed = k === 0 ? record.custody?.tokenState : record.prefund?.tokenState;
-    const ext = (k === 0 ? recordExt(record) : null) ?? (placed ? extensionOfState(placed) : null) ?? pairExtFor(state, c.token) ?? (k === 0 && !pf ? extensionOf(state) : null);
+    // the class the order's state pins first: a record's ext can come from an indexer (R9FB-3)
+    const ext = pairExtFor(state, c.token) ?? (k === 0 && !pf ? extensionOf(state) : null) ?? (k === 0 ? recordExt(record) : null) ?? (placed ? extensionOfState(placed) : null);
     if (!program) return { utxo: null, issue: 'not-found' };
     if (family === 'kcc20' && !ext) return { utxo: null, issue: 'no-extension' };
     const st = custodyState(family, c.amount, record.covenantId, ext);
