@@ -402,11 +402,52 @@ pub fn scan_candles(
 /// token at this basis, else from the fills ([`scan_candles`]).
 ///
 /// The candles are the same either way.
-fn window_candles(conn: &Connection, token: &Hash32, basis: i128, iv: i64, from: i64, to: i64, keep: usize) -> DbResult<Vec<Candle>> {
+///
+/// A read the aggregates cannot answer (a lean store, a token not backfilled yet, a changed price
+/// basis) reads at most [`CANDLE_SCAN_ROWS_MAX`] fills, the newest, and says so (the flag): no
+/// request scans fills without a bound (R6C2b-1).
+fn window_candles(
+    conn: &Connection,
+    token: &Hash32,
+    basis: i128,
+    iv: i64,
+    from: i64,
+    to: i64,
+    keep: usize,
+) -> DbResult<(Vec<Candle>, bool)> {
     match super::candles::read(conn, token, basis, iv, from, to, keep)? {
-        Some(v) => Ok(v),
-        None => scan_candles(conn, token, basis, iv, from, to, keep),
+        Some(v) => Ok((v, false)),
+        None => scan_candles_capped(conn, token, basis, iv, from, to, keep),
     }
+}
+
+/// Most fills one chart read takes from the fills, when the aggregates cannot answer it: about
+/// 50 ms in the test profile.
+pub const CANDLE_SCAN_ROWS_MAX: usize = 30_000;
+
+/// [`scan_candles`] of at most [`CANDLE_SCAN_ROWS_MAX`] fills of the window, the newest, and whether
+/// older ones were left out (the oldest candle may then be partial).
+fn scan_candles_capped(
+    conn: &Connection,
+    token: &Hash32,
+    basis: i128,
+    iv: i64,
+    from: i64,
+    to: i64,
+    keep: usize,
+) -> DbResult<(Vec<Candle>, bool)> {
+    let mut out: VecDeque<Candle> = VecDeque::new();
+    if to <= from || iv <= 0 || keep == 0 {
+        return Ok((vec![], false));
+    }
+    let (rows, truncated) = fills_between(conn, token, from, to, CANDLE_SCAN_ROWS_MAX)?;
+    for t in trades_of(rows, basis) {
+        add_trade(&mut out, &t, iv);
+        if out.len() > keep {
+            out.pop_front();
+        }
+    }
+    Ok((out.into(), truncated))
 }
 
 /// Fills of `token` with `from <= ts < to`, and whether older rows in the window were left out.
@@ -475,7 +516,7 @@ pub fn candle_series(
     start: i64,
     end: i64,
     keep: usize,
-) -> DbResult<Vec<Candle>> {
+) -> DbResult<(Vec<Candle>, bool)> {
     window_candles(conn, token, basis, interval, start, end, keep)
 }
 
@@ -635,6 +676,19 @@ pub struct CandlesView {
     pub price_basis: String,
     pub decimals: Option<u32>,
     pub items: Vec<CandleView>,
+    /// The read could not use the aggregates and took only the newest [`CANDLE_SCAN_ROWS_MAX`]
+    /// fills of the window: older candles may be missing and the oldest partial. Not sent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+
+/// `[start, end)` widened to whole buckets of `iv`: a chart answers in whole buckets, the open one
+/// whole up to now, so no read scans the fills of a partial bucket at an edge (R6C2b-1).
+pub(crate) fn whole_buckets(start: i64, end: i64, iv: i64) -> (i64, i64) {
+    let iv = iv.max(1);
+    let down = |x: i64| x.div_euclid(iv).saturating_mul(iv);
+    let up = |x: i64| if down(x) == x { x } else { down(x).saturating_add(iv) };
+    (down(start), up(end))
 }
 
 /// OHLCV candles of `token`.
@@ -660,9 +714,10 @@ pub fn candles(
     };
     // Saturating: `to=-9223372036854775808` wrapped in release and panicked in debug here.
     let start = from.unwrap_or_else(|| end.saturating_sub(iv.saturating_mul(limit as i64)));
+    let (start, end) = whole_buckets(start, end, iv);
     // Every fill of the window counts, with no row cap, and the newest `limit` candles of it are
     // kept. An empty or inverted window has none.
-    let items = if end > start { window_candles(conn, token, basis, iv, start, end, limit)? } else { vec![] };
+    let (items, truncated) = if end > start { window_candles(conn, token, basis, iv, start, end, limit)? } else { (vec![], false) };
     Ok(CandlesView {
         token: token.to_hex(),
         interval: interval.to_string(),
@@ -681,6 +736,7 @@ pub fn candles(
                 trades: c.trades,
             })
             .collect(),
+        truncated,
     })
 }
 
@@ -804,7 +860,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
         let sign = if side == 2 { -1.0 } else { 1.0 };
         // A row of a ranked range worse than the best so far is not decoded (R5C2-6).
         let enough = |key: f64| best.get().is_some_and(|(bp, bs)| reads::worse(key, sign * bp as f64 / bs as f64));
-        let (cut, n) = reads::for_each_resting(conn, ctx, token, side, false, enough, |levels, scale, _| {
+        let (cut, n) = reads::for_each_resting(conn, ctx, token, side, false, enough, |levels, scale, _, _| {
             let s = scale.max(1);
             for (_, p, _) in levels {
                 let best_now = best.get();
@@ -842,7 +898,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
             side,
             false,
             |key| reads::worse(key, edge),
-            |levels, scale, _| {
+            |levels, scale, _, _| {
                 let s = scale.max(1);
                 for (_, p, amount) in levels {
                     let at = per_basis(p, s, basis).saturating_mul(100);
@@ -949,6 +1005,9 @@ pub struct DepthLevel {
     /// Sompi: the cumulative amounts at their level prices, rounded down per level.
     pub cum_quote: String,
     pub estimated: bool,
+    /// Every order of the level is dust (only with `include_dust`). Not sent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dust: bool,
 }
 
 /// The depth snapshot of one token: the levels of both sides, best first.
@@ -964,6 +1023,14 @@ pub struct DepthView {
     /// The book read was cut (`reads::BookView::truncated`). Not sent when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
+    /// The dust orders left out (or, with `include_dust`, held) (`reads::BookView::dust_orders`). Not
+    /// sent when 0.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub dust_orders: i64,
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 
 /// One aggregated book level in per-basis terms, before merging: (price, amount, orders,
@@ -999,6 +1066,7 @@ pub fn depth_side(raw: &[RawLevel], basis: i128, levels: usize) -> Vec<DepthLeve
                 cum_amount: cum_a.to_string(),
                 cum_quote: cum_q.to_string(),
                 estimated: e,
+                dust: false,
             }
         })
         .collect()
@@ -1006,9 +1074,53 @@ pub fn depth_side(raw: &[RawLevel], basis: i128, levels: usize) -> Vec<DepthLeve
 
 /// The depth snapshot of `token`, with at most `levels` merged levels per side.
 pub fn depth(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<u32>, levels: usize) -> DbResult<DepthView> {
+    depth_with(conn, ctx, token, decimals, levels, false)
+}
+
+/// [`depth`], with the dust range when `include_dust`, its levels marked `dust` (R6B-L2).
+pub fn depth_with(
+    conn: &Connection,
+    ctx: &ReadCtx,
+    token: &Hash32,
+    decimals: Option<u32>,
+    levels: usize,
+    include_dust: bool,
+) -> DbResult<DepthView> {
     let basis = price_basis(conn, token, decimals)?;
-    // Fetch generously, because several (price, scale) rows can merge into one per-basis level.
-    let b = reads::book(conn, ctx, token, levels.saturating_mul(4).max(1), true)?;
+    // Every scale at the best `levels` prices per base unit (R6C2b-2). Those merge into `levels` per-basis levels unless
+    // the per-basis rounding joins two of them; only then is the book read again generously.
+    let (mut b, full) = reads::book_by_unit_price(conn, ctx, token, levels.max(1), include_dust)?;
+    let merged = |s: &BookSide| match s {
+        BookSide::Levels(ls) => {
+            let mut v: Vec<i128> = ls.iter().filter_map(|l| Some(per_basis(l.price.parse().ok()?, l.scale, basis))).collect();
+            v.sort_unstable();
+            v.dedup();
+            v.len()
+        }
+        BookSide::Orders(_) => 0,
+    };
+    if (full[0] && merged(&b.asks) < levels) || (full[1] && merged(&b.bids) < levels) {
+        b = reads::book_with(conn, ctx, token, levels.saturating_mul(4).max(1), true, include_dust)?;
+    }
+    // The per-basis prices where every merged level is dust.
+    let dust_at = |s: &BookSide| -> BTreeMap<i128, bool> {
+        let mut m = BTreeMap::new();
+        if let BookSide::Levels(ls) = s {
+            for l in ls {
+                if let Ok(p) = l.price.parse::<i64>() {
+                    let e = m.entry(per_basis(p, l.scale, basis)).or_insert(true);
+                    *e &= l.dust;
+                }
+            }
+        }
+        m
+    };
+    let mark = |mut v: Vec<DepthLevel>, m: BTreeMap<i128, bool>| -> Vec<DepthLevel> {
+        for l in v.iter_mut() {
+            l.dust = l.price.parse::<i128>().ok().and_then(|p| m.get(&p).copied()).unwrap_or(false);
+        }
+        v
+    };
     let raw = |s: &BookSide, ask: bool| -> Vec<RawLevel> {
         let mut v: Vec<RawLevel> = match s {
             BookSide::Levels(ls) => ls
@@ -1029,9 +1141,10 @@ pub fn depth(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         decimals,
         ts: newest_event_ts(conn)?,
         daa: ctx.node_daa,
-        bids: depth_side(&raw(&b.bids, false), basis, levels),
-        asks: depth_side(&raw(&b.asks, true), basis, levels),
+        bids: mark(depth_side(&raw(&b.bids, false), basis, levels), dust_at(&b.bids)),
+        asks: mark(depth_side(&raw(&b.asks, true), basis, levels), dust_at(&b.asks)),
         truncated: b.truncated,
+        dust_orders: b.dust_orders,
     })
 }
 

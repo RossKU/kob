@@ -130,6 +130,10 @@ pub fn quotes(
         (None, None) => 0,
     };
     let start = from.unwrap_or_else(|| end.saturating_sub(iv.saturating_mul(limit as i64)));
+    let (start, end) = super::market::whole_buckets(start, end, iv);
+    // At most the `limit` intervals that end the window are read: the answer holds at most `limit` buckets, so an older
+    // `from` would only read rows (one a minute) that no answer shows (R6C2b-2).
+    let start = start.max(end.saturating_sub(iv.saturating_mul(limit as i64)));
     let mut rows: Vec<(i64, Side, Side)> = Vec::new();
     if end > start {
         let carry = conn

@@ -1,25 +1,18 @@
-//! What one fill can take now from an order whose stated amount its UTXOs need not fund (R5A-1).
+//! What one fill can take now from an order of a book, and what the taker pays for it (R5A-1, R6C2a-2).
 //!
 //! A book shows an order a taker cannot fill now nowhere, and an amount only as far as a taker can
-//! really get it. Most kinds fund their amount by construction: an ask's custody holds it exactly
-//! (`reads::CUSTODY_OK`, `pairs::pair_custody_ok`), and a plain bid's quantity is its buying power.
-//! The kinds below state an amount that the covenant pays for out of a value the placer chose:
-//! - `KobIfdBid` (and KRON) pays the seller from its KAS escrow and keeps a delivery and an exit
-//!   carrier (`KobIfdBid.sil` fill, `build::plan_ifd_bid`).
-//! - `KobIfdAsk` (and KRON) moves the prefund and an exit carrier of each fill that it outlives
-//!   out of its KAS (`KobIfdAsk.sil` settle, `build::plan_ifd_ask`).
-//! - `KobPair` pays a bid's fill from its B custody and funds the delivery carrier and the tip of a
-//!   partial fill (`PairState::fill`).
-//! - `KobIfdPair` pays a buy-first fill from its B custody, a sell-first one's prefund too, and
-//!   keeps the carriers and the tip in KAS (the matcher's `pair` rules).
+//! really get it. The writer decides both with the matcher's own rules, never a copy of them:
+//! [`kas_offer`] runs `matcher::candidate::candidates_of` and [`pair_offer`] `matcher::pair::infos`
+//! on the order as the matcher sees it (`indexer::book::listed_order_of`): every fill condition of its
+//! covenant (minimum and maximum fill against the amount left, the tip against the quote, a curve's
+//! levels and its walk, the escrow, prefund and carriers of a bid or an if-done entry) and the KIP-9
+//! minimum of every output the fill builds. So a book and an executor never disagree on what is
+//! fillable.
 //!
-//! The answer is the largest single fill the covenant accepts at quote `p`, with the minimum fill:
-//! the whole amount when that fits, else the largest partial fill, else 0. The arithmetic is the
-//! matcher's (`matcher::candidate`, `matcher::pair`), so a book never shows more than an executor
-//! would fill. It leaves out the per-fill caps of a repeating entry's re-arms, which bound one fill
-//! and not what the order holds.
+//! [`kas_takeable`] is kept for the listing at placement, before the order's rows exist: an if-done
+//! entry's listing value is measured on what its escrow pays (`processor::listing`).
 
-use crate::matcher::candidate::{largest_fit, COV_OUTPUT_MIN};
+use crate::matcher::candidate::largest_fit;
 use kob_protocol::state::AnyState;
 
 /// The largest fill in `1..=max` that `afford` accepts, with the minimum fill (`n >= min_fill`
@@ -76,65 +69,43 @@ pub(crate) fn kas_takeable(s: &AnyState, value: i64, p: i64) -> Option<i64> {
     }
 }
 
-/// A pair kind's fill now at quote `p` (B per whole A) from an order UTXO of `value` sompi whose
-/// live custodies are `custodies` (token, amount, carrier): `Some` for `KobPair` and `KobIfdPair`.
-pub(crate) fn pair_takeable(s: &AnyState, value: i64, custodies: &[(Vec<u8>, i64, i64)], p: i64) -> Option<i64> {
-    let carrier = |token: &[u8; 32]| custodies.iter().find(|c| c.0 == token[..]).map(|c| c.2 as i128).unwrap_or(0);
-    let v = value as i128;
-    match s {
-        AnyState::KobPair(x) => {
-            if p <= 0 {
-                return Some(0);
-            }
-            Some(x.max_takeable(p, value))
-        }
-        AnyState::KobIfdPair(x) => {
-            if p <= 0 {
-                return Some(0);
-            }
-            let buy = x.is_buy_first();
-            let tk = x.tokens();
-            let a_car = if buy { 0 } else { carrier(&tk.a.cov_id) };
-            let b_car = carrier(&tk.b.cov_id);
-            let dust = COV_OUTPUT_MIN as i128;
-            Some(cap(x.amount_left, x.min_fill, |n| {
-                let Some(tip) = x.tip_kas(n) else { return false };
-                let cont = x.amount_left - n > 0 || x.rpt_amount > 0;
-                let b_new = if buy {
-                    match x.spend(n, p) {
-                        Some(sp) if sp <= x.custody => x.custody - sp,
-                        _ => return false,
-                    }
-                } else {
-                    if x.proceeds(n, p).is_none() {
-                        return false;
-                    }
-                    match if cont { x.pre_of(n) } else { Some(x.custody) } {
-                        Some(u) if u <= x.custody => x.custody - u,
-                        _ => return false,
-                    }
-                };
-                let (dc, ec, tip) = (x.delivery_carrier as i128, x.exit_carrier as i128, tip as i128);
-                if cont {
-                    let mut keep = v - dc - ec - tip;
-                    if !buy && x.amount_left - n == 0 {
-                        keep += a_car;
-                    }
-                    if x.custody > 0 && b_new == 0 {
-                        keep += b_car;
-                    }
-                    keep >= dust
-                } else {
-                    let mut left = v + a_car - dc - tip;
-                    if b_new == 0 {
-                        left += b_car;
-                    }
-                    left >= dust
-                }
-            }))
-        }
-        _ => None,
+/// What one fill can take now from a listed order of a KAS book, and what the taker pays for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Offer {
+    /// Base units one fill (one transaction) can take: a curve's reachable levels summed.
+    pub amount: i64,
+    /// The sompi the taker pays (an ask) or gets (a bid) for them, at their quotes, rounded down.
+    pub value: i128,
+}
+
+/// The [`Offer`] of a listed order of a KAS book at DAA `t`, by the matcher's own candidate rules
+/// (`matcher::candidate::candidates_of`, R6C2a-2): every fill condition of the order's covenant
+/// (the minimum and maximum fill against the amount left, the tip against the quote, a curve's
+/// levels and its walk of at most `CURVE_MAX_CROSS` levels, the escrow, prefund and carriers of a
+/// bid or an if-done entry) and the KIP-9 minimum of every output the fill builds (R6C2a-I1). An
+/// order no fill can take has an amount of 0. The day-order deadline is the window's, not this.
+pub(crate) fn kas_offer(o: &crate::matcher::book::ListedOrder, t: i64) -> Offer {
+    use crate::matcher::candidate::{candidates_of, CandCtx};
+    let (excluded, unaccepted) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    let by_id = std::collections::BTreeMap::new();
+    let cx = CandCtx { t, utc: 0, excluded: &excluded, by_id: &by_id, unaccepted: &unaccepted, pair_ticks: None };
+    let mut out = Offer::default();
+    for c in candidates_of(&[o], &cx) {
+        let v = kob_protocol::state::quote_exact(c.cap, c.quote, c.scale, kob_protocol::state::Round::Down).unwrap_or(0);
+        out.amount = out.amount.saturating_add(c.cap);
+        out.value = out.value.saturating_add(v.max(0));
     }
+    out
+}
+
+/// The largest fill of a listed pair order at DAA `t` and its quote then, by the matcher's pair rules
+/// (`matcher::pair::infos`); `None` when no fill can take anything.
+pub(crate) fn pair_offer(o: &crate::matcher::book::ListedOrder, t: i64) -> Option<(i64, i64)> {
+    use crate::matcher::candidate::CandCtx;
+    let (excluded, unaccepted) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    let by_id = std::collections::BTreeMap::new();
+    let cx = CandCtx { t, utc: 0, excluded: &excluded, by_id: &by_id, unaccepted: &unaccepted, pair_ticks: None };
+    crate::matcher::pair::infos(o, &cx).into_iter().filter(|i| i.cap > 0).map(|i| (i.cap, i.price)).max()
 }
 
 #[cfg(test)]
@@ -178,57 +149,5 @@ mod tests {
         assert_eq!(kas_takeable(&r, 1, a.price), Some(0));
         let full = rpt.escrow(8_000_000).unwrap();
         assert_eq!(kas_takeable(&r, full, a.price), Some(a.amount_left));
-    }
-
-    /// The pair state a template compiles with, as a starting point.
-    fn compiled(id: kob_protocol::artifacts::TemplateId) -> AnyState {
-        let t = kob_protocol::artifacts::template(id);
-        AnyState::decode(id, &t.contract().compiled.bytecode[1..1 + t.state_len]).unwrap()
-    }
-
-    /// A buy-first pair entry or a pair bid pays from its B custody: with none (or one base unit)
-    /// it takes nothing, however large the amount it states; with the custody its builder computes
-    /// it takes its whole amount.
-    #[test]
-    fn a_pair_bid_takes_what_its_b_custody_pays() {
-        let AnyState::KobIfdPair(e) = compiled(kob_protocol::artifacts::TemplateId::KobIfdPair) else { panic!() };
-        let e = kob_protocol::state::IfdPairState {
-            side: kob_protocol::state::SIDE_BID,
-            amount_left: 1_000_000,
-            min_fill: 1_000_000,
-            price: 5_000,
-            a_scale: 1_000,
-            tip: 0,
-            custody: 0,
-            delivery_carrier: 0,
-            exit_carrier: 0,
-            rpt_amount: 0,
-            ..e
-        };
-        let v = 10 * COV_OUTPUT_MIN;
-        assert_eq!(pair_takeable(&AnyState::KobIfdPair(e.clone()), v, &[], e.price), Some(0));
-        let funded = kob_protocol::state::IfdPairState { custody: e.b_custody_needed().unwrap(), ..e.clone() };
-        let b = funded.tokens().b.cov_id.to_vec();
-        let rows = [(b.clone(), funded.custody, COV_OUTPUT_MIN)];
-        assert_eq!(pair_takeable(&AnyState::KobIfdPair(funded.clone()), v, &rows, e.price), Some(1_000_000));
-
-        let AnyState::KobPair(p) = compiled(kob_protocol::artifacts::TemplateId::KobPair) else { panic!() };
-        let p = kob_protocol::state::PairState {
-            side: kob_protocol::state::SIDE_BID,
-            amount_left: 1_000_000,
-            min_fill: 1_000_000,
-            max_fill: 0,
-            price: 5_000,
-            slope: 0,
-            t_scale: 1_000,
-            tip: 0,
-            tif: kob_protocol::state::TIF_GTC,
-            delivery_carrier: 0,
-            custody: 1,
-            ..p
-        };
-        assert_eq!(pair_takeable(&AnyState::KobPair(p.clone()), v, &[], p.price), Some(0));
-        let p = kob_protocol::state::PairState { custody: p.bid_escrow(p.amount_left, 1).unwrap(), ..p };
-        assert_eq!(pair_takeable(&AnyState::KobPair(p.clone()), v, &[], p.price), Some(1_000_000));
     }
 }
