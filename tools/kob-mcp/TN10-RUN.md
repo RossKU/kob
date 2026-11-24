@@ -62,3 +62,9 @@ Seen during the run:
   1,000 KAS of bids at their quote rest on the book).
 - R4T-I4: the Claude Desktop extension's install form defaults to 50 and 200 KAS; a config file named in the form can
   set `mode`, the band and `refPrice`.
+
+## To check on the next live run (round-6 fixes, not testable offline)
+
+- R6T-4: the band reads `GET /v1/books/<covenant id>?depth=400&aggregate=false`; a kobd with the default
+  `max_page_size` (200) answers 200 rows a side without an error. Rows worth under 1 KAS at their `quote` add no depth,
+  and a refusal whose read held only such rows names them ("dust") and `refPrice`.

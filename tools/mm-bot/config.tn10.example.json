@@ -6,6 +6,10 @@
   "keyFile": "C:/kob/tn10-mm.key",
   "dataDir": "./run-tn10",
   "capitalUsd": 1000,
+  "quotes": {
+    "//askPartialFills": "true: smaller takers can trade, but an indexer that is hostile and also trades can keep one ask level at a stale price for up to lifeMin. false: every ask is all-or-nothing (a taker takes a whole level), and the node alone tells the bot which asks are live. Mainnet refuses to start until you set it (README, Partial or whole fills). On testnet-10 it defaults to true.",
+    "askPartialFills": true
+  },
   "token": {
     "covenantId": "<64 hex: the covenant id of a 6-decimal public-mint test token>",
     "decimals": 6,

@@ -90,7 +90,7 @@ function stubFetch(chainFile) {
   };
 }
 
-function setup(safety = {}) {
+function setup(safety = {}, quotes = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'mm-bot-cycle-'));
   const chainFile = join(dir, 'chain.json');
   // 30,000 KAS and 600 tokens in 2 UTXOs (a merge is due before the first ask).
@@ -105,11 +105,15 @@ function setup(safety = {}) {
     token: { ...DEFAULTS.token, covenantId: TOKEN, decimals: 6, label: 'TUSDC6' },
     reference: { ...DEFAULTS.reference, crossCheck: { ...DEFAULTS.reference.crossCheck, enabled: false } },
     safety: { ...DEFAULTS.safety, resumeAfterSec: 0, placeGapSec: 0, ...safety },
+    quotes: { ...DEFAULTS.quotes, ...quotes },
   };
   const bot = new Bot(cfg);
   bot.log.quiet = true;
   bot.kob = new Kob(cfg, { prefixArgs: [fileURLToPath(new URL('./fake-kob.mjs', import.meta.url))] });
   const chain = () => JSON.parse(readFileSync(chainFile, 'utf8'));
+  // A test's node read also shows what the chain paid the bot back (a cancel's carrier, R6T-2).
+  let outs = null;
+  Object.defineProperty(bot, 'nodeOutputs', { configurable: true, get: () => outs, set: (f) => { outs = f && (async (...a) => [...(chain().outputs ?? []), ...(await f(...a))]); } });
   const calls = () => readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((a) => a.includes('--yes'));
   return { bot, chain, calls, dir };
 }
@@ -1407,7 +1411,7 @@ test('a STOP looks up every proven ask: one live on the node is cancelled before
     assert.ok(n != null, 'the stop ends');
     assert.equal(bot.state.orders[id], undefined, 'it ended on the node\'s word before the stop was done');
     const log = readFileSync(paths(dir).log, 'utf8');
-    assert.match(log, /stopped: no quote left.*proven asks: 11 of 11 looked up on the node, 1 found live and cancelled, 10 not found \(listed in .*proven-not-found\.json\)/);
+    assert.match(log, /stopped: no quote left that the node finds.*proven asks: 11 of 11 looked up on the node, 1 found live and cancelled, 10 not found \(listed in .*proven-not-found\.json\)/);
     assert.equal(JSON.parse(readFileSync(paths(dir).provenNotFound, 'utf8')).items.length, 10);
     // Never through the indexer's view.
     const cancels = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((a) => a[0] === 'cancel' && a[1] === id);
@@ -1438,6 +1442,397 @@ test('a STOP with 60 proven asks that are gone ends within the bounded number of
     assert.equal(JSON.parse(readFileSync(paths(dir).provenNotFound, 'utf8')).items.length, 60);
   } finally {
     rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});
+
+// R6T-2: an order ends on its cancel only once the node shows the cancel's own transaction (an
+// output of it to the bot's address), never because the cancel was submitted.
+const age = (bot) => { for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000; };
+
+test('a_cancel_that_never_confirmed_does_not_end_a_hidden_ask (R6T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const a = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    const left = c.orders[a].amount - 1_500_007;
+    // The indexer hides live ask A; the bot finds it on the node and cancels it. The cancel is
+    // submitted, but a fill of an odd amount lands first: A is live at amount - 1,500,007, and
+    // no output of the cancel ever shows. The indexer reports no fill.
+    hiddenIds = new Set([a]);
+    bot.kob.env.FAKE_KOB_CANCEL_LOST = '1500007';
+    await bot.cycle();
+    assert.ok(bot.state.orders[a].cancelSentAt, 'the cancel went out');
+    assert.equal(chain().orders[a].amount, left, 'and a fill landed instead');
+    delete bot.kob.env.FAKE_KOB_CANCEL_LOST;
+    for (let i = 0; i < 2; i++) {
+      age(bot);
+      await bot.cycle();
+    }
+    assert.ok(bot.state.orders[a], 'A is still tracked');
+    assert.equal(bot.state.orders[a].unconfirmed, true, 'unresolved, looked up each cycle');
+    assert.ok(chain().orders[a], 'and live on chain');
+    assert.ok(!bot.state.recent[a], 'not ended');
+  } finally {
+    reset();
+  }
+});
+
+test('a cancel that confirms on the node ends the ask (R6T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const a = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    hiddenIds = new Set([a]);
+    await bot.cycle();
+    const tx = bot.state.orders[a].cancelTxids.at(-1);
+    assert.equal(chain().ended[a], 'cancelled');
+    age(bot);
+    await bot.cycle();
+    assert.equal(bot.state.orders[a], undefined, 'ended');
+    assert.ok(bot.state.recent[a]);
+    assert.ok(Object.values(bot.state.payments).some((p) => p.txid === tx), 'on the output of its cancel');
+    assert.match(readFileSync(paths(bot.cfg.dataDir).log, 'utf8'), /ended: cancelled \(its cancel shows on the node\)/);
+  } finally {
+    reset();
+  }
+});
+
+test('a cancel-replaced order is kept until the node shows the replace; one a fill displaced stays tracked (R6T-2)', { timeout: 120_000 }, async () => {
+  for (const how of ['ok', 'lost']) {
+    reset();
+    const { bot, chain } = setup();
+    try {
+      bot.nodeOutputs = async () => [];
+      for (let i = 0; i < 3; i++) await bot.cycle();
+      const before = new Set(Object.keys(chain().orders));
+      const asks = [...before].filter((k) => chain().orders[k].side === 1);
+      // A move amends every quote; the CLI does it as a cancel-replace (strays on the orders).
+      bot.kob.env.FAKE_KOB_REPLACE_NEW = how;
+      kasUsd = 0.025 / 1.004;
+      await bot.cycle();
+      delete bot.kob.env.FAKE_KOB_REPLACE_NEW;
+      for (const a of asks) assert.ok(bot.state.orders[a]?.replacedBy, `${a} kept, as replaced`);
+      for (let i = 0; i < 2; i++) {
+        age(bot);
+        await bot.cycle();
+      }
+      if (how === 'ok') {
+        for (const a of asks) assert.equal(bot.state.orders[a], undefined, 'ended once the node holds its replacement');
+      } else {
+        for (const a of asks) {
+          assert.ok(chain().orders[a], 'live on chain, filled in part');
+          assert.ok(bot.state.orders[a], 'still tracked');
+          assert.equal(bot.state.orders[a].replacedBy, null);
+        }
+        const ghosts = Object.keys(bot.state.orders).filter((k) => !before.has(k) && !chain().orders[k]);
+        assert.deepEqual(ghosts, [], 'the replacements that never went out end');
+      }
+    } finally {
+      delete bot.kob.env.FAKE_KOB_REPLACE_NEW;
+      reset();
+    }
+  }
+});
+
+// R6T-1: every partial fill of an ask pays the bot an output the node shows, so the amount left
+// after it can be found from the payment alone, whatever the indexer reports.
+test('a_lie_about_the_first_fill_leaves_a_proven_ask_unfound (R6T-1): the payment names the true amount, and the ask is cancelled before the stop is done', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, dir } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const [a, b] = Object.keys(c.orders).sort().filter((k) => c.orders[k].side === 1);
+    const A = c.orders[a];
+    const placedA = bot.state.orders[a].amount;
+    // A is bought in part, n1 base units (payout P1, exactly allIn); B in full (payout P2).
+    const n1 = 1_500_007;
+    A.amount -= n1;
+    delete c.orders[b];
+    c.ended[b] = 'filled';
+    writeFileSync(file, JSON.stringify(c));
+    // The indexer hides both, for good, and lies about A's first fill: n1 - 5, the rest paid by P2.
+    hiddenIds = new Set([a, b]);
+    const p1 = '91'.repeat(32);
+    const p2 = '92'.repeat(32);
+    bot.nodeOutputs = async () => [{ txid: p1, index: 1, amount: Math.ceil((n1 * A.price) / 1e6) }, { txid: p2, index: 1, amount: 1e15 }];
+    fillsFeed = [{ id: 2, covenant_id: a, txid: p2, amount: String(placedA - n1 + 5), price: String(A.price) }, { id: 1, covenant_id: a, txid: p1, amount: String(n1 - 5), price: String(A.price) }];
+    // B (no fill reported) stays unresolved; past its expiry the stop does not wait for it.
+    bot.state.orders[b].expiresAt = Date.now() - 1000;
+    const n = await stopUntilDone(bot, 8);
+    assert.ok(n != null, 'the stop ends');
+    assert.equal(chain().ended[a], 'cancelled', 'A was found at the amount P1 names and cancelled through the node');
+    assert.equal(bot.state.orders[a], undefined, 'and ended on its confirmed cancel');
+    assert.equal(bot.state.payments[`${p1}:1`].usedBy, a, 'P1 is marked as its fill');
+    assert.match(readFileSync(paths(dir).log, 'utf8'), /from the payment\(s\) 9191.*not from the indexer/);
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});
+
+test('a proven ask is found by a payment the node shows after the proof (R6T-1)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, dir } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const [a, b] = Object.keys(c.orders).sort().filter((k) => c.orders[k].side === 1);
+    const A = c.orders[a];
+    const placedA = bot.state.orders[a].amount;
+    const n1 = 1_500_007;
+    A.amount -= n1;
+    delete c.orders[b];
+    c.ended[b] = 'filled';
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a, b]);
+    const p1 = '91'.repeat(32);
+    const p2 = '92'.repeat(32);
+    // The indexer names B's payout as the fill of all of A; A's own payout is not shown yet.
+    bot.nodeOutputs = async () => [{ txid: p2, index: 1, amount: 1e15 }];
+    fillsFeed = [{ id: 1, covenant_id: a, txid: p2, amount: String(placedA), price: String(A.price) }];
+    await bot.cycle();
+    assert.ok(bot.state.orders[a].proven, 'proven on the forged fill');
+    bot.nodeOutputs = async () => [{ txid: p2, index: 1, amount: 1e15 }, { txid: p1, index: 1, amount: Math.ceil((n1 * A.price) / 1e6) }];
+    await bot.cycle();
+    assert.equal(chain().ended[a], 'cancelled', 'the rotation finds it at the amount P1 names');
+    assert.ok(alertsOf(dir).some((x) => x.reason === 'proven-live'));
+  } finally {
+    reset();
+  }
+});
+
+test('two odd fills the indexer never reports: the sum of their payments finds the ask (R6T-1)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const a = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    const A = c.orders[a];
+    const n1 = 1_500_007;
+    const n2 = 2_300_011;
+    A.amount -= n1 + n2;
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a]);
+    const pay = (n) => Math.ceil((n * A.price) / 1e6);
+    bot.nodeOutputs = async () => [{ txid: '93'.repeat(32), index: 1, amount: pay(n1) }, { txid: '94'.repeat(32), index: 1, amount: pay(n2) }];
+    await bot.cycle();
+    assert.equal(chain().ended[a], 'cancelled', 'found at amount - n1 - n2 and cancelled');
+    assert.ok(!bot.state.orders[a]?.unconfirmed);
+  } finally {
+    reset();
+  }
+});
+
+test('a payment that could pay for more than 200 fill amounts is skipped as a hint, with a log line (R6T-1)', () => {
+  reset();
+  const { bot, dir } = setup();
+  bot.nodeOutputs = async () => [];
+  const id = 'f1'.repeat(32);
+  // 1,000 sompi per whole token of 10^6 base units: a base unit is worth 0.001 sompi.
+  bot.state.orders[id] = { side: 'sell', level: 0, price: 1000, amount: 50_000_000, ownAmount: 50_000_000, amountLeft: 50_000_000, ownAt: 1000,
+    own: { state: { kind: 'KobAsk', state: { price: '1000', scale: '1000000', amountLeft: '50000000' } } } };
+  bot.state.payments = { [`${'95'.repeat(32)}:0`]: { txid: '95'.repeat(32), sompi: 7, at: 2000 } };
+  assert.deepEqual(bot.payHints(id), [], 'n in (6,000, 7,000]: 1,000 amounts, skipped');
+  assert.match(readFileSync(paths(dir).log, 'utf8'), /1 payment\(s\) to the bot not used as lookup hints: each could pay for more than 200 different fill amounts/);
+  // At 4,000 sompi a base unit, the same kind of payment names one amount.
+  bot.state.orders[id].own.state.state.price = '4000000000';
+  bot.state.payments = { [`${'95'.repeat(32)}:0`]: { txid: '95'.repeat(32), sompi: 4000 * 1_500_007, at: 2000 } };
+  assert.deepEqual(bot.payHints(id), [50_000_000 - 1_500_007]);
+});
+
+// R6T-3: without --force, mm-bot drop takes an ask only on the node's word that it ended, or past
+// the end rule (2 h past its expiry).
+test('drop refuses, without --force, an ask the node cannot find when no fill was reported (R6T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const a = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    // A fill of an odd amount the indexer never reports; it hides the ask too.
+    c.orders[a].amount -= 7;
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a]);
+    await bot.cycle();
+    assert.equal(bot.state.orders[a].unconfirmed, true);
+    const r = await bot.operatorDrop(a);
+    assert.equal(r.ok, false, r.message);
+    assert.equal(r.node.status, 'gone');
+    assert.match(r.message, /the indexer reported no fill of it and no cancel the bot sent shows on the node.*the most suspicious case.*--force/);
+    assert.ok(bot.state.orders[a], 'kept');
+    // Past the end rule (2 h after its expiry) it drops without --force.
+    bot.state.orders[a].expiresAt = Date.now() - PROVEN_KEEP_AFTER_EXPIRY_MS - 1000;
+    const late = await bot.operatorDrop(a);
+    assert.equal(late.ok, true, late.message);
+    assert.equal(bot.state.orders[a], undefined);
+  } finally {
+    reset();
+  }
+});
+
+// R6T-6: in a STOP or IDLE pull the pull's own cancels go out before the pass over the proven asks.
+test('a STOP sends the pull\'s cancels before the pass over the proven asks (R6T-6)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, txid, proceeds } = await filledAsk(bot, chain);
+    bot.nodeOutputs = async () => [{ txid, index: 1, amount: proceeds }];
+    await bot.cycle();
+    assert.ok(bot.state.orders[id].proven);
+    cloneProven(bot, id, 5);
+    const seq = [];
+    const exec = bot.execute.bind(bot);
+    bot.execute = async (actions) => { if (actions.some((x) => x.kind === 'cancel')) seq.push('pull'); return exec(actions); };
+    const step = bot.provenPassStep.bind(bot);
+    bot.provenPassStep = async (...a) => { seq.push('pass'); return step(...a); };
+    writeFileSync(bot.p.stop, 'stop\n');
+    await bot.cycle();
+    assert.deepEqual(seq.slice(0, 2), ['pull', 'pass']);
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});
+
+// Whole-fill asks (quotes.askPartialFills false): every ask's minimum fill is its amount, so it
+// is filled in full or not at all, and the node alone says whether it is live.
+const WHOLE = { askPartialFills: false };
+const askIds = (bot) => Object.keys(bot.state.orders).filter((k) => bot.state.orders[k].side === 'sell');
+
+test('whole fills: every ask is placed with its minimum fill at its amount, and an amend keeps it there', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, calls } = setup({}, WHOLE);
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const sells = calls().filter((a) => a[0] === 'place' && a[a.indexOf('--side') + 1] === 'sell');
+    assert.equal(sells.length, 3);
+    for (const a of sells) assert.equal(a[a.indexOf('--min-fill') + 1], a[a.indexOf('--amount') + 1], 'minimum fill = amount');
+    assert.ok(calls().filter((a) => a[0] === 'place' && a[a.indexOf('--side') + 1] === 'buy').every((a) => !a.includes('--min-fill')), 'bids unchanged');
+    for (const id of askIds(bot)) assert.ok(bot.isWhole(bot.state.orders[id]));
+    // A move amends every quote in place: the replacement keeps minFill = amount left.
+    const before = calls().length;
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle();
+    assert.ok(calls().slice(before).some((a) => a[0] === 'replace'));
+    for (const id of askIds(bot)) {
+      const st = bot.state.orders[id].own.state.state;
+      assert.equal(st.minFill, st.amountLeft);
+      assert.equal(Number(st.price), chain().orders[id].price, 'the amended state');
+      assert.ok(bot.isWhole(bot.state.orders[id]));
+    }
+    assert.deepEqual(bot.hintsOf(askIds(bot)[0]), [], 'one candidate: its own state');
+  } finally {
+    reset();
+  }
+});
+
+test('whole fills: the R6T-1 sketch cannot hide an ask; a hidden live one is cancelled, a filled one frees its level at once', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup({}, WHOLE);
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const [a, b] = Object.keys(c.orders).sort().filter((k) => c.orders[k].side === 1);
+    const A = c.orders[a];
+    const placedA = A.amount;
+    // A cannot be bought in part. B is bought in full; the indexer hides both, reports a made-up
+    // first fill of A and names B's payout for the rest of it.
+    delete c.orders[b];
+    c.ended[b] = 'filled';
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a, b]);
+    const p2 = '92'.repeat(32);
+    bot.nodeOutputs = async () => [{ txid: p2, index: 1, amount: 1e15 }];
+    fillsFeed = [{ id: 2, covenant_id: a, txid: p2, amount: String(placedA - 1_500_002), price: String(A.price) }, { id: 1, covenant_id: a, txid: '91'.repeat(32), amount: '1500002', price: String(A.price) }];
+    const placed = places(calls).length;
+    await bot.cycle();
+    assert.equal(chain().ended[a], 'cancelled', 'A is found at its amount and cancelled by the normal cycle');
+    assert.equal(bot.state.orders[b], undefined, 'B ended in the same cycle, with no payment proof');
+    assert.ok(bot.state.recent[b]);
+    assert.ok(!Object.values(bot.state.payments).some((p) => p.usedBy), 'no payment was used');
+    assert.ok(!Object.values(bot.state.orders).some((s) => s.proven || s.unconfirmed || s.parked), 'nothing proven, unresolved or parked');
+    assert.equal(alertsOf(dir).filter((x) => x.reason === 'node-unconfirmed').length, 0);
+    assert.match(readFileSync(paths(dir).log, 'utf8'), /ended: not on the node at its own state: a whole-fill ask cannot move/);
+    await bot.cycle();
+    assert.ok(places(calls).length > placed, 'the freed levels are placed again');
+    const recovers = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x[0] === 'recover');
+    assert.ok(recovers.every((x) => !x.includes('--amount-left')), 'no hints: one candidate per ask');
+  } finally {
+    reset();
+  }
+});
+
+test('whole fills: a hidden live ask is cancelled by STOP before it is done', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain } = setup({}, WHOLE);
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const asks = Object.keys(chain().orders).filter((k) => chain().orders[k].side === 1);
+    hiddenIds = new Set(asks);
+    fillsFeed = asks.map((k, i) => ({ id: i + 1, covenant_id: k, txid: '9c'.repeat(32), amount: '7', price: '1' }));
+    const n = await stopUntilDone(bot, 6);
+    assert.ok(n != null, 'the stop ends');
+    for (const k of asks) assert.equal(chain().ended[k], 'cancelled');
+    assert.equal(Object.keys(chain().orders).length, 0, 'nothing left on chain');
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});
+
+test('whole fills: an amend of unknown outcome or a new CLI build keeps the ask under the node-word rules', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup({}, WHOLE);
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const [a, b] = askIds(bot).sort();
+    const s = bot.state.orders[a];
+    assert.ok(bot.wholeGone(s), 'its own state, this build, a proven template');
+    // An amend that may have gone out with a state the plan does not name: no whole-fill end.
+    s.stateUnknown = true;
+    assert.equal(bot.wholeGone(s), false);
+    s.stateUnknown = false;
+    s.pending = { kind: 'reread', since: Date.now() };
+    assert.equal(bot.wholeGone(s), false);
+    s.pending = null;
+    // An order placed by another CLI build may sit under another template.
+    bot.state.orders[b].own.cli = 'kob 9.9.9 (another build)';
+    assert.equal(bot.wholeGone(bot.state.orders[b]), false);
+    // A template the indexer names differently from the proven one.
+    s.own.tpl = 'ee'.repeat(32);
+    assert.equal(bot.wholeGone(s), false);
+    // A failed amend that may have gone out records the planned state beside the old one.
+    s.own.tpl = null;
+    bot.kob.amend = async () => ({ ok: false, error: 'exit 1: socket closed', sentFee: 500000, doc: { plan: { inPlace: true, replacement: { ...s.own.state, state: { ...s.own.state.state, price: '4100000000' } } }, transaction: { txid: 'fe'.repeat(32) } } });
+    await bot.run1({ kind: 'amend', id: a, side: 'sell', level: s.level, from: s.price, price: 4100000000, quotedFair: 40, reason: 'test' });
+    assert.equal(s.pending.kind, 'amend');
+    assert.equal(s.own.prev.state.price, String(chain().orders[a].price), 'the old state is still looked up');
+    assert.equal(s.own.state.state.price, '4100000000');
+    assert.ok(bot.wholeGone(s), 'both states it can be in are known');
+  } finally {
     reset();
   }
 });

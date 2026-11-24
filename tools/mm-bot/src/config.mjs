@@ -55,6 +55,10 @@ export const DEFAULTS = {
     lifeMin: 90, // every quote is placed and amended with an expiry this far ahead (kob --gtd): conforming matchers stop filling a dead bot's quotes past it; they stay fillable until a refund ends them (soft)
     renewAfterMin: 45, // a quote not amended for this long is amended in place to a fresh expiry (a reprice renews it too)
     skew: { enabled: false, maxShift: 0.002, targetTokenShare: 0.5 },
+    // true: asks take partial fills; false: every ask's minimum fill is its whole amount (filled in
+    // full or not at all), and the node alone says which asks are live. null: not set, which
+    // mainnet refuses (an informed choice) and testnet-10 takes as true.
+    askPartialFills: null,
   },
   safety: {
     killJump: 0.02, // pull the quotes when the reference moved more than this within a minute
@@ -157,6 +161,7 @@ export function validate(cfg) {
   num(q.repriceThreshold, 'quotes.repriceThreshold', { min: 0.0001, max: 0.5 });
   num(q.resizeBelow, 'quotes.resizeBelow', { min: 0, max: 1 });
   num(q.askCarrierMinKas, 'quotes.askCarrierMinKas', { min: 0.1 });
+  if (q.askPartialFills != null && typeof q.askPartialFills !== 'boolean') p.push('quotes.askPartialFills must be true, false or null');
   num(q.mergeAboveUtxos, 'quotes.mergeAboveUtxos', { min: 1, max: 3, int: true });
   num(q.lifeMin, 'quotes.lifeMin', { min: 30, max: 1440 });
   num(q.renewAfterMin, 'quotes.renewAfterMin', { min: 5, max: 1440 });

@@ -137,7 +137,9 @@ export class Kob {
   placeArgs(tokenId, side, amountBase, priceSompi, gtd = null) {
     const dec = this.cfg.token?.decimals;
     return ['place', 'limit', '--token', tokenId, '--side', side, '--amount', `${amountBase}base`, '--price', `${priceSompi}sompi`,
-      ...(dec != null ? ['--decimals', String(dec)] : []), ...(gtd ? ['--gtd', gtd] : [])];
+      ...(dec != null ? ['--decimals', String(dec)] : []), ...(gtd ? ['--gtd', gtd] : []),
+      // Whole-fill asks: the minimum fill is the whole amount, so only a full fill takes it.
+      ...(side === 'sell' && this.cfg.quotes?.askPartialFills === false ? ['--min-fill', `${amountBase}base`] : [])];
   }
 
   place(tokenId, side, amountBase, priceSompi, gtd = null) {

@@ -32,8 +32,20 @@ const OWN_TX_KEEP = 2000; // the bot's own transaction ids kept once a node read
 const OWN_TX_MAX = 20_000; // and kept at most while no node read succeeds
 const PAYMENTS_KEEP = 2000; // payments to the bot's address no longer shown on the node, kept ...
 const PAYMENT_KEEP_MS = 7 * 86_400_000; // ... for a week after the node last showed them
+const OWN_KEEP_MS = 86_400_000; // and the bot's own (change, a cancel's carrier) a day: one per send, they add up (R6T-I2)
 const FILLS_KEEP = 200; // fill events kept per order
 const HINTS_MAX = 32; // amounts left passed to kob recover per ask
+// Amounts left derived from the payments the node showed to the bot (R6T-1): from each payment
+// first seen after the ask's last known amount, and from sums of 2 and 3 of them. Per ask and
+// lookup: at most PAY_SOURCES_MAX payments (C(12,1) + C(12,2) + C(12,3) = 298 sums at most, cut at
+// PAY_HINTS_MAX amounts), so with the HINTS_MAX others an ask stays within kob recover's 200
+// candidate scripts, the cap every lookup had already. A payment whose filled amount spans more
+// than PAY_RANGE_MAX base units (a token whose base unit is worth far less than a sompi) is skipped.
+export const PAY_SOURCES_MAX = 12;
+export const PAY_HINTS_MAX = 160;
+export const PAY_RANGE_MAX = 200;
+const CANCEL_TXIDS_KEEP = 8; // txids of the cancels sent per order, any of which may confirm (R6T-2)
+const INDEXER_READS = 6; // per-order indexer reads in flight at once (R6T-6), within one client's 8 at kobd
 // A paid ask is kept as proven (R5T-1): its level and cap share are free, it is still looked up.
 export const PROVEN_MAX = 200; // proven records kept; past it a proof frees nothing
 // Lookups of proven records a cycle, in rotation: each costs up to 200 candidate scripts in the
@@ -84,14 +96,15 @@ function modeMessage(mode, prev, snap, c, feesSompi) {
  */
 const committed = (orders, blind, scale) => ({
   // A proven ask (R5T-1) no longer counts: the wallet's token balance bounds what can be placed.
-  askTokens: orders.filter((o) => o.side === 'sell' && !o.proven).reduce((a, o) => a + o.amountLeft, 0) + blind.filter((b) => b.side === 'sell').reduce((a, b) => a + b.tokens, 0),
-  bidKas: orders.filter((o) => o.side === 'buy').reduce((a, o) => a + bidCost(o.amountLeft, o.price, scale), 0) + blind.filter((b) => b.side === 'buy').reduce((a, b) => a + b.cost, 0),
+  // A cancel-replaced order whose replacement is tracked counts as that replacement (R6T-2).
+  askTokens: orders.filter((o) => o.side === 'sell' && !o.proven && !o.replaced).reduce((a, o) => a + o.amountLeft, 0) + blind.filter((b) => b.side === 'sell').reduce((a, b) => a + b.tokens, 0),
+  bidKas: orders.filter((o) => o.side === 'buy' && !o.replaced).reduce((a, o) => a + bidCost(o.amountLeft, o.price, scale), 0) + blind.filter((b) => b.side === 'buy').reduce((a, b) => a + b.cost, 0),
 });
 
 /** What the bot's own orders hold: tokens in asks (base units), KAS escrow in bids (sompi). */
 const holdings = (orders) => ({
-  askTokens: orders.filter((o) => o.side === 'sell' && !o.proven).reduce((a, o) => a + o.amountLeft, 0),
-  bidKas: orders.filter((o) => o.side === 'buy').reduce((a, o) => a + o.value, 0),
+  askTokens: orders.filter((o) => o.side === 'sell' && !o.proven && !o.replaced).reduce((a, o) => a + o.amountLeft, 0),
+  bidKas: orders.filter((o) => o.side === 'buy' && !o.replaced).reduce((a, o) => a + o.value, 0),
 });
 
 export class Bot {
@@ -133,7 +146,9 @@ export class Bot {
     const c = this.cfg;
     const m = this.state.mode;
     this.log.info(`start: ${c.network}, token ${c.token.label ?? ''} ${c.token.covenantId}, indexer ${indexerUrl(c)}, node ${c.node ? shownUrl(c.node) : '(CLI default)'}${this.dryRun ? ', DRY RUN (nothing is signed)' : ''}`);
-    if (!this.nodeOutputs) this.log.info('WARNING: node: a JSON wRPC node (ws://host:18110, testnet-10 18210) is needed to prove a fully filled ask paid; without one it stays unresolved and holds its share of the ask cap (README, tracking)');
+    if (c.quotes.askPartialFills == null) this.log.info('asks: partial fills (quotes.askPartialFills is not set: the testnet-10 default); set it to false for whole-fill asks, which the node alone tracks (README, tracking)');
+    else this.log.info(`asks: ${c.quotes.askPartialFills ? 'partial fills (quotes.askPartialFills true)' : 'whole fills only (quotes.askPartialFills false): each ask is filled in full or not at all'}`);
+    if (!this.nodeOutputs) this.log.info('WARNING: node: a JSON wRPC node (ws://host:18110, testnet-10 18210) is needed to prove a fully filled ask paid (without one it stays unresolved and holds its share of the ask cap) and that a cancel confirmed (without one an ask ends once its cancel went out, with no proof that it confirmed) (README, tracking)');
     this.log.info(`mode ${m.mode}${m.reason ? `/${m.reason}` : ''}${m.reason === 'cooldown' ? `: quoting starts once the reference has been fresh and steady for ${c.safety.resumeAfterSec} s` : ''}`);
     for (;;) {
       let ok = false;
@@ -216,7 +231,6 @@ export class Bot {
     const { changed: _c, pull: _p, ...rec } = mode;
     this.state.mode = rec;
     this.provenPassBegin(mode, now);
-    if (this.state.provenPass) await this.provenPassStep(now, { indexer: true });
 
     let sides = { bids: { quoting: false, reason: 'idle' }, asks: { quoting: false, reason: 'idle' } };
     let plan = null;
@@ -233,6 +247,9 @@ export class Bot {
       await this.execute(plan.actions);
     }
     if (Object.keys(this.state.foreign).length) await this.cancelForeign(now);
+    // The pass over the proven asks of a STOP or IDLE pull comes after the pull's own cancels, so
+    // that neither its indexer reads nor its node call delay them (R6T-6).
+    if (this.state.provenPass) await this.provenPassStep(now, { indexer: true });
 
     if (c.retiredTokens.length) await this.retire(bal, mode.mode === STOPPING);
     // A payment that landed while the bot sent is recorded before a later send can spend it.
@@ -254,7 +271,7 @@ export class Bot {
       const pass = this.state.provenPass;
       if ((left === 0 && !pass) || this.dryRun) {
         const last = this.state.provenPassLast?.why === 'stop' ? this.state.provenPassLast : null;
-        this.log.info(`stopped: no quote left${parked ? `; ${parked} unresolved ask(s) past their expiry kept in the state file for the operator` : ''}${last ? `; ${passText(last, this.p.provenNotFound)}` : ''}${proven ? `; ${proven} paid ask(s) kept as proven: the next run keeps looking for them` : ''}`);
+        this.log.info(`stopped: no quote left that the node finds${parked ? `; ${parked} unresolved ask(s) past their expiry kept in the state file for the operator` : ''}${last ? `; ${passText(last, this.p.provenNotFound)}` : ''}${proven ? `; ${proven} paid ask(s) kept as proven: the next run keeps looking for them` : ''}`);
         return 'stopped';
       }
       if (pass) this.log.info(`stopping: proven asks: ${pass.looked} of ${pass.total} looked up on the node, ${pass.left.length} to go (${PROVEN_PASS_BATCH} a cycle)`);
@@ -292,14 +309,24 @@ export class Bot {
     // quote was set at, it would cross fair, so it is pulled too (T-5).
     const drift = snap.ok ? Math.max(0, ...Object.values(this.state.orders).filter((s) => s.quotedFair > 0 && !s.proven).map((s) => Math.abs(snap.fair / s.quotedFair - 1))) : 0;
     const drifted = drift > c.quotes.spreadPct / 200;
-    // The pass of a STOP or IDLE pull needs no indexer either.
+    // The pass of a STOP or IDLE pull needs no indexer either. It runs after the pull's own
+    // cancels, so that its node call does not delay them (R6T-6).
     this.provenPassBegin(mode, now);
     const passing = !!this.state.provenPass;
-    if (passing) await this.provenPassStep(now, { indexer: false });
+    await this.blindCancels(mode, drift, drifted, passing, now, cause);
+    if (passing) {
+      await this.provenPassStep(now, { indexer: false });
+      this.save();
+    }
+  }
+
+  /** The cancels of blindPull: every order a pull or the drift makes due, from the bot's own records. */
+  async blindCancels(mode, drift, drifted, passing, now, cause) {
+    const c = this.cfg;
     if (!mode.pull && !drifted) return;
     const why = mode.pull ? mode.reason ?? mode.mode : `drift: fair moved ${(drift * 100).toFixed(2)}% from a quote's`;
     const timeout = c.safety.orderVisibleTimeoutSec * 1000;
-    // Proven asks (R5T-1): the pass's batch above, else this cycle's share of the rotation.
+    // Proven asks (R5T-1): the pass's batch (after these cancels), else this cycle's share of the rotation.
     const look = new Set(passing ? [] : this.provenSlice(now));
     const due = Object.keys(this.state.orders).filter((id) => {
       const s = this.state.orders[id];
@@ -319,7 +346,7 @@ export class Bot {
       if (this.dryRun) continue;
       this.ownTx(r.txid);
       if (r.fee) addFee(this.state, 'cancel', r.fee);
-      Object.assign(this.state.orders[id], { pending: { kind: 'cancel', since: now, txid: r.txid ?? null }, cancelSentAt: now });
+      this.noteCancel(this.state.orders[id], r.txid, now);
     }
     this.log.action({ type: 'blind-cancel', reason: why, ids: sent, txids: sent.map((id) => res.get(id).txid), errors: due.filter((id) => !sent.includes(id)).map((id) => res.get(id)?.error ?? 'no record') });
     const left = due.length - sent.length;
@@ -434,6 +461,7 @@ export class Bot {
       for (const e of r.orders) {
         if (!sent.includes(e.covenant_id) || out.get(e.covenant_id).ok) continue;
         if (e.status === 'live') this.prove(e);
+        if (e.status === 'live' && isAsk(s0(e.covenant_id)) && e.amount_left != null) this.markPayHit(e.covenant_id, e.amount_left);
         const done = e.cancel?.status === 'submitted' || (this.dryRun && e.cancel?.status === 'signed');
         out.set(e.covenant_id, done ? { ok: true, dryRun: this.dryRun, txid: e.cancel.txid ?? null, fee: Number(e.cancel.fee ?? 0) }
           : { ok: false, live: e.status === 'live', error: e.status === 'live' ? `kob recover --cancel: ${e.cancel?.status ?? '?'}: ${e.cancel?.reason ?? r.error ?? ''}` : `not found on the node (${e.status})` });
@@ -450,7 +478,104 @@ export class Bot {
    * record, the indexer's list and per-order view, and the placed amount less the fills the
    * indexer reported. The node checks each; none is trusted.
    */
-  hintsOf(id, listed = null) {
+  hintsOf(id, listed = null, { pay = true } = {}) {
+    // A whole-fill ask is looked up at its own state only: one candidate.
+    if (this.isWhole(this.state.orders[id])) return [];
+    const base = this.indexerHints(id, listed);
+    if (!pay) return base;
+    const p = this.payHints(id);
+    return [...new Set([...base, ...p])];
+  }
+
+  /**
+   * Amounts left of ask `id` that owe nothing to the indexer (R6T-1), from the payments the node
+   * showed to the bot. A fill of n base units pays the maker, at the ask's own output, at least
+   * allIn = ceil(n x (price - tip) / scale) (KobAsk.sil, and its KRON form, the `allIn` line); a
+   * partial fill leaves both carriers on the order, so a matcher's payout is exactly allIn. A
+   * payment P then names n in [floor((P - 1) x scale / r) + 1, floor(P x scale / r)], r = price -
+   * tip: one value while a base unit is worth a sompi or more, about scale / r otherwise. The
+   * payments are those first seen after the ask's last known amount (its own outpoint's, or the
+   * node's last live answer), not the bot's own, and not used to prove another ask; the ones the
+   * indexer names as fills of this ask go first. A hit marks its payments used by the ask
+   * (markPayHit). A payout above allIn (a filler who pays the maker more) names a larger n than
+   * was filled, and is then no help: README, tracking.
+   */
+  payHints(id) {
+    const s = this.state.orders[id];
+    (this.paySrc ??= {})[id] = new Map();
+    if (!s || !isAsk(s) || !this.nodeOutputs) return [];
+    const base = s.leftAt != null && (s.ownAt == null || s.leftAt >= s.ownAt) ? { left: s.amountLeft, at: s.leftAt } : { left: s.ownAmount ?? s.amountLeft ?? s.amount, at: s.ownAt };
+    if (!Number.isSafeInteger(base.left) || base.left < 2 || base.at == null) return [];
+    const st = s.own?.state?.state ?? {};
+    let r;
+    let sc;
+    let minFill;
+    try {
+      r = BigInt(st.price ?? Math.round(s.price ?? 0)) - BigInt(st.tip ?? 0);
+      sc = BigInt(st.scale ?? this.scale);
+      minFill = BigInt(st.minFill ?? 1);
+    } catch {
+      return [];
+    }
+    if (r <= 0n || sc <= 0n) return [];
+    const own = new Set(this.state.ownTx ?? []);
+    const named = new Set((s.fills ?? []).map((f) => f.txid));
+    const left = BigInt(base.left);
+    const ranges = [];
+    const wide = [];
+    const pays = Object.entries(this.state.payments)
+      .filter(([, p]) => !p.own && !own.has(p.txid) && (!p.usedBy || p.usedBy === id) && p.at > base.at && Number.isSafeInteger(p.sompi) && p.sompi > 0)
+      .sort((a, b) => Number(named.has(b[1].txid)) - Number(named.has(a[1].txid)) || a[1].at - b[1].at);
+    for (const [k, p] of pays) {
+      if (ranges.length >= PAY_SOURCES_MAX) break;
+      const P = BigInt(p.sompi);
+      let hi = (P * sc) / r;
+      let lo = ((P - 1n) * sc) / r + 1n;
+      if (hi - lo + 1n > BigInt(PAY_RANGE_MAX)) {
+        wide.push(k);
+        continue;
+      }
+      if (lo > hi) lo = hi; // more than allIn of any n: the largest n it covers
+      if (lo < minFill) lo = minFill;
+      if (lo >= left) continue; // more than a partial fill of this ask leaves
+      if (hi >= left) hi = left - 1n;
+      if (lo <= hi) ranges.push({ k, lo, hi });
+    }
+    if (wide.length) {
+      const fresh = wide.filter((k) => !(this.wideLogged ??= new Set()).has(`${id}/${k}`));
+      for (const k of fresh) this.wideLogged.add(`${id}/${k}`);
+      if (fresh.length) this.log.info(`${short(id)}: ${fresh.length} payment(s) to the bot not used as lookup hints: each could pay for more than ${PAY_RANGE_MAX} different fill amounts (a base unit worth far less than a sompi)`);
+    }
+    const src = this.paySrc[id];
+    const combos = [];
+    for (let i = 0; i < ranges.length; i++) {
+      combos.push([i]);
+    }
+    for (let i = 0; i < ranges.length; i++) for (let j = i + 1; j < ranges.length; j++) combos.push([i, j]);
+    for (let i = 0; i < ranges.length; i++) for (let j = i + 1; j < ranges.length; j++) for (let m = j + 1; m < ranges.length; m++) combos.push([i, j, m]);
+    for (const c of combos) {
+      const lo = c.reduce((a, i) => a + ranges[i].lo, 0n);
+      const hi = c.reduce((a, i) => a + ranges[i].hi, 0n);
+      for (let n = hi; n >= lo && src.size < PAY_HINTS_MAX; n--) {
+        const rest = Number(left - n);
+        if (rest >= 1 && !src.has(rest)) src.set(rest, c.map((i) => ranges[i].k));
+      }
+      if (src.size >= PAY_HINTS_MAX) break;
+    }
+    return [...src.keys()];
+  }
+
+  /** A lookup found ask `id` at `amountLeft`: the payments that hint named are its fills (R6T-1). */
+  markPayHit(id, amountLeft) {
+    const keys = this.paySrc?.[id]?.get(Number(amountLeft));
+    const s = this.state.orders[id];
+    if (!keys || !s || Number(amountLeft) === s.amountLeft) return;
+    for (const k of keys) if (this.state.payments[k]) this.state.payments[k].usedBy = id;
+    this.log.info(`${short(id)}: found on the node at amount left ${amountLeft}, from the payment(s) ${keys.join(', ')} to the bot (not from the indexer): they are marked as its fills`);
+  }
+
+  /** The hints of hintsOf that come from the bot's own records and the indexer. */
+  indexerHints(id, listed = null) {
     const s = this.state.orders[id];
     const all = [s?.amountLeft, listed, s?.idxAmount, s?.amount != null && s?.filledSeen ? s.amount - s.filledSeen : null];
     // The amount left after each fill the indexer reported (R5T-1): from the last own outpoint
@@ -465,6 +590,79 @@ export class Bot {
       if (s.amount != null) all.push(...after(s.amount, s.fills));
     }
     return [...new Set(all.filter((n) => Number.isSafeInteger(n) && n > 0))].slice(0, HINTS_MAX);
+  }
+
+  /**
+   * Records a cancel of `s` that went out: pending until seen, with its txid kept beside
+   * cancelSentAt, so that the order ends only once the node shows that transaction (R6T-2).
+   */
+  noteCancel(s, txid, now) {
+    s.pending = { kind: 'cancel', since: now, txid: txid ?? null };
+    s.cancelSentAt = now;
+    if (/^[0-9a-f]{64}$/.test(txid ?? '')) s.cancelTxids = [...(s.cancelTxids ?? []), txid].slice(-CANCEL_TXIDS_KEEP);
+  }
+
+  /**
+   * Whether the node showed that a cancel of `s` the bot sent confirmed (R6T-2): an output of the
+   * cancel's own transaction to the bot's address (the order's carrier comes back as change), or,
+   * for a cancel-replace, the replacement live on the node. A submitted cancel is no proof: a fill
+   * that lands first leaves the ask live at an amount the search may not reach. Without a JSON
+   * wRPC node (testnet-10 only) the bot cannot see its outputs, and the cancel going out is taken.
+   */
+  cancelConfirmed(s) {
+    if (s.pending?.kind !== 'cancel' && s.cancelSentAt == null) return false;
+    if (!this.nodeOutputs || s.replaceSeen) return true;
+    const txs = new Set([...(s.cancelTxids ?? []), s.pending?.kind === 'cancel' ? s.pending.txid : null].filter(Boolean));
+    return Object.values(this.state.payments).some((p) => txs.has(p.txid));
+  }
+
+  /**
+   * Whether `s` is a whole-fill ask (quotes.askPartialFills false): a plain KobAsk or KobAskKron
+   * whose own recorded state has minFill at least its amount left. The contract takes a fill of at
+   * least minFill or of all that is left, never more than is left, so such an ask is only filled in
+   * full, cancelled, amended by the bot or refunded: its amount never changes without the bot. A
+   * state the bot took from the indexer (an older state file) is not its own record.
+   */
+  isWhole(s) {
+    const st = s?.own?.state;
+    if (!st || s.own.fromIndexer || !/^KobAsk(Kron)?$/.test(st.kind ?? '')) return false;
+    const m = String(st.state?.minFill ?? '');
+    const left = String(st.state?.amountLeft ?? '');
+    return /^\d+$/.test(m) && /^\d+$/.test(left) && BigInt(left) > 0n && BigInt(m) >= BigInt(left);
+  }
+
+  /**
+   * Whether a verified "not found" of whole-fill ask `s` is the node's word that it ended: the
+   * lookup covered every state it can be in (its own, and the one before an amend not yet seen),
+   * under the template it was placed with, and no action of unknown outcome (a failed send that
+   * may have gone out with a state the bot did not record) or cancel-replace is open on it.
+   */
+  wholeGone(s) {
+    if (!this.isWhole(s) || s.stateUnknown || s.fate || s.pending?.kind === 'reread') return false;
+    if (s.own.prev && !this.isWhole({ own: { state: s.own.prev } })) return false;
+    const t = this.tplOf(s);
+    return t.verified && s.own.cli != null && s.own.cli === this.cliVersion && (s.own.tpl == null || s.own.tpl === t.hash);
+  }
+
+  /** Whether the node showed an output of a placement of unknown outcome: it went out (R6T-2). */
+  wentOut(s) {
+    const t = s.pending?.kind === 'place' ? s.pending.txid : null;
+    return !!t && !!this.nodeOutputs && Object.values(this.state.payments).some((p) => p.txid === t);
+  }
+
+  /**
+   * The indexer's per-order views of `ids`, INDEXER_READS at a time (R6T-6): the amount left each
+   * names is a hint, which the node checks. One that does not answer adds nothing.
+   */
+  async idxAmounts(ids) {
+    const list = [...ids];
+    const one = async () => {
+      for (let id = list.shift(); id != null; id = list.shift()) {
+        const v = await this.idx.order(id).catch(() => null);
+        if (v?.amountLeft > 0 && this.state.orders[id]) this.state.orders[id].idxAmount = v.amountLeft;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(INDEXER_READS, list.length) }, one));
   }
 
   /** One cancel through the node from the bot's record only (kob recover --cancel). */
@@ -510,12 +708,7 @@ export class Bot {
       else if (s) { pass.looked++; pass.found++; } // found live by the rotation since
     }
     if (batch.length) {
-      if (indexer) {
-        for (const id of batch) {
-          const v = await this.idx.order(id).catch(() => null);
-          if (v?.amountLeft > 0) this.state.orders[id].idxAmount = v.amountLeft;
-        }
-      }
+      if (indexer) await this.idxAmounts(batch);
       const res = this.maker ? await this.cancelMany(batch) : new Map();
       for (const id of batch) {
         const s = this.state.orders[id];
@@ -530,7 +723,7 @@ export class Bot {
           if (r.ok && !this.dryRun) {
             this.ownTx(r.txid);
             if (r.fee) addFee(this.state, 'cancel', r.fee);
-            Object.assign(s, { pending: { kind: 'cancel', since: now, txid: r.txid ?? null }, cancelSentAt: now });
+            this.noteCancel(s, r.txid, now);
           }
         } else if (r?.live === false) {
           pass.looked++;
@@ -615,14 +808,16 @@ export class Bot {
     this.endProven(now);
     // Proven asks (R5T-1) are looked up a few a cycle, in rotation, the ones listed first.
     const look = this.provenSlice(now, new Set(Object.keys(this.state.orders).filter((id) => byId.has(id))));
+    // The indexer's per-order views of the asks it does not list, read at once (R6T-6).
+    await this.idxAmounts(Object.keys(this.state.orders).filter((id) => {
+      const s = this.state.orders[id];
+      if (byId.has(id) || !isAsk(s)) return false;
+      return s.proven && !s.proven.liveAt ? look.includes(id) : !(s.pending?.kind === 'place' && !due(s.pending));
+    }));
     for (const id of look) {
       const s = this.state.orders[id];
       this.learn(s, raw.get(id));
       check.push(id);
-      if (!byId.has(id)) {
-        const v = await this.idx.order(id).catch(() => null);
-        if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
-      }
       hints[id] = this.hintsOf(id, byId.get(id)?.amountLeft ?? null);
     }
     for (const [id, s] of Object.entries(this.state.orders)) {
@@ -634,11 +829,7 @@ export class Bot {
         check.push(id);
         // An ask the list leaves out: the indexer's own view of it may still name its amount, which
         // the node then checks (R3T-3).
-        if (isAsk(s)) {
-          const v = await this.idx.order(id).catch(() => null);
-          if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
-          hints[id] = this.hintsOf(id);
-        }
+        if (isAsk(s)) hints[id] = this.hintsOf(id);
         continue;
       }
       if (isAsk(s)) hints[id] = this.hintsOf(id, o.amountLeft);
@@ -664,8 +855,13 @@ export class Bot {
       const one = Object.entries(this.state.orders).find(([id, s]) => s.own?.state?.kind === kind && !s.proven && !check.includes(id));
       if (one) check.push(one[0]);
     }
+    // A cancel-replaced record due for its check: its replacement is looked up too, and live on
+    // the node it proves that the replace confirmed (R6T-2).
+    const replaced = check.filter((id) => this.state.orders[this.state.orders[id]?.replacedBy]);
+    for (const id of replaced) if (!check.includes(this.state.orders[id].replacedBy)) check.push(this.state.orders[id].replacedBy);
     if (check.length) {
       const res = await this.nodeCheck(check, hints);
+      for (const id of replaced) if (res.get(this.state.orders[id].replacedBy)?.status === 'live') this.state.orders[id].replaceSeen = true;
       for (const id of check) if (this.state.orders[id]) await this.settle(id, res.get(id), byId.get(id), now);
     }
     for (const [id, r] of Object.entries(this.state.recent)) if (now - r.endedAt > 3_600_000) delete this.state.recent[id];
@@ -728,11 +924,23 @@ export class Bot {
       if (s.own) Object.assign(s.own, { prev: null, txid: r.txid });
       s.value = r.value;
       if (r.amountLeft != null && /^\d+$/.test(String(r.amountLeft))) {
+        if (isAsk(s)) this.markPayHit(id, r.amountLeft);
         s.amountLeft = Number(r.amountLeft);
+        s.leftAt = now; // the node's last word on its amount (payHints)
         if (isAsk(s) && s.own?.state?.state) s.own.state.state.amountLeft = String(r.amountLeft);
       }
       if (s.fate) this.log.info(`${tag}: the placement whose outcome was unknown is on chain`);
       s.fate = null;
+      s.cancelUnseen = false;
+      s.stateUnknown = false;
+      if (s.replacedBy) {
+        // Its cancel-replace never landed (it spends this very output): the replacement record is
+        // a placement that may not have gone out, and this order is tracked again (R6T-2).
+        const n = this.state.orders[s.replacedBy];
+        this.log.info(`${tag}: its cancel-replace ${s.pending?.txid ?? ''} did not land: the order is live at ${r.txid}`);
+        if (n) n.fate = 'unknown';
+        s.replacedBy = null;
+      }
       s.unconfirmed = false;
       if (s.pending?.kind === 'cancel' ? now - s.pending.since > timeout : s.pending) s.pending = null; // an unseen cancel is sent again
       // A proven ask the node holds live (R5T-1: a proof the indexer forged, or a fill it named
@@ -757,16 +965,44 @@ export class Bot {
       return;
     }
     if (r.status === 'gone' || r.status === 'foreign') {
-      const cancelled = s.pending?.kind === 'cancel' || s.cancelSentAt != null;
+      const sent = s.pending?.kind === 'cancel' || s.cancelSentAt != null;
+      let cancelled = this.cancelConfirmed(s);
+      // The cancel may have confirmed after this cycle's read of the payments: one more read a
+      // cycle, after the lookup, so that a cancel the lookup saw land is not taken for a lost one.
+      if (!cancelled && sent && r.status === 'gone' && r.verified && !r.spent && this.nodeOutputs && this.paymentsReread !== now) {
+        this.paymentsReread = now;
+        if (await this.seePayments(now)) cancelled = this.cancelConfirmed(s);
+      }
+      // A placement of unknown fate whose transaction shows an output on the node went out: from
+      // now on it is an order like any other (R6T-2).
+      if (s.fate && this.wentOut(s)) {
+        this.log.info(`${tag}: the placement whose outcome was unknown went out (the node shows an output of ${s.pending.txid})`);
+        s.fate = null;
+      }
       // Proof that it ended: no output at a script that never changes (a bid), the bot's own
-      // cancel, or a placement of unknown fate that neither the node nor the indexer shows. An ask
-      // the node does not find may sit at an amount the search did not reach (a fill of any
-      // amount), so that alone is no proof: it is kept as unresolved (R3T-3).
-      // An ask also ends once the fills of its whole amount are paid in outputs to the bot that
-      // the node showed: a lying indexer would need a real payment to make the bot forget it.
+      // cancel confirmed on the node (R6T-2), or a placement of unknown fate that neither the node
+      // nor the indexer shows. An ask the node does not find may sit at an amount the search did
+      // not reach (a fill of any amount), so that alone is no proof: it is kept as unresolved
+      // (R3T-3). So is one whose cancel went out but never showed on the node: a fill that landed
+      // first leaves it live (R6T-2); it is looked up, and cancelled again once found.
+      // A whole-fill ask (minFill = its amount) never moves without the bot: not found at its
+      // recorded state(s) is the node's word that it ended (filled in full, cancelled or refunded).
+      const whole = r.status === 'gone' && r.verified && this.wholeGone(s);
+      if (whole) {
+        const status = 'not on the node at its own state: a whole-fill ask cannot move, so it was filled in full, cancelled or refunded';
+        this.log.info(`${tag} ended: ${status}`);
+        this.log.action({ type: 'ended', id, side: s.side, level: s.level, status: 'whole-fill ask not on the node' });
+        this.state.recent[id] = { side: s.side, level: s.level, endedAt: now };
+        delete this.state.orders[id];
+        return;
+      }
       const ended = r.status === 'gone' && r.verified && (r.spent || cancelled || (s.fate && !o));
+      if (!ended && sent && !s.cancelUnseen && r.status === 'gone' && r.verified) {
+        s.cancelUnseen = true;
+        this.log.info(`${tag}: not found on the node, but no cancel the bot sent (${(s.cancelTxids ?? []).map(short).join(', ') || '-'}) shows on it: not taken as cancelled (a fill may have landed first)`);
+      }
       if (ended) {
-        const status = s.fate ? 'the placement never went out' : cancelled ? 'cancelled' : 'spent on the node (filled or ended)';
+        const status = s.fate ? 'the placement never went out' : cancelled ? 'cancelled (its cancel shows on the node)' : 'spent on the node (filled or ended)';
         this.log.info(`${tag} ended: ${status}`);
         this.log.action({ type: 'ended', id, side: s.side, level: s.level, status });
         this.state.recent[id] = { side: s.side, level: s.level, endedAt: now };
@@ -800,7 +1036,7 @@ export class Bot {
       }
       if (!s.unconfirmed) {
         const what = r.status === 'foreign' ? 'names another maker' : !r.verified ? 'is not found under a template not yet proven on the node'
-          : `is not found at any state the bot can follow (a fill by an amount the search does not reach, or a full fill)${o ? ', though the indexer lists it' : ''}`;
+          : `is not found at any state the bot can follow (a fill by an amount the search does not reach, or a full fill)${o ? ', though the indexer lists it' : ''}${sent ? ', and no cancel the bot sent shows on the node' : ''}`;
         this.alert('error', 'node-unconfirmed', `Order ${tag} ${what}: it is kept as unresolved (it counts toward the capital cap, its level is not quoted again, and pulls and STOP wait for it); each cycle the bot looks it up on the node with every amount it knows and cancels it once found. Check it by hand (kob recover --from ${this.p.check} --amount-left ${id}=<amount left>); once it has ended, stop the bot and drop it (mm-bot drop --config FILE --id ${id}), which asks the node first.`);
       }
       s.unconfirmed = true;
@@ -824,7 +1060,9 @@ export class Bot {
     return Object.entries(this.state.orders).map(([id, s]) => ({
       // A parked ask (past its expiry, unresolved) gives its level back but stays counted; a proven
       // one (paid, R5T-1) gives both back until the node finds it live.
-      id, side: s.side, level: s.parked || s.proven ? 1000 + s.level : s.level, price: s.price, quotedFair: s.quotedFair, amountLeft: s.amountLeft ?? s.amount, value: s.value ?? 0,
+      // A cancel-replaced order (R6T-2) is kept until the node shows the replace; its replacement holds the level.
+      id, side: s.side, level: s.parked || s.proven || s.replacedBy ? 1000 + s.level : s.level,
+      replaced: !!(s.replacedBy && this.state.orders[s.replacedBy]), price: s.price, quotedFair: s.quotedFair, amountLeft: s.amountLeft ?? s.amount, value: s.value ?? 0,
       proven: !!s.proven && !s.proven.liveAt,
       // An unresolved order (R3T-3) holds its level and is never amended; a pull still cancels it.
       pending: !!s.pending || !!s.unconfirmed || (!!s.proven && !s.proven.liveAt),
@@ -905,11 +1143,12 @@ export class Bot {
       delete pay[k].goneAt;
     }
     // One not shown is kept for a week after the node last showed it, so that one read that omits
-    // it does not make it new again (R5T-I1); the records of no use yet, at most PAYMENTS_KEEP.
+    // it does not make it new again (R5T-I1); the records of no use yet, at most PAYMENTS_KEEP; the
+    // bot's own a day (its txid stays in ownTx longer, so a re-shown one is flagged own again).
     for (const [k, p] of Object.entries(pay)) if (!shown.has(k)) p.goneAt ??= now;
     const gone = Object.entries(pay).filter(([k, p]) => !shown.has(k) && now - p.goneAt < PAYMENT_KEEP_MS);
     const plain = gone.filter(([, p]) => !p.own && !p.usedBy).sort((a, b) => b[1].goneAt - a[1].goneAt).slice(0, PAYMENTS_KEEP);
-    this.state.payments = Object.fromEntries([...Object.entries(pay).filter(([k]) => shown.has(k)), ...gone.filter(([, p]) => p.own || p.usedBy), ...plain]);
+    this.state.payments = Object.fromEntries([...Object.entries(pay).filter(([k]) => shown.has(k)), ...gone.filter(([, p]) => p.usedBy || (p.own && now - p.goneAt < OWN_KEEP_MS)), ...plain]);
     // Their outputs are flagged now: the list of own txids can roll.
     this.state.ownTx = (this.state.ownTx ?? []).slice(-OWN_TX_KEEP);
     for (const o of Object.values(this.state.orders)) if (o.ownAt == null) o.ownAt = now;
@@ -944,7 +1183,7 @@ export class Bot {
       if (q == null || own.has(f.txid)) continue;
       // The smallest free output of the fill's transaction that covers it.
       const k = Object.entries(this.state.payments)
-        .filter(([key, p]) => p.txid === f.txid && !p.usedBy && !p.own && !picked.includes(key) && p.at > s.ownAt && BigInt(p.sompi) >= q)
+        .filter(([key, p]) => p.txid === f.txid && (!p.usedBy || p.usedBy === id) && !p.own && !picked.includes(key) && p.at > s.ownAt && BigInt(p.sompi) >= q)
         .sort((a, b) => a[1].sompi - b[1].sompi)[0]?.[0];
       if (!k) continue;
       picked.push(k);
@@ -960,7 +1199,7 @@ export class Bot {
   unresolvedOrders() {
     return Object.entries(this.state.orders).filter(([, s]) => s.unconfirmed || s.parked || s.proven).map(([id, s]) => ({
       id, side: s.side, level: s.level, price: s.price, amount: s.amount ?? null, amountLeft: s.amountLeft ?? null, filledSeen: s.filledSeen ?? 0,
-      parked: !!s.parked, proven: !!s.proven, placedAt: s.placedAt ?? null, expiresAt: s.expiresAt ?? null, hints: isAsk(s) ? this.hintsOf(id) : [],
+      parked: !!s.parked, proven: !!s.proven, placedAt: s.placedAt ?? null, expiresAt: s.expiresAt ?? null, hints: isAsk(s) ? this.hintsOf(id, null, { pay: false }) : [],
     }));
   }
 
@@ -987,10 +1226,16 @@ export class Bot {
     if (r.status === 'unknown') return { ok: false, node: r, message: `the node could not be asked about ${short(id)} (${r.why}): not dropped` };
     const what = r.status === 'foreign' ? 'names another maker' : `is not found on the node at the amounts ${hints.join(', ') || '(a bid: its script)'}${isAsk(s) ? ' (the search is not exhaustive)' : ''}`;
     const fills = (s.fills ?? []).filter((f) => f.at == null || s.ownAt == null || f.at > s.ownAt);
-    const doubt = r.status !== 'gone' ? null
-      : !r.verified ? `it was looked up under an order template not yet proven on the node (no order of its kind found live under it), so not finding it proves nothing`
-        : isAsk(s) && fills.length ? `the indexer reported ${fills.length} fill(s) of it since its last placement or amend (${fills.reduce((a, f) => a + f.amount, 0)} base units in all): it may be live at an amount left the search did not reach`
-          : null;
+    // Without --force an ask is dropped only when the node showed that it ended (its cancel
+    // confirmed) or its record is past the end rule of a proven ask (2 h past its expiry) (R6T-3).
+    const expiry = s.expiresAt ?? (s.proven ? s.proven.at + this.life().lifeMs : null);
+    const settled = (r.status === 'gone' && r.verified && (r.spent || this.cancelConfirmed(s) || this.wholeGone(s))) || (expiry != null && Date.now() >= expiry + PROVEN_KEEP_AFTER_EXPIRY_MS);
+    const doubt = settled ? null
+      : r.status === 'foreign' ? (isAsk(s) ? 'the node names another maker at its script, which is no proof that the ask ended' : null)
+        : !r.verified ? `it was looked up under an order template not yet proven on the node (no order of its kind found live under it), so not finding it proves nothing`
+          : isAsk(s) && fills.length ? `the indexer reported ${fills.length} fill(s) of it since its last placement or amend (${fills.reduce((a, f) => a + f.amount, 0)} base units in all): it may be live at an amount left the search did not reach`
+            : isAsk(s) ? 'the indexer reported no fill of it and no cancel the bot sent shows on the node, yet an ask leaves its script only by a fill, a cancel or a refund: the indexer may have withheld a fill, and the ask may be live at an amount left the search did not reach (the most suspicious case)'
+              : null;
     const warn = 'A dropped order that is still live stays fillable, and the bot no longer cancels it (not by a pull, IDLE or STOP).';
     if (doubt && !force) {
       return { ok: false, node: r, message: `${short(id)} ${what}, but ${doubt}: not dropped. Check it first (kob recover --from ${this.p.unresolved} --amount-left ${id}=<amount left>, after mm-bot unresolved), then drop it with --force. ${warn}` };
@@ -1127,6 +1372,8 @@ export class Bot {
     // Without an answer the next read that succeeds stands for the time (ownAt null).
     const sends = (a.kind === 'place' || a.kind === 'amend') && !this.dryRun;
     const ownAt = sends && (await this.seePayments(Date.now())) ? Date.now() : null;
+    // A merge spends the wallet's KAS too: what landed since the last read is recorded first (R6T-1).
+    if (a.kind === 'merge' && !this.dryRun) await this.seePayments(Date.now());
     const r = a.kind === 'place' ? await this.kob.place(tok, a.side, a.amount, a.price, gtd)
       : a.kind === 'amend' ? await this.kob.amend(a.id, a.price, gtd)
         : a.kind === 'cancel' ? await this.cancelOrder(a.id) : await this.kob.merge(tok);
@@ -1141,6 +1388,18 @@ export class Bot {
       if (r.sentFee && !this.dryRun) {
         addFee(this.state, `${a.kind}-unknown`, r.sentFee);
         this.ownTx(r.doc?.result?.txid ?? r.doc?.transaction?.txid);
+        // An amend that may have gone out leaves the order at one of two states: the one it
+        // planned is recorded as an amend not yet seen, so that both are looked up. One whose plan
+        // names no in-place state may sit anywhere: no whole-fill end for it until the node finds
+        // it (wholeGone).
+        const s = this.state.orders[a.id];
+        const rep = r.doc?.plan?.replacement;
+        if (a.kind === 'amend' && s) {
+          if (rep?.kind && r.doc?.plan?.inPlace !== false && s.own?.state) {
+            s.own = { ...s.own, prev: s.own.state, state: rep };
+            s.pending = { kind: 'amend', since: Date.now(), txid: r.doc?.result?.txid ?? r.doc?.transaction?.txid ?? null };
+          } else s.stateUnknown = true;
+        }
       }
       this.save();
       return r;
@@ -1155,6 +1414,10 @@ export class Bot {
       const id = r.newIds[0];
       // The order is tracked from the CLI's own result: its state and outpoint (R2-T1).
       if (id) this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
+      // The CLI's own plan says whether the ask is whole-fill: one that is not follows the partial-fill rules.
+      if (id && a.side === 'sell' && c.quotes.askPartialFills === false && !this.isWhole(this.state.orders[id])) {
+        this.log.info(`WARNING: ${short(id)}: placed with --min-fill ${a.amount}base, but the CLI's plan names minFill ${this.state.orders[id].own?.state?.state?.minFill ?? '?'}: it is tracked as a partial-fill ask`);
+      }
       this.state.placeFails = 0;
       this.placeError = null;
     } else if (a.kind === 'amend') {
@@ -1169,18 +1432,21 @@ export class Bot {
         const left = rep?.state?.amountLeft;
         Object.assign(s, { price: a.price, quotedFair: a.quotedFair, expiresAt, expired: false, ownAt, ownAmount: /^\d+$/.test(String(left ?? '')) ? Number(left) : s.amountLeft ?? s.amount,
           pending: { kind: 'amend', since: now, txid: r.txid } });
+        if (a.side === 'sell' && c.quotes.askPartialFills === false && !this.isWhole(s)) this.log.info(`WARNING: ${short(a.id)}: the amend's plan names minFill ${s.own?.state?.state?.minFill ?? '?'} below the amount left: it is tracked as a partial-fill ask`);
       }
       else {
-        // A cancel-replace: the order has a new id.
-        delete this.state.orders[a.id];
-        this.state.recent[a.id] = { side: a.side, level: a.level, endedAt: now };
+        // A cancel-replace: the order has a new id. The old record stays, as cancelled, until the
+        // node shows the replace (an output of it, or the replacement live): a fill that lands
+        // first leaves the old order live (R6T-2).
         const id = r.newIds[0];
         if (id) this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
-        this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}`);
+        s.replacedBy = id ?? null;
+        this.noteCancel(s, r.txid, now);
+        this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}; the old record is kept until the node shows the replace`);
       }
     } else if (a.kind === 'cancel') {
       const s = this.state.orders[a.id];
-      if (s) Object.assign(s, { pending: { kind: 'cancel', since: now, txid: r.txid }, cancelSentAt: now });
+      if (s) this.noteCancel(s, r.txid, now);
     }
     this.save();
     return r;
@@ -1191,7 +1457,8 @@ export class Bot {
     const st = doc?.plan?.states?.[0];
     const value = Number(doc?.plan?.request?.value ?? 0) || (a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0);
     return { side: a.side, level: a.level, price: a.price, amount: a.amount, ownAmount: a.amount, ownAt: null, quotedFair: a.quotedFair, placedAt: now, expiresAt, amountLeft: a.amount, value,
-      own: st?.kind ? { state: st, prev: null, txid: txid ?? null, tpl: null } : null };
+      // `cli`: the build that placed it, whose templates a whole-fill lookup must be under (wholeGone).
+      own: st?.kind ? { state: st, prev: null, txid: txid ?? null, tpl: null, cli: this.cliVersion ?? null } : null };
   }
 
   /**

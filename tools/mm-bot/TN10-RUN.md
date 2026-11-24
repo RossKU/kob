@@ -83,3 +83,39 @@ The stand-in CLI of `test/` imitates `kob recover`; these points need the real C
   to `<dataDir>/dropped-orders.json`, and `kob recover --from <dataDir>/dropped-orders.json --network testnet-10`
   reads that file (the extra `dropped` field of each item is ignored). `mm-bot unresolved` writes
   `<dataDir>/unresolved-orders.json`, which `kob recover --from` reads too.
+
+## To check on the next live run (round-6 fixes, not testable offline)
+
+- R6T-2: a cancelled ask ends only once the node shows an output of the cancel's own transaction to the bot's address
+  (`state.json` `payments` holds an entry whose `txid` is in the order's `cancelTxids`; the log says "ended: cancelled
+  (its cancel shows on the node)"). Check that the real `kob recover --cancel` and `kob cancel` of an ask pay the order's
+  carrier back as a plain P2PK output (no covenant id) in that transaction. An amend the CLI does as a cancel-replace
+  (strays on the order) keeps the old record until its replacement is found live on the node.
+- R6T-1: a hidden ask partly filled by an odd amount, with the indexer reporting nothing, is found from the payout's
+  amount alone (the log line "found on the node at amount left ..., from the payment(s) ... (not from the indexer)").
+  Check that a real matcher's payout of a partial fill is exactly `ceil(n x (price - tip) / scale)`.
+- R6T-6: in a STOP with proven asks the pull's `kob recover --cancel` comes before the pass's in `logs/actions.jsonl`.
+- R6T-3: `mm-bot drop` of an unresolved ask with no fill reported refuses without `--force`.
+- Whole fills (`quotes.askPartialFills: false`): each `kob place` of an ask carries `--min-fill <amount>base` and the
+  placed state (`state.json`, `own.state.state.minFill`) equals `amountLeft`; an amend in place keeps it. Fill one ask in
+  full from another key: the next cycle logs "ended: not on the node at its own state" and places its level again, with
+  no `node-unconfirmed` alert and no proven record. Try a partial take of another (`kob take` of less than its amount):
+  the CLI or the node refuses it (the contract needs `n >= minFill` or `n == amountLeft`), and the ask stays live.
+
+## What the lookup still cannot find (round 6, R6T-1)
+
+This applies to partial-fill asks (`quotes.askPartialFills: true`, the testnet-10 default) only: with `false` every ask
+is filled in full or not at all, the node alone says whether it is live, and the residue below does not exist (a taker
+must take a whole level).
+
+The node can only be asked for an ask at an amount. With a hostile indexer the amounts the bot has are its own and the
+ones the payments to its address name (README, "Amounts from the payments"). An ask stays unfindable when the filler paid
+the maker more than `allIn` (escaping costs the value of one base unit, 4,000 sompi at the TUSDC6 defaults), when more
+than 3 fills (or more than 12 payments) landed since the bot last knew its amount, when a payment could pay for more
+than 200 fill amounts (a base unit worth under 1/200 sompi), when the bot's own send spent the payment in the second or
+two before the bot read it, or without a JSON wRPC node. Such an ask stays live at its old price until its expiry: one
+level at a stale price for at most `lifeMin`, while its level is quoted again (proven) or stays blocked (unresolved).
+With the defaults that is 15 % of `capitalUsd` (150 USD at 1,000 USD) for at most 90 min: about 3 to 8 USD per attack at
+1,000 USD for a 2 to 5 % move. The attacker needs the indexer the bot reads and pays the spread of two trades. The
+operator's remedy: an indexer you run yourself, a short `lifeMin` (floor 30 min), and a watch on
+`<dataDir>/proven-not-found.json`, `mm-bot unresolved` and the `node-unconfirmed` and `proven-live` alerts.

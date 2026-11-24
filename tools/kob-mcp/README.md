@@ -62,7 +62,12 @@ The limits below are what holds.
     current quote, never at a far limit or start (a decaying ask only gets cheaper and a rising bid only higher for the
     taker after the read, so the quote never favours the wallet's trade); orders that are not
     settled, are expired or past their deadline, or whose minimum fill is above the slice due now or worth more than
-    10 KAS, a bid beyond the KAS of its escrow, and the wallet's own orders do not count either) and the fill history (the VWAP of the newest 1,000 KAS of fills). A
+    10 KAS, a bid beyond the KAS of its escrow, the wallet's own orders, and dust (an order worth under 1 KAS, the
+    listing minimum, at its quote) do not count either) and the fill history (the VWAP of the newest 1,000 KAS of fills).
+    The book is read 400 orders a side deep: an older kobd mixes up to 200 dust orders into its best rows (a newer one
+    leaves dust out by default), so 200 dust orders at the top cannot hide the real ones. An indexer clamps the read to
+    its `max_page_size` (200 by default): there 200 dust orders at the top still leave nothing to count, and the write
+    is refused (the reason names the dust; `refPrice` lifts it). A
     buy is judged against the lower of the two, a sell against the higher. A book that cannot be read refuses. Against
     an older kobd every priced write on a token without `refPrice` is therefore refused.
 

@@ -76,6 +76,24 @@ the reader. With one issued template the reader is built on that template, so th
 fails it until `AutoLock` carries its template and the readers and the keeper serve each listed one (audit 2026-11-23 R2A-3). A lock re-pin also
 changes `template_generation` (below). Issued so far: `KobLockAuto` `ed392654` (2026-11-20).
 
+### Withdrawn lock templates
+
+The history check reads every commit of the record on any path into HEAD (`git log --full-history`), so a lock template that a
+branch listed (a re-pin committed with its regenerated record) and dropped again before a merge commit refuses every later
+build. Such a template was never issued, and the record says so in `withdrawn_locks`: entries `{ "name", "hash", "why" }`,
+entered by hand in the committed `contracts/deploy/<network>/deployment.json` and carried over by every build like `locks`. The
+history check takes a hash listed there as accounted for. An entry may not name a template that is in `locks`, the current one
+included, and a later record that deletes the entry refuses again. `DEPLOYMENT.md` lists the entries with their reason.
+
+The rule stays "no lock template ever issued may disappear", so before listing a template as withdrawn the operator must be sure
+that no lock was ever made under it, on any network the record covers: no release, tag or deployed binary (`deploy-<network>`
+build, web build, Pages deploy) was built from a commit whose record listed it; `git log --full-history --format='%h %d' --
+contracts/deploy/<network>/deployment.json` names every such commit, and none of them is on a release branch, a tag or the
+branch a deploy workflow built. The index is no evidence here: it shows only locks under the templates its own build reads.
+The `why` names those commits and the checks done. When in doubt, keep the template in `locks` with its artifact instead
+(the readers then have to serve it, above). The simpler habit avoids the case: merge a lock re-pin only after review, and
+squash-merge a branch whose record listed a lock template it later dropped.
+
 ## Which generation a build serves
 
 `GET /v1/health` reports `template_generation`: the first 16 hex digits of the blake3 hash of the template hashes this build pins
