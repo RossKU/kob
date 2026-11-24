@@ -216,7 +216,7 @@ export interface DecodedOutput {
   kind: 'order' | 'custody' | 'token-change' | 'token-out' | 'kas-change' | 'payment-out' | 'fill-payout' | 'fill-continue' | 'unknown-covenant' | 'unknown' | 'lock-coin';
   flagged: boolean;
   order: null | { covenantId: Hex; description: OrderDescription; verified: boolean; locked: LockedKas; deadline: bigint | null };
-  token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; escrowOf: Hex | null };
+  token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; escrowOf: Hex | null; ext?: Hex | null };
   /** recipient key of a payment / transfer to another key */
   recipient: Hex | null;
 }
@@ -703,8 +703,12 @@ function planSigner(p: SigPlan): Hex | null {
   }
 }
 
-function actionOfRole(role: string, entry: string): NonNullable<DecodedInput['order']>['action'] {
-  const what = (role.split('@')[0].split('.')[1] ?? entry).toLowerCase();
+/**
+ * The action of an order entry. The entry is what the signature script the plan describes runs; the
+ * app's role label is never the source (R9FB-1).
+ */
+function actionOfEntry(entry: string): NonNullable<DecodedInput['order']>['action'] {
+  const what = entry.toLowerCase();
   if (what === 'cancel') return 'cancel';
   if (what === 'refund' || what === 'close') return 'refund';
   if (what === 'update') return 'update';
@@ -815,7 +819,16 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         state = null;
       }
       mustMatch(derivedSpk, `${plan.template} contract of the given state`);
-      const action = actionOfRole(role, plan.entry);
+      // The action is what the entry the plan signs does. A role label only tells a refund from a fill
+      // of the same settle entry, which the covenant itself holds to its rules; a label that names
+      // another action than the entry is refused (R9FB-1). No funds check rests on it: they follow
+      // which order inputs the wallet signs and whether their covenant id continues.
+      const byEntry = actionOfEntry(plan.entry);
+      const named = role.split('@')[0]!.split('.')[1];
+      const byRole = named !== undefined ? actionOfEntry(named) : byEntry;
+      const consistent = byRole === byEntry || (byEntry === 'fill' && byRole === 'refund');
+      if (!consistent) add('malformed-built', `input ${i}: the role "${role}" names another action than the entry "${plan.entry}" the plan signs`, { input: i });
+      const action = consistent ? byRole : byEntry;
       if (state && isOrderKind(state.kind)) {
         const os = state as OrderState;
         orderStates.set(i, os);
@@ -844,8 +857,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         state = null;
       }
       mustMatch(derivedSpk, `${plan.template} contract of an older version (cancel only)`);
-      const action = actionOfRole(role, 'cancel');
-      if (action !== 'cancel') add('retired-not-cancel', `input ${i}: an order under an older contract version is only cancelled by its maker, not spent by "${role}"`, { input: i });
+      const named = role.split('@')[0]!.split('.')[1];
+      if (named !== undefined && actionOfEntry(named) !== 'cancel') add('retired-not-cancel', `input ${i}: an order under an older contract version is only cancelled by its maker, not spent by "${role}"`, { input: i });
       if (state && isOrderKind(state.kind)) {
         const os = state as OrderState;
         orderStates.set(i, os);
@@ -1041,6 +1054,14 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     sweeps = r.sweeps.filter((s) => !amendByOutput.has(s.output));
     for (const f of r.failed) add('sweep-invalid', `a sweep record does not verify: ${f.reason}`, { output: f.output, input: f.input });
     if (sweeps.length < r.sweeps.length) add('sweep-invalid', 'an output is named by both an amend and a sweep record');
+  }
+  // an unbound curve (a sell curve placed at its token's creation) is never swept: its custody must
+  // stay with its order UTXO, or it can never fill again (the builder's rule, R9FB-2)
+  for (const sw of sweeps) {
+    const was = orderStates.get(sw.input);
+    if (was?.kind === 'KobCurveAsk' && /^0{64}$/.test((was.state as { tokenCovId: string }).tokenCovId)) {
+      add('sweep-invalid', `input ${sw.input}: an unbound curve is not swept: its custody must stay with its order UTXO, or it can never fill again`, { input: sw.input, output: sw.output });
+    }
   }
   const sweepByOutput = new Map(sweeps.map((s) => [s.output, s]));
   const sweepByInput = new Map(sweeps.map((s) => [s.input, s]));
@@ -1364,7 +1385,11 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       // an amend keeps the delivery block (bid-delivery-spec §2)
       const was = orderStates.get(am.input);
       // an unbound curve is bound by its amend: to the token of its custody, which the plan names
-      if (was?.kind === 'KobCurveAsk' && /^0{64}$/.test((was.state as { tokenCovId: string }).tokenCovId) && expected) {
+      if (was?.kind === 'KobCurveAsk' && /^0{64}$/.test((was.state as { tokenCovId: string }).tokenCovId) && !expected) {
+        // without the planner's claims (the private-key signer) the token of the custody is the app's
+        // word: the bind is not signed blind (R9FB-2)
+        add('curve-terms-invalid', `output ${j}: this signer cannot check which token the amend binds an unbound curve to: use a wallet extension for this action`, { output: j });
+      } else if (was?.kind === 'KobCurveAsk' && /^0{64}$/.test((was.state as { tokenCovId: string }).tokenCovId) && expected) {
         const want = expected.binds?.[am.covenantId];
         const got = (os.state as { tokenCovId?: string }).tokenCovId;
         if (!want || got !== want) add('curve-terms-invalid', `output ${j}: the amend of an unbound curve names ${shortId(String(got))}, not the token of its custody`, { output: j });
@@ -1405,7 +1430,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (!ok) add('output-script-mismatch', `output ${j}: the script is not the ${tok.program} token script of the planned token state`, { output: j });
       const st = tok.state;
       const ref = tokenRef(registry, tok.covenantId);
-      const token = { ref, amount: big(st.amount), owner: st.owner, ownerScheme: ownerTypeOf(st), escrowOf: isCovenantOwned(st) ? st.owner : null };
+      const token = { ref, amount: big(st.amount), owner: st.owner, ownerScheme: ownerTypeOf(st), escrowOf: isCovenantOwned(st) ? st.owner : null, ext: extensionOfState(st) };
       // A borrow setting is kept only on the wallet's own change, and only with the setting of every
       // wallet input of that token. The owner path spends such a holding, and its change keeps the
       // setting. On a recipient, a custody or any other output it stays blocking.
@@ -1936,12 +1961,16 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const o = d.order;
     const st = orderStates.get(d.index);
     const cov = o?.covenantId ?? null;
-    if (!o || !st || !cov || (o.action !== 'cancel' && o.action !== 'refund')) continue;
+    // every order input of the wallet the wallet signs: its signature lets the maker's cancel run
+    // whatever entry the plan names (the signature does not cover the signature script)
+    if (!o || !st || !cov || (o.action !== 'cancel' && o.action !== 'refund' && !(o.makerIsWallet && d.willSign))) continue;
     const continues = sweepByInput.has(d.index) || amends.some((a) => a.input === d.index) || tx.outputs.some((x) => x.covenant?.covenantId === cov);
     let held: { token: Hex; amount: bigint }[];
     try {
       held = custodiesOf(st, kob).filter((c) => c.amount > 0n);
     } catch {
+      // a state whose holdings cannot be read is not judged as holding nothing (R9FB-4)
+      add('custody-unreleased', `input ${d.index}: what order ${cov} holds cannot be read from its state`, { input: d.index, params: { amount: 0n } });
       held = [];
     }
     const pf = pairFactsOf(st);
@@ -1974,6 +2003,109 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       }
     }
   }
+  outputSideHoldings();
+  /**
+   * What the wallet's signature binds, judged without trusting the app (R9FB-1). It holds in the
+   * private-key frame, which has no node facts: SIGHASH_ALL commits every output in full and, of the
+   * inputs, every outpoint but only the signed input's own script and amount. So the state of an order
+   * input the wallet signs is bound (its script is the P2SH of it), its covenant id continues only
+   * through an output that names it as the authorizing input (consensus), and an output's token
+   * state is bound by its script. What the app says of an unsigned input is not.
+   *
+   * - Every order of the wallet that the wallet signs and whose covenant id does not continue ends:
+   *   outputs to the wallet's key, and custodies of orders created here, must hold at least what its
+   *   state holds (custodies, prefund, bought tokens) of each token and class, summed over all such
+   *   orders and net of the wallet's own token inputs of that token and class.
+   * - An order that continues keeps its custody: in the frame, what reaches the wallet of a token and
+   *   class it holds must stay below the smallest such custody, because the frame cannot tell its
+   *   strays from it.
+   * - Shapes the frame cannot judge are refused there: an order of the wallet both ending and
+   *   continuing in one transaction in the same token and class, a spend of another maker's order
+   *   (a take) together with an ending one, and an unbound curve.
+   */
+  function outputSideHoldings(): void {
+    const frame = !input.nodeInputs;
+    // the maker of each order this transaction creates, from the recovered state (bytes alone)
+    const newOrderMakers = new Map<string, Hex>(recovered.map((r) => [r.covenantId, (r.order as unknown as { state: { maker: Hex } }).state.maker]));
+    const extOfInput = (t: DecodedInput): Hex | null => {
+      const ps = (built.plans[t.index] as { state?: unknown }).state;
+      return ps && typeof ps === 'object' ? extensionOfState(ps as TokenState) : null;
+    };
+    type Need = { token: Hex; ext: Hex | null; amount: bigint };
+    const ending: { d: DecodedInput; needs: Need[] }[] = [];
+    const continuing: { d: DecodedInput; needs: Need[] }[] = [];
+    const key = (t: Hex, e: Hex | null) => `${t.toLowerCase()}|${(e ?? '').toLowerCase()}`;
+    let unjudgeable: string | null = null;
+    for (const d of inputs) {
+      const o = d.order;
+      const st = orderStates.get(d.index);
+      if (!o || !st || !o.makerIsWallet || !d.willSign) continue;
+      const continues = tx.outputs.some((x) => x.covenant?.authorizingInput === d.index && !newCovenantIds.has(x.covenant.covenantId));
+      const pf = pairFactsOf(st);
+      const needs: Need[] = [];
+      let held: { token: Hex; amount: bigint }[] = [];
+      try {
+        held = custodiesOf(st, kob).filter((c) => c.amount > 0n);
+      } catch {
+        held = [];
+      }
+      for (const c of held) {
+        if (/^0+$/.test(c.token)) {
+          unjudgeable ??= `input ${d.index}: an unbound curve's custody names no token in its state`;
+          continue;
+        }
+        const facts = pf ? (c.token === pf.a.covId ? pf.a : c.token === pf.b.covId ? pf.b : null) : null;
+        const family = facts ? (facts.family ?? 'kcc20') : familyOfKind(st.kind);
+        needs.push({ token: c.token, ext: family === 'kron' ? null : facts ? facts.ext : extensionOf(st), amount: c.amount });
+      }
+      const bf = boughtOf(st);
+      if (bf && !continues) needs.push({ token: bf.token, ext: bf.ext, amount: bf.amount });
+      (continues ? continuing : ending).push({ d, needs });
+    }
+    if (!ending.length && !continuing.length) return;
+    // what reaches the wallet of each token and class, net of the wallet's own token inputs
+    const net = new Map<string, bigint>();
+    const bump = (t: Hex, e: Hex | null, v: bigint) => net.set(key(t, e), (net.get(key(t, e)) ?? 0n) + v);
+    for (const o of outputs) {
+      if (!o.token) continue;
+      const toWallet = o.kind === 'token-change' || (o.kind === 'custody' && newOrderMakers.get(o.token.escrowOf ?? '') === maker);
+      if (toWallet) bump(o.token.ref.covenantId, o.token.ext ?? null, o.token.amount);
+    }
+    for (const t of inputs) {
+      if (t.token && t.token.owner === maker && t.ownedBy === 'maker') bump(t.token.ref.covenantId, extOfInput(t), -t.token.amount);
+    }
+    const needEnding = new Map<string, bigint>();
+    for (const e of ending) for (const n of e.needs) needEnding.set(key(n.token, n.ext), (needEnding.get(key(n.token, n.ext)) ?? 0n) + n.amount);
+    if (frame) {
+      const others = inputs.some((t) => t.order && !t.order.makerIsWallet);
+      if (ending.length && others) unjudgeable ??= 'it spends another maker\'s order together with one of yours that ends';
+      for (const c of continuing) for (const n of c.needs) if (needEnding.has(key(n.token, n.ext))) unjudgeable ??= 'one of your orders ends and another continues in the same token';
+      // KRON holdings of the wallet need no signature of their own while a plain input of the
+      // wallet's key is in the transaction, so the frame cannot tell them from a custody
+      const presence = inputs.some((t) => t.type === 'kas' && t.ownedBy === 'maker' && t.willSign);
+      if (presence && inputs.some((t) => !t.willSign && (built.plans[t.index] as { kind?: string }).kind === 'kronToken')) unjudgeable ??= 'it spends KRON tokens next to a coin of your key: their owner cannot be told without your node';
+    }
+    if (frame && unjudgeable) {
+      add('custody-unreleased', `this signer cannot check what the transaction does with your orders' holdings (${unjudgeable}): use a wallet extension for this action`, { params: { amount: 0n } });
+      return;
+    }
+    for (const [k, amount] of needEnding) {
+      const got = net.get(k) ?? 0n;
+      if (got < amount) add('custody-unreleased', `the orders this transaction ends hold ${amount} of ${k.split('|')[0]} but only ${got > 0n ? got : 0n} come back to you`, { params: { amount } });
+    }
+    if (frame) {
+      for (const c of continuing) {
+        for (const n of c.needs) {
+          const got = net.get(key(n.token, n.ext)) ?? 0n;
+          if (got >= n.amount) {
+            continuedCustodyMoved.add(c.d.index);
+            add('sweep-custody-spent', `input ${c.d.index}: ${got} of ${n.token} reach you from an order that continues and holds a custody of ${n.amount}: this signer cannot tell them from that custody: use a wallet extension for this action`, { input: c.d.index });
+          }
+        }
+      }
+    }
+  }
+
   for (const s of spends) {
     if (s.strays > 0n) add('strays-swept', `input ${s.input}: stray tokens sent to this order (on-chain amount ${s.strays}) are swept back to you`, { input: s.input, params: { amount: s.strays } });
     for (const x of s.otherStrays) {

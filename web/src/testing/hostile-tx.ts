@@ -50,3 +50,64 @@ export function sweepTakingCustody(kob: KobWasm, honest: BuiltTx, snap: OrderSna
   change.value = (BigInt(change.value) + carrier).toString();
   return b;
 }
+
+/**
+ * The build without the token inputs `pick` selects (with their plans, roles and sign requests),
+ * the token output to the wallet `maker` lowered by their amount (the leader's next state and its
+ * script) and the KAS change (or that token output) by their carriers, so values balance and the fee
+ * is as built. With `relabel`, the roles of the order inputs it names become that label.
+ */
+export function dropTokenInputs(kob: KobWasm, honest: BuiltTx, maker: string, pick: (state: Kcc20State, i: number) => boolean): BuiltTx {
+  const b = clone(honest);
+  const drop = b.tx.inputs.map((_, i) => i).filter((i) => {
+    const p = tokenPlan(b, i);
+    return !!p && pick(p.state, i);
+  });
+  if (!drop.length) throw new Error('nothing to drop');
+  const tokens = drop.reduce((a, i) => a + BigInt(tokenPlan(b, i)!.state.amount), 0n);
+  const carriers = drop.reduce((a, i) => a + BigInt(b.tx.inputs[i]!.utxo.amount), 0n);
+  // the token output to the wallet, from the leader's next states (the leader may be dropped too)
+  const leader = b.plans.map((_, i) => tokenPlan(b, i)).find((p) => p?.kind === 'tokenLeader' && p.nextStates?.some((x) => x.owner === maker)) ?? null;
+  const toMaker = leader?.nextStates?.find((x) => x.owner === maker) ?? null;
+  let out = null as BuiltTx['tx']['outputs'][number] | null;
+  let freed = 0n;
+  if (leader && toMaker) {
+    out = b.tx.outputs.find((o) => o.scriptPublicKey === kob.tokenScriptPublicKey(leader.template, toMaker)) ?? null;
+    const left = BigInt(toMaker.amount) - tokens;
+    if (left > 0n) {
+      toMaker.amount = left.toString();
+      if (out) out.scriptPublicKey = kob.tokenScriptPublicKey(leader.template, toMaker);
+    } else if (out) {
+      leader.nextStates = leader.nextStates!.filter((x) => x !== toMaker);
+      const gone = out;
+      freed = BigInt(gone.value);
+      b.tx.outputs = b.tx.outputs.filter((o) => o !== gone);
+      out = null;
+    }
+  }
+  const keep = <T,>(xs: T[]): T[] => xs.filter((_, i) => !drop.includes(i));
+  const map = new Map<number, number>();
+  let k = 0;
+  b.tx.inputs.forEach((_, i) => { if (!drop.includes(i)) map.set(i, k++); });
+  b.tx.inputs = keep(b.tx.inputs);
+  b.plans = keep(b.plans);
+  b.roles = keep(b.roles);
+  b.sign = b.sign.filter((r) => map.has(r.inputIndex)).map((r) => ({ ...r, inputIndex: map.get(r.inputIndex)! }));
+  for (const o of b.tx.outputs) if (o.covenant && map.has(o.covenant.authorizingInput)) o.covenant = { ...o.covenant, authorizingInput: map.get(o.covenant.authorizingInput)! };
+  const change = b.tx.outputs.find((o) => !o.covenant) ?? out;
+  if (change) change.value = (BigInt(change.value) - carriers + freed).toString();
+  return b;
+}
+
+/** The token output to the wallet `maker` re-stated under another class (its script follows). */
+export function restateMakerOutput(kob: KobWasm, honest: BuiltTx, maker: string, ext: string): BuiltTx {
+  const b = clone(honest);
+  const leader = b.plans.map((_, i) => tokenPlan(b, i)).find((p) => p?.kind === 'tokenLeader' && p.nextStates?.some((x) => x.owner === maker));
+  const toMaker = leader?.nextStates?.find((x) => x.owner === maker);
+  if (!leader || !toMaker) throw new Error('no token output to the maker');
+  const out = b.tx.outputs.find((o) => o.scriptPublicKey === kob.tokenScriptPublicKey(leader.template, toMaker));
+  if (!out) throw new Error('no such output');
+  toMaker.extension_commitment = ext;
+  out.scriptPublicKey = kob.tokenScriptPublicKey(leader.template, toMaker);
+  return b;
+}
