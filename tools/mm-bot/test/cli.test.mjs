@@ -176,9 +176,7 @@ test('mainnet without quotes.askPartialFills: check, run and once refuse, naming
   for (const cmd of ['check', 'run', 'once']) {
     const r = run(cmd, cfgFile({ network: 'mainnet' }));
     assert.equal(r.status, 2, `${cmd}: ${r.stdout}${r.stderr}`);
-    assert.match(r.stderr, /mainnet needs "quotes": \{ "askPartialFills": true \| false \}, set by you/);
-    assert.match(r.stderr, /true: smaller takers can trade, but an indexer that is hostile and also trades can keep one ask level at a stale price for up to quotes.lifeMin/);
-    assert.match(r.stderr, /false: every ask is all-or-nothing .* the node alone tells the bot which asks are live/);
+    assert.match(r.stderr, /mainnet needs quotes\.askPartialFills set: true \(smaller takers trade, trusts the indexer\) or false \(whole levels only, node alone decides\)\./);
   }
   for (const v of [true, false]) assert.equal(run('check', cfgFile({ network: 'mainnet', quotes: { askPartialFills: v } })).status, 0);
   assert.equal(run('check', cfgFile({ network: 'mainnet', quotes: { askPartialFills: 'no' } })).status, 2, 'a boolean or null');

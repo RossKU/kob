@@ -102,23 +102,10 @@ The stand-in CLI of `test/` imitates `kob recover`; these points need the real C
   no `node-unconfirmed` alert and no proven record. Try a partial take of another (`kob take` of less than its amount):
   the CLI or the node refuses it (the contract needs `n >= minFill` or `n == amountLeft`), and the ask stays live.
 
-## What the lookup still cannot find (round 6, R6T-1)
+## Partial-fill asks: the known limit (round 6, R6T-1)
 
-This applies to partial-fill asks (`quotes.askPartialFills: true`, the testnet-10 default) only: with `false` every ask
-is filled in full or not at all, the node alone says whether it is live, and the residue below does not exist (a taker
-must take a whole level).
-
-The node can only be asked for an ask at an amount. With a hostile indexer the amounts the bot has are its own and the
-ones the payments to its address name (README, "Amounts from the payments"). An ask stays unfindable when the filler paid
-the maker more than `allIn` (escaping costs the value of one base unit, 4,000 sompi at the TUSDC6 defaults), when more
-than 3 fills (or more than 12 payments) landed since the bot last knew its amount, when a payment could pay for more
-than 200 fill amounts (a base unit worth under 1/200 sompi), when the bot's own send spent the payment in the second or
-two before the bot read it, or without a JSON wRPC node. Such an ask stays live at its old price until its expiry: one
-level at a stale price for at most `lifeMin`, while its level is quoted again (proven) or stays blocked (unresolved).
-With the defaults that is 15 % of `capitalUsd` (150 USD at 1,000 USD) for at most 90 min: about 3 to 8 USD per attack at
-1,000 USD for a 2 to 5 % move. The attacker needs the indexer the bot reads and pays the spread of two trades. The
-operator's remedy: an indexer you run yourself, a short `lifeMin` (floor 30 min), and a watch on
-`<dataDir>/proven-not-found.json`, `mm-bot unresolved` and the `node-unconfirmed` and `proven-live` alerts.
+With `quotes.askPartialFills: true` an ask filled to an amount the bot does not know can stay at its old price until
+its expiry (at most `lifeMin`) when the indexer cannot be trusted; run your own node and indexer, or use whole fills.
 
 ## To check on the next live run (round-7 fixes, not testable offline)
 
