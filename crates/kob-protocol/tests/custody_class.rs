@@ -210,11 +210,10 @@ fn an_ending_spend_releases_exactly_what_the_state_holds() {
     assert!(check_releases_held(&s, O, &[]).is_err());
 }
 
-fn sweep_of(o: OrderUtxo<AnyState>, strays: Vec<TokenUtxo>, kept: Vec<TokenUtxo>) -> SweepOrder {
+fn sweep_of(o: OrderUtxo<AnyState>, strays: Vec<TokenUtxo>) -> SweepOrder {
     SweepOrder {
         order: o,
         strays,
-        kept,
         foreign: vec![],
         funding: vec![key_utxo(3, MAKER_A, 10 * KAS)],
         change: None,
@@ -225,10 +224,10 @@ fn sweep_of(o: OrderUtxo<AnyState>, strays: Vec<TokenUtxo>, kept: Vec<TokenUtxo>
     }
 }
 
-/// R8FX-1: a spend that keeps the order alive never takes its custody away. A sweep handed the real custody as a stray
-/// (an indexer that left it out of the view and listed it among the strays) is refused; a twin of the custody (same state,
-/// another outpoint) is swept while the custody it keeps stays; without the kept custody the twin is not told apart and is
-/// refused too. An amend spends no token at all.
+/// R8FX-1, R8FX2-2: a spend that keeps the order alive never takes a unit of exactly a custody's state, with no exception.
+/// The real custody handed in as a stray (an indexer that left it out of the view) is refused, and so is a twin (the same
+/// state at another outpoint), whatever a caller says it keeps: which of the two is "the custody" cannot be told from the
+/// caller's word. A twin stays with the order, and the cancel takes it along with the custody. An amend spends no token.
 #[test]
 fn a_spend_that_keeps_the_order_never_takes_its_custody() {
     let t = TemplateId::Kcc20Ref8x8;
@@ -236,22 +235,28 @@ fn a_spend_that_keeps_the_order_never_takes_its_custody() {
         let label = format!("{name}@{}", t.name());
         let o = order(70, value, O, 1_000, s.clone());
         let good = real(t, &s);
-        // the custody as a stray: refused, with or without it named as kept
-        for kept in [vec![], good.clone()] {
-            let e = build_sweep_order(&sweep_of(o.clone(), vec![good[0].clone()], kept), &kob_protocol::budget::lookup)
-                .expect_err(&label)
-                .to_string();
-            assert!(e.contains("never moves the order's custody"), "{label}: {e}");
-        }
-        // a twin next to the kept custody: swept, and the order continues with its custody untouched
         let mut twin = good[0].clone();
         twin.utxo.transaction_id = [0x7e; 32];
-        let built = build_sweep_order(&sweep_of(o.clone(), vec![twin.clone()], good.clone()), &kob_protocol::budget::lookup)
-            .unwrap_or_else(|e| panic!("{label}: {e}"));
-        engine(&built, &label);
-        assert!(built.tx.inputs.iter().all(|i| (i.transaction_id, i.index) != (good[0].utxo.transaction_id, good[0].utxo.index)));
-        assert!(build_sweep_order(&sweep_of(o.clone(), vec![twin], vec![]), &kob_protocol::budget::lookup).is_err(), "{label}");
+        for strays in [vec![good[0].clone()], vec![twin.clone()], vec![twin.clone(), good[0].clone()]] {
+            let e = build_sweep_order(&sweep_of(o.clone(), strays), &kob_protocol::budget::lookup).expect_err(&label).to_string();
+            assert!(e.contains("never moves a unit of exactly the state the order pins"), "{label}: {e}");
+        }
+        // the hostile-node shape of R8FX2-2: an invented twin named as the custody and the real one listed as a stray
+        let request =
+            serde_json::json!({"order": o, "strays": [good[0]], "kept": [twin], "funding": [key_utxo(3, MAKER_A, 10 * KAS)]});
+        let r: Result<SweepOrder, _> = serde_json::from_value(request);
+        if let Ok(r) = r {
+            assert!(build_sweep_order(&r, &kob_protocol::budget::lookup).is_err(), "{label}: no field lets a custody go");
+        }
     }
+    // the cancel takes the twin along with the custody
+    let s = AnyState::KobAsk(ask(MAKER_A, P250, t));
+    let o = order(70, CARRIER, O, 1_000, s.clone());
+    let good = real(t, &s);
+    let mut twin = good[0].clone();
+    twin.utxo.transaction_id = [0x7e; 32];
+    let built = build_cancel_order(&cancel(o.clone(), &good, vec![twin]), &kob_protocol::budget::lookup).unwrap();
+    engine(&built, "a cancel with the custody's twin");
     // an amend names the custody of an unbound curve only to bind it, and never spends a token
     let a = ask(MAKER_A, P250, t);
     let o = order(70, CARRIER, O, 1_000, AnyState::KobAsk(a.clone()));
@@ -270,23 +275,4 @@ fn a_spend_that_keeps_the_order_never_takes_its_custody() {
     };
     let built = build_amend_order(&r, &kob_protocol::budget::lookup).unwrap();
     assert!(built.tx.inputs.iter().all(|i| i.utxo.covenant_id.is_none_or(|c| c == O)), "an amend spends no token input");
-}
-
-/// R8FX-1, the way back: an order whose custody is gone is cancelled by its own entry, which returns the order's KAS.
-/// `build_cancel_order` refuses it (it releases exactly what the state holds); `build_cancel_custody_gone` builds it, and
-/// refuses a custody, a replacement or a top-up.
-#[test]
-fn an_order_whose_custody_is_gone_has_a_way_back() {
-    let t = TemplateId::Kcc20Ref8x8;
-    let s = AnyState::KobAsk(ask(MAKER_A, P250, t));
-    let o = order(70, CARRIER, O, 1_000, s.clone());
-    assert!(build_cancel_order(&cancel(o.clone(), &[], vec![]), &kob_protocol::budget::lookup).is_err());
-    let built = build_cancel_custody_gone(&cancel(o.clone(), &[], vec![]), &kob_protocol::budget::lookup).unwrap();
-    engine(&built, "custody gone");
-    assert!(built.tx.outputs.iter().all(|x| x.covenant.as_ref().is_none_or(|c| c.covenant_id != O)), "the order ends");
-    let good = real(t, &s);
-    assert!(build_cancel_custody_gone(&cancel(o.clone(), &good, vec![]), &kob_protocol::budget::lookup).is_err());
-    let mut rep = cancel(o, &[], vec![]);
-    rep.replace = Some(Replacement { order: s, value: CARRIER, token_carrier: None, deadline: None });
-    assert!(build_cancel_custody_gone(&rep, &kob_protocol::budget::lookup).is_err());
 }

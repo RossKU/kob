@@ -1538,7 +1538,7 @@ impl Draft {
     /// | `kob`, every signing command | `kob-cli/src/feecap.rs:70` `Ceiling::violation_of` (4x the node's estimate), applied in `trade/flow.rs:80`, `recover.rs:980`, `trade/merge.rs:336`, `token.rs:783`, `token_lock.rs:381`, `:561` |
     /// | web app, through kob-wasm | `web/src/kob/decode.ts:89` `FEE_ABSOLUTE_MAX` (0.5 KAS), enforced at `:2058` |
     /// | kobd matcher | its profit gate `kobd/src/matcher/batch.rs:1032`, `:2330` (`min_profit`) and the inventory fee cap `matcher/planner.rs:361` (`max_fee`) |
-    /// | kobd keepers | `kobd/src/keepers/mod.rs:762-773` (`min_profit`, the subsidy cap) |
+    /// | kobd keepers | `kobd/src/keepers/mod.rs:762-773` (`min_profit`, the subsidy cap); NOT the opt-in own-order sweep, which skips the profit check and, at the floor rate, `max_tx_fee`: being fixed (R8FX2-1) |
     ///
     /// The matcher relies on this: a batch whose change is left out is seen as over the storage
     /// limit and retried with fewer fills.

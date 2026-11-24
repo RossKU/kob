@@ -64,7 +64,6 @@ fn sweep(order: OrderUtxo<AnyState>, strays: Vec<TokenUtxo>, foreign: Vec<Foreig
     SweepOrder {
         order,
         strays,
-        kept: vec![],
         foreign,
         funding: if funded { vec![key_utxo(3, MAKER_A, 10 * KAS)] } else { vec![] },
         change: None,
