@@ -114,7 +114,10 @@ export function levelsFromView(rows: readonly (LevelView | BookOrderView)[], sca
       // One row per remaining level of a curve order (`curve_level`). All its rows count as one
       // order.
       if (typeof r.curve_level === 'number') curve = [r.curve_level];
-      const left = parseBig(r.amount_left);
+      // What a taker can fill from it now (`fillable_now`, R6B-I4), never more than it has left.
+      const all = parseBig(r.amount_left);
+      const now = r.fillable_now == null ? null : parseBig(r.fillable_now);
+      const left = all !== null && now !== null && now < all ? now : all;
       amount = left ?? 0n;
       orders = 1;
       estimated = r.amount_estimated || left === null;

@@ -8,6 +8,13 @@ const ord = (price: string, left: number | null, est = false, scale: number | nu
   amount_estimated: est, status: 'open', cur_value: null, expiry_daa: null, expired: false, genesis_daa: 1, confirmations: 1, settled: true,
 });
 
+describe('a per-order row shows what one fill can take now (R6B-I4)', () => {
+  it('fillable_now below amount_left (an if-done bid after its carriers, a TWAP slice) is the shown amount; absent or larger, amount_left', () => {
+    const rows = [{ ...ord('110', 10), fillable_now: '7' }, { ...ord('100', 5), fillable_now: '9' }, ord('90', 4)];
+    expect(levelsFromView(rows, 1n).map((l) => [l.price, l.amount])).toEqual([[110n, 7n], [100n, 5n], [90n, 4n]]);
+  });
+});
+
 describe('bids that cannot fund one base unit', () => {
   it('a level of amount 0 is not a row: not in the depth, not the best bid, not in the spread', () => {
     const m = buildBookModel({ asks: [lv('120', 3)], bids: [lv('118', 0, 1, true), lv('110', 4, 1, true), lv('100', 2)] });

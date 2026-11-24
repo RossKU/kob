@@ -145,6 +145,11 @@ export interface BookOrderView {
   scale: number | null;
   /** Base units left. For a bid it is its buying power, and `amount_estimated` is set. */
   amount_left: string | null;
+  /**
+   * What one fill can take from the order now, in the unit of `amount_left`: a TWAP or DCA order's
+   * slice, an if-done bid's buying power after its carriers. Older executors omit it.
+   */
+  fillable_now?: string | null;
   amount_estimated: boolean;
   status: string; cur_value: string | null; expiry_daa: number | null; expired: boolean; genesis_daa: number;
   confirmations: number | null; settled: boolean;

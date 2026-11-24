@@ -485,7 +485,7 @@ With `aggregate=false`, each of `asks` / `bids` is an array of the same orders, 
 `tip`, `min_fill`, `scale`, `amount_left`, `fillable_now`, `amount_estimated`, `status`, `cur_value`, `expiry_daa`, `expired`, `deadline`
 (unix seconds or null), `deadline_passed`, `genesis_daa`, `confirmations`, `settled`. `fillable_now` (string or null, base units like
 `amount_left`) is what a taker can fill from the order now: a TWAP or DCA order's one slice, `min(amount_left, maxFill)`, as its
-aggregated level counts it; for any other order it equals `amount_left`. An order is listed only while it can be filled (a TWAP order
+aggregated level counts it; an if-done entry's, at most what its order UTXO funds after its carriers; for any other order it equals `amount_left`. An order is listed only while it can be filled (a TWAP order
 once its next slice is due), so it is never `"0"` in the book. Sum `fillable_now`, not `amount_left`, for the depth a taker can reach.
 
 A `KobCurveAsk` is in the book as its remaining levels, each at its own price with its own size (base units left in it), so its

@@ -397,11 +397,15 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
         // An ask's amount is the custody the node holds. The row's own word counts only where the
         // order has no custody to read, which is a bid, and then only up to what the node-confirmed
         // KAS of the bid can buy at its price.
-        const claimed = b.row.amount_left != null ? BigInt(b.row.amount_left) : 1n;
+        // A bid's own word is what one fill can take now (`fillable_now`: an if-done bid keeps its
+        // carriers), at most its amount left (R6B-I4).
+        const left = b.row.amount_left != null ? BigInt(b.row.amount_left) : 1n;
+        const now = b.row.fillable_now != null ? BigInt(b.row.fillable_now) : null;
+        const claimed = now !== null && now < left ? now : left;
         const amount = v.amount ?? (claimed < v.cap ? claimed : v.cap);
         b.s.confirmed++;
         b.s.depth += amount;
-        const row0 = v.amount !== null ? (b.row.amount_estimated ? { ...b.row, amount_left: v.amount.toString(), amount_estimated: false } : b.row) : amount !== claimed ? { ...b.row, amount_left: amount.toString() } : b.row;
+        const row0 = v.amount !== null ? (b.row.amount_estimated ? { ...b.row, amount_left: v.amount.toString(), amount_estimated: false } : b.row) : amount !== left ? { ...b.row, amount_left: amount.toString() } : b.row;
         // The row's tip and minimum fill are the state's. It is the same object when they already
         // are, so an unchanged book stays the same book.
         const [tip, minFill] = [v.tip.toString(), v.minFill.toString()];
