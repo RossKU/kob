@@ -38,6 +38,18 @@ const NOISE = /^dry run: nothing signed/;
 // the log (R7T-1), through `onNote`.
 const NOTE = /blocks are contended/;
 
+/**
+ * True when the CLI's last error line says nothing was sent (R9T-4): a refusal before signing or
+ * submitting, or a failed engine validation. A submit error (`error: submit: <the node's text>`)
+ * may have been sent whatever the node's text says, so it never counts, as in kob-mcp.
+ */
+export function sentNothing(stderr) {
+  const lines = String(stderr ?? '').split(' | ').map((l) => l.trim()).filter(Boolean);
+  const last = [...lines].reverse().find((l) => /^error\b/i.test(l)) ?? lines.at(-1) ?? '';
+  if (/\bsubmit:/i.test(last)) return false;
+  return /nothing signed|nothing submitted|nothing sent|engine validation failed/i.test(last);
+}
+
 /** A long stderr cut in the middle: the last line, where the CLI says what failed, stays (T-13). */
 export const cutMiddle = (s, n) => (s.length <= n ? s : `${s.slice(0, Math.floor(n / 4))} .. ${s.slice(s.length - (n - Math.floor(n / 4) - 4))}`);
 
@@ -106,7 +118,7 @@ export class Kob {
     const r = await this.exec([...args, ...extra, '--yes']);
     // A failed --yes may have been sent all the same (a lost reply, a node that relays and answers
     // with an error): `sentFee` is its planned fee, to count, unless the CLI says nothing was sent.
-    const sentFee = /nothing signed|nothing submitted|nothing sent|engine validation failed/i.test(r.stderr) ? null
+    const sentFee = sentNothing(r.stderr) ? null
       : Number(r.json?.transaction?.fee ?? r.json?.fee ?? 0) || plannedFee || null;
     // `doc` names what may have gone out (its covenant ids and states): the --yes run's plan, else the dry run's.
     if (r.code !== 0) return { ok: false, error: `exit ${r.code}: ${r.stderr || 'no output'}`, doc: r.json ?? planDoc, sentFee };
@@ -127,7 +139,9 @@ export class Kob {
   async balances(tokenId) {
     const r = await this.exec(['balances']);
     if (r.code !== 0 || !r.json?.kas) throw new Error(`kob balances: exit ${r.code}: ${r.stderr}`);
-    const rowOf = (row) => ({ free: Number(row?.free ?? 0), inOrders: Number(row?.in_orders ?? 0), freeUtxos: Number(row?.free_utxos ?? 0), decimals: row?.decimals ?? null, freeVerified: row?.free_verified ?? null });
+    const rowOf = (row) => ({ free: Number(row?.free ?? 0), inOrders: Number(row?.in_orders ?? 0), freeUtxos: Number(row?.free_utxos ?? 0), decimals: row?.decimals ?? null, freeVerified: row?.free_verified ?? null,
+      // A list an outsider lengthened is read in part: `free` is then at least that (R9T-1).
+      freeComplete: row?.free_complete !== false });
     const row = (r.json.tokens ?? []).find((t) => t.token === tokenId);
     return {
       tokens: Object.fromEntries((r.json.tokens ?? []).map((t) => [t.token, rowOf(t)])),
@@ -148,6 +162,9 @@ export class Kob {
     const dec = this.cfg.token?.decimals;
     return ['place', 'limit', '--token', tokenId, '--side', side, '--amount', `${amountBase}base`, '--price', `${priceSompi}sompi`,
       ...(dec != null ? ['--decimals', String(dec)] : []), ...(gtd ? ['--gtd', gtd] : []),
+      // A quote is a resting limit, never an auction: one that would cross the market is refused
+      // (MARKETABLE_REJECTED) and its level waits for the next cycle.
+      '--crossing', 'reject',
       // Whole-fill asks: the minimum fill is the whole amount, so only a full fill takes it.
       ...(side === 'sell' && this.cfg.quotes?.askPartialFills === false ? ['--min-fill', `${amountBase}base`] : [])];
   }
@@ -171,7 +188,8 @@ export class Kob {
 
   /** An amend in place to a new price and, with `gtd`, a new expiry. */
   amend(id, priceSompi, gtd = null) {
-    return this.sign(['replace', id, '--price', `${priceSompi}sompi`, ...(gtd ? ['--gtd', gtd] : [])]);
+    // An amended price is the trading price; one that would cross the market is refused (kob replace's default, named).
+    return this.sign(['replace', id, '--price', `${priceSompi}sompi`, '--crossing', 'reject', ...(gtd ? ['--gtd', gtd] : [])]);
   }
 
   cancel(id) {

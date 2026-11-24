@@ -18,8 +18,9 @@ const STATE = { kind: 'KobAsk', state: { maker: H('a1'), tokenCovId: H('01'), to
   minFill: '1', price: '4000000000', tip: '0', tif: '0', activeFrom: '0', expiryDaa: '99999', refundTip: '0', interval: '0', maxFill: '0', slope: '0', priceEnd: '0',
   decayStep: '1', amountLeft: '150000000', extensionCommitment: H('00') } };
 
-// crates/kob-cli/src/trade/flow.rs:85-93 (the --json document of a signing command), :152-165
-// (its `result` once submitted); `transaction` is show.rs:219-236; place's `plan` place.rs:1041-1044.
+// Each sample transcribed at 0c0e933a7. crates/kob-cli/src/trade/flow.rs:119-127 (the --json document of a
+// signing command), :187-194 (its `result` once submitted); `transaction` is show.rs:271-288; place's `plan`
+// place.rs:1044-1047.
 const PLACE = {
   action: 'place limit sell', network: 'testnet-10',
   plan: { states: [STATE], request: { order: STATE, value: '100000000', tokens: [], tokenCarrier: '100000000', funding: [], change: null, lockTime: '0', deadline: null, records: [], fee: {} } },
@@ -28,15 +29,16 @@ const PLACE = {
   new_covenant_ids: [H('cd')],
   result: { status: 'submitted', txid: H('aa'), fee: '427000', covenant_ids: [H('cd')], file: null, engine_validated: true },
 };
-// crates/kob-cli/src/trade/actions.rs:746: a plain ask's or bid's replace plan, in place or a
+// crates/kob-cli/src/trade/actions.rs:924: a plain ask's or bid's replace plan, in place or a
 // cancel-replace: `replacement`, and no `states`.
 const REPLACE = { ...PLACE, action: `cancel-replace ${H('cd')}`, plan: { order: H('cd'), inPlace: false, current: STATE, replacement: { ...STATE, state: { ...STATE.state, price: '4100000000' } }, value: '99500000' }, new_covenant_ids: [H('ce')],
   result: { ...PLACE.result, covenant_ids: [H('ce')] } };
-// crates/kob-cli/src/recover.rs:849-884 (an entry), :888-903 (the report), :982-991 (a cancel).
+// crates/kob-cli/src/recover.rs:853-888 (an entry; `note` is always a string), :891-906 (the report),
+// :989-998 (a cancel).
 const RECOVER = {
   network: 'testnet-10', node: 'ws://127.0.0.1:18210',
   orders: [
-    { covenant_id: H('cd'), kind: 'KobAsk', template: 'KobAsk (pinned)', template_hash: H('a5'), maker: H('a1'), status: 'live', note: null, source: 'own-orders.json', candidates: 1,
+    { covenant_id: H('cd'), kind: 'KobAsk', template: 'KobAsk (pinned)', template_hash: H('a5'), maker: H('a1'), status: 'live', note: '', source: 'own-orders.json', candidates: 1,
       outpoint: `${H('aa')}:0`, value: '100000000', utxo_daa: '1000', state: 'ab', amount_left: '150000000', scale: '1000000', min_fill: '1', found_by: 'known state', custody: { status: 'none' },
       cancel: { status: 'submitted', txid: H('bb'), fee: '500000', funding: 'order', file: null, engine_validated: true } },
     { covenant_id: H('ce'), kind: 'KobBid', template: 'KobBid (pinned)', template_hash: H('b5'), maker: H('a1'), status: 'not_found', note: "spent: no unspent output at the order's script (1 candidate)", source: 'own-orders.json', candidates: 1 },
@@ -44,12 +46,13 @@ const RECOVER = {
   rejected: [],
   summary: { live: 1, not_found: 1, unsupported: 0, other_maker: 0, rejected: 0 },
 };
-// crates/kob-cli/src/trade/views.rs:776-795.
+// crates/kob-cli/src/trade/views.rs:825-852 (R9T-1: `free_complete`, `free_incomplete_reason`, `incomplete`,
+// `incomplete_reason`).
 const BALANCES = { maker: H('a1'), kas: { free: '100000000000', locked: '0', total: '100000000000' },
-  tokens: [{ token: H('01'), ticker: 'T', declared_ticker: null, decimals: 6, free: '5000000', free_utxos: 2, free_verified: true, in_orders: '0', bought: '0', strays: '0',
+  tokens: [{ token: H('01'), ticker: 'T', declared_ticker: null, decimals: 6, free: '5000000', free_utxos: 2, free_verified: true, free_complete: true, free_incomplete_reason: null, in_orders: '0', bought: '0', strays: '0',
     kas_escrow: '0', kas_carriers: '0', kas_locked: '0', orders: 0, text: { name: 'T', free: '5', in_orders: '0', bought: '0', strays: '0', kas_locked: '0' } }],
-  skipped: [] };
-// crates/kob-cli/src/trade/merge.rs:347-356 (the summary) with the links of :427-430, :440.
+  skipped: [], incomplete: false, incomplete_reason: null };
+// crates/kob-cli/src/trade/merge.rs:354-363 (the summary) with the links of :434-437, :447.
 const MERGE = { action: 'merge T', network: 'testnet-10', token: H('01'), utxos_before: 3, utxos_after: 1, transactions: 1, merged_amount: '5', fee: '500000',
   links: [{ link: 1, status: 'submitted', txid: H('aa'), fee: '500000' }] };
 
@@ -69,8 +72,9 @@ test('the stand-in CLI prints the real CLI\'s fields, document for document (R8T
   const live = recoverEntry({ id: H('cd'), kind: 'KobAsk', tpl: H('a5'), status: 'live', live: { txid: H('aa'), value: 1, amountLeft: 1 }, cancel: recoverCancel(H('bb'), 1) });
   same(recoverReport([live, recoverEntry({ id: H('ce'), kind: 'KobBid', tpl: H('b5'), status: 'not_found', note: 'x' })]), RECOVER, 'kob recover');
   same(balancesDoc({ maker: H('a1'), kasFree: 1, token: H('01'), free: 1, freeUtxos: 1 }), BALANCES, 'kob balances');
+  same(balancesDoc({ maker: H('a1'), kasFree: 1, token: H('01'), free: 1, freeUtxos: 1, cut: 'more than 20 pages' }), BALANCES, 'kob balances, read in part');
   same(mergeDoc({ token: H('01'), before: 3, txids: [H('aa')], fee: 1 }), MERGE, 'kob merge');
-  // crates/kob-cli/src/main.rs:311 (its test): `kob <version> (development build, no network, commit unknown)`.
+  // crates/kob-cli/src/main.rs:313 (its test): `kob <version> (development build, no network, commit unknown)`.
   assert.match(VERSION_LINE, /^kob \S+ \((development build, no network|\S+ build), commit \S+\)$/);
 });
 
