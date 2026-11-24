@@ -490,6 +490,11 @@ impl Ingest {
         if let Blocks::Live(added) = blocks {
             for b in *added {
                 for t in &b.txs {
+                    // A user lane is proven only where it ends something the store tracks (R9-K): an acceptance or a spend
+                    // read from one could be the node's invention. The transactions watched here are native.
+                    if super::record::user_lane(t).is_some() {
+                        continue;
+                    }
                     if let Some(w) = self.watch.get_mut(&t.verbose_data.transaction_id) {
                         w.acc = Some((b.header.hash, b.header.daa_score));
                     }

@@ -698,6 +698,7 @@ curl -s $API/v1/orders/$ORDER
 | `current`, `state_known` | object or null, bool | The current outpoint `{txid, index, value}` and whether its state is proven. |
 | `state` | object or null | The decoded current state `{"kind", "state"}` with the contract's field names, 64-bit fields as strings. |
 | `placed_state` | object, **omitted** | For an order without a current state: its placement state, so its type and terms can still be shown. Never the basis of a spend. |
+| `lane_end` | object, **omitted** | A closed order that a transaction on a KIP-21 user lane spent (`docs/spec/indexer-lanes.md`): `reason` (`spent_on_other_lane`), `txid` (the spending transaction), `lane` (its 4 namespace bytes, hex), `note`, and `remainder`: every output of that transaction under the order's covenant id, `{txid, index, value, amount_left, state}` (`state`: the remainder's encoded state when proven from its script, else null). The maker imports it (`kobd db import-orders`) or finds and cancels it with `kob recover --amount-left`. On the single-order view and on a `maker=` list only. |
 | `current_daa` | number or null | DAA of the block that created the current UTXO. |
 | `deadline`, `deadline_passed` | number or null, bool | Day orders: unix seconds after which conforming matchers do not fill. |
 | `refund_due_daa`, `kill_daa` | number or null | From this DAA anyone may refund; for IOC/FOK the kill time. |

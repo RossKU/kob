@@ -522,7 +522,9 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
 /// successive smallest fills, its whole depth (R8).
 /// 7: a curve's smallest valid fill is the smallest its rules accept (the whole rest when KIP-9 leaves no partial fill:
 /// R8C2a-1).
-pub const BOOK_RULES_VERSION: u32 = 7;
+/// 8: KOB state is created only by native-lane transactions; an order spent on a user lane is closed (R9-K,
+/// `docs/spec/indexer-lanes.md`). The rows are decided again so that no live row reflects a user-lane continuation.
+pub const BOOK_RULES_VERSION: u32 = 8;
 
 /// The columns of `book_live` and `pair_live` that a store an earlier build of schema 14 created lacks
 /// (`CREATE TABLE IF NOT EXISTS` keeps an existing table as it is). They are derived: added empty, they

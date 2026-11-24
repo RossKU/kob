@@ -280,6 +280,9 @@ per payload; the executor's indexer applies rules 3 to 7 record by record (it re
 own). An order output that is not the P2SH of a pinned template (rule 3)
 is an order of a template this build does not pin: it is never recovered, listed or offered to a matcher or keeper.
 
+A KOB1 record is read on the native lane only: a record on a transaction of a KIP-21 user lane is not read, and such a
+transaction can only end what the index tracks (`docs/spec/indexer-lanes.md`).
+
 1. `kind` is a kind of the record's `family`. An unknown family or kind rejects the record.
 2. `state` decodes as the template's runtime state and re-encodes to the same bytes (canonical
    fixed-width pushes only).

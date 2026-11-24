@@ -38,6 +38,10 @@
 //!
 //! - A lane other than the native and coinbase lanes that the batch does not show at all. Its
 //!   proof is asked for only when the batch has a transaction in it.
+//! - A user lane (KIP-21) on which the batch shows no spend of an output the store tracks (R9-K,
+//!   `docs/spec/indexer-lanes.md`). KOB state is created only by native-lane transactions, and a
+//!   user-lane transaction can only end something tracked, so a lane with nothing tracked on it holds
+//!   nothing KOB reads: proving it would add no safety beyond the line above, only two lane proofs.
 //! - The spent outputs attached to inputs. No hash the indexer can check covers them. A spend
 //!   of a tracked output is read from the store's own output, looked up by outpoint
 //!   (`indexer::record::tracked_in`). An input signed by a lone signature whose entry is P2PK must
@@ -590,14 +594,42 @@ impl ChainProof {
 
     /// The local checks of a batch from the cursor `start`: headers, links, proof of work, the
     /// floor, transaction ids and the coinbase lane. `None`: nothing to prove (no chain block).
+    ///
+    /// Every lane the batch shows is proven. The follower uses [`ChainProof::check_local_for`].
     pub fn check_local(&mut self, start: Hash32, raw: &RawVspcResponse) -> Result<Option<Plan>, ProofError> {
+        self.check_local_timed(start, raw, None)
+    }
+
+    /// [`ChainProof::check_local`] proving the native lane and, of the user lanes, only `user_lanes` (their 20-byte
+    /// subnetwork ids): those that hold a transaction KOB reads (`indexer::trust::TrustContext::user_lanes`, R9-K).
+    /// The transactions of the other user lanes are neither folded nor proven.
+    pub fn check_local_for(
+        &mut self,
+        start: Hash32,
+        raw: &RawVspcResponse,
+        user_lanes: &HashSet<[u8; 20]>,
+    ) -> Result<Option<Plan>, ProofError> {
+        self.check_local_timed(start, raw, Some(user_lanes))
+    }
+
+    fn check_local_timed(
+        &mut self,
+        start: Hash32,
+        raw: &RawVspcResponse,
+        user_lanes: Option<&HashSet<[u8; 20]>>,
+    ) -> Result<Option<Plan>, ProofError> {
         let t0 = std::time::Instant::now();
-        let r = self.check_local_inner(start, raw);
+        let r = self.check_local_inner(start, raw, user_lanes);
         self.status.cpu_ns_total += t0.elapsed().as_nanos();
         r
     }
 
-    fn check_local_inner(&self, start: Hash32, raw: &RawVspcResponse) -> Result<Option<Plan>, ProofError> {
+    fn check_local_inner(
+        &self,
+        start: Hash32,
+        raw: &RawVspcResponse,
+        user_lanes: Option<&HashSet<[u8; 20]>>,
+    ) -> Result<Option<Plan>, ProofError> {
         let n = raw.added_chain_block_hashes.len();
         if n != raw.chain_block_accepted_transactions.len() {
             return refuse("the added hashes and the chain blocks differ in number");
@@ -657,6 +689,10 @@ impl ChainProof {
                     if !t.inputs.is_empty() || t.outputs.iter().any(|o| o.covenant.is_some()) {
                         return refuse(format!("coinbase-lane transaction {id} has inputs or covenant outputs"));
                     }
+                    continue;
+                }
+                // A user lane KOB reads nothing on is not proven (R9-K): its transactions are not folded.
+                if sub != [0u8; 20] && user_lanes.is_some_and(|u| !u.contains(&sub)) {
                     continue;
                 }
                 let version = t.version.unwrap_or_default();

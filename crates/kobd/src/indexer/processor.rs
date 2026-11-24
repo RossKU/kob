@@ -193,6 +193,9 @@ struct UtxoRow {
     value: i64,
 }
 
+/// The `reason` of the closing event of an order spent on a user lane (R9-K).
+pub const LANE_END_REASON: &str = "spent_on_other_lane";
+
 fn load_order_utxo(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Option<UtxoRow>> {
     Ok(conn
         .prepare_cached("SELECT o.covenant_id, u.value FROM order_utxos u JOIN orders o ON o.id = u.order_id WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL")?
@@ -739,6 +742,10 @@ impl Processor {
         let txid = rec.txid;
         let seq = ctx.seq;
         let daa = ctx.header.daa_score;
+        // A user-lane transaction only ends what the store tracks (R9-K).
+        if let Some(lane) = rec.lane {
+            return self.apply_other_lane(conn, ctx, rec, lane, delta);
+        }
 
         // Trigger evidence the transaction carries: the quotes of the plain resting `KobAsk` and
         // `KobBid` orders filled in it. A trailing `update` ratchets from one of them, see
@@ -1860,6 +1867,18 @@ impl Processor {
     // Spends.
 
     fn spend_order(&self, conn: &Connection, seq: i64, rec: &TxRecord, input_idx: usize, u: UtxoRow) -> DbResult<Option<Spent>> {
+        let Some(s) = Self::spent_view(conn, rec, input_idx, u)? else { return Ok(None) };
+        let inp = &rec.inputs[input_idx];
+        let filled = if let Act::Fill(n) = s.act { Some(n) } else { None };
+        conn.prepare_cached(
+            "UPDATE order_utxos SET spent_block = ?1, spent_txid = ?2, spent_entry = ?3, spent_amount = ?4 WHERE txid = ?5 AND idx = ?6",
+        )?
+        .execute(params![seq, &rec.txid.0[..], s.entry, filled, &inp.txid.0[..], inp.index])?;
+        Ok(Some(s))
+    }
+
+    /// What spending the order UTXO `u` as input `input_idx` of `rec` does, from its reveal, written nowhere.
+    fn spent_view(conn: &Connection, rec: &TxRecord, input_idx: usize, u: UtxoRow) -> DbResult<Option<Spent>> {
         let value = u.value;
         let Some(order) = load_order(conn, &u.covenant_id)? else { return Ok(None) };
         let inp = &rec.inputs[input_idx];
@@ -1875,11 +1894,6 @@ impl Processor {
             _ => Act::Unknown,
         };
         let before = reveal.as_ref().and_then(|r| AnyState::decode(r.template, &r.state).ok());
-        let filled = if let Act::Fill(n) = act { Some(n) } else { None };
-        conn.prepare_cached(
-            "UPDATE order_utxos SET spent_block = ?1, spent_txid = ?2, spent_entry = ?3, spent_amount = ?4 WHERE txid = ?5 AND idx = ?6",
-        )?
-        .execute(params![seq, &rec.txid.0[..], entry, filled, &inp.txid.0[..], inp.index])?;
         Ok(Some(Spent {
             cov: u.covenant_id,
             order,
@@ -3484,6 +3498,104 @@ impl Processor {
         delta.orders.insert(*cov);
         delta.tokens.insert(token);
         Ok(true)
+    }
+
+    /// Applies a user-lane transaction (`record::user_lane`, R9-K, `docs/spec/indexer-lanes.md`): every tracked output it
+    /// spends is closed, and nothing it creates is tracked.
+    ///
+    /// An order is closed by a closing `unknown` event whose detail is `{"reason": "spent_on_other_lane", "lane",
+    /// "remainder": [..]}`: its status reads `closed`, and the order view shows the lane end
+    /// (`reads::OrderView::lane_end`). The remainder lists every output of the transaction that carries the order's
+    /// covenant id, with the state the spend left there when the processor can prove it from the output's script (as
+    /// for a native continuation, [`Processor::derive_after`]). That is what the maker hands to `kobd db import-orders`
+    /// or `kob recover` to take it back. The order's live custody and holdings are closed with it, as at a gap. A token
+    /// UTXO or holding spent on its own is marked spent by the transaction.
+    fn apply_other_lane(
+        &self,
+        conn: &Connection,
+        ctx: &BlockCtx<'_>,
+        rec: &TxRecord,
+        lane: [u8; 4],
+        delta: &mut Delta,
+    ) -> DbResult<()> {
+        let txid = rec.txid;
+        let seq = ctx.seq;
+        let daa = ctx.header.daa_score;
+        for (i, inp) in rec.inputs.iter().enumerate() {
+            let Some(u) = load_order_utxo(conn, &inp.txid, inp.index)? else {
+                conn.prepare_cached(
+                    "UPDATE token_utxos SET spent_block = ?1, spent_txid = ?2 WHERE txid = ?3 AND idx = ?4 AND spent_block IS NULL",
+                )?
+                .execute(params![seq, &txid.0[..], &inp.txid.0[..], inp.index])?;
+                spend_holding(conn, seq, &txid, &inp.txid, inp.index)?;
+                continue;
+            };
+            let cov = u.covenant_id;
+            let spent = Self::spent_view(conn, rec, i, u)?;
+            let remainder: Vec<serde_json::Value> = rec
+                .outputs
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| o.cov.is_some_and(|(_, c)| c == cov))
+                .map(|(k, o)| {
+                    let after = spent.as_ref().and_then(|s| self.derive_after(s, &o.spk, &[], rec));
+                    json!({
+                        "txid": txid.to_hex(),
+                        "index": k,
+                        "value": o.value.to_string(),
+                        "amount_left": after.as_ref().and_then(|a| a.amount_left()).map(|a| a.to_string()),
+                        "state": after.as_ref().map(|a| crate::hex::encode(&a.encode())),
+                    })
+                })
+                .collect();
+            conn.prepare_cached(
+                "UPDATE order_utxos SET spent_block = ?1, spent_txid = ?2, spent_entry = 'other_lane' WHERE txid = ?3 AND idx = ?4 AND spent_block IS NULL",
+            )?
+            .execute(params![seq, &txid.0[..], &inp.txid.0[..], inp.index])?;
+            // Its live custody, bought-custody and strays end with it, as at a gap: the remainder, if any, is the
+            // maker's to import.
+            conn.prepare_cached(concat!(
+                "UPDATE token_utxos SET spent_block = ?1, spent_txid = ?2 WHERE order_id = ",
+                order_of!("?3"),
+                " AND spent_block IS NULL"
+            ))?
+            .execute(params![seq, &txid.0[..], &cov.0[..]])?;
+            conn.prepare_cached(concat!(
+                "UPDATE token_holdings SET spent_block = ?1, spent_tx_id = ?2 WHERE owner_id = ",
+                id_of!("?3"),
+                " AND role_code IN (1, 2, 3) AND spent_block IS NULL"
+            ))?
+            .execute(params![seq, intern_tx(conn, &txid.0)?, &cov.0[..]])?;
+            let (token, side) = load_order(conn, &cov)?.map(|o| (o.token, o.side)).unwrap_or((None, 0));
+            conn.prepare_cached(concat!(
+                "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, closes, detail) VALUES (",
+                order_of!("?1"),
+                ", ?2, ?3, ?4, ?5, ?6, 'unknown', ?7, ?8, 1, kob_dpack(?9, 'unknown'))"
+            ))?
+            .execute(params![
+                &cov.0[..],
+                seq,
+                sql_int(daa),
+                sql_int(ctx.header.timestamp),
+                &txid.0[..],
+                rec.pos,
+                token.map(|t| intern(conn, &t.0)).transpose()?,
+                side as i64,
+                json!({
+                    "reason": LANE_END_REASON,
+                    "lane": crate::hex::encode(&lane),
+                    "note": "spent by a transaction on another lane: a remainder may exist on chain",
+                    "remainder": remainder,
+                })
+                .to_string()
+            ])?;
+            refresh_order_state(conn, &cov)?;
+            delta.orders.insert(cov);
+            if let Some(t) = token {
+                delta.tokens.insert(t);
+            }
+        }
+        Ok(())
     }
 
     fn gap_event(

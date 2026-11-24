@@ -31,6 +31,8 @@
 //!   spends a tracked order), likewise.
 //! - Format 5 ([`FORMAT_IN_VALUE`]) is format 4 with input-value sections (what such a
 //!   transaction's inputs held), likewise.
+//! - Format 6 ([`FORMAT_LANE`]) is format 5 with records of user-lane transactions, which only end what the store
+//!   tracks (R9-K), likewise.
 //!
 //! A frame this build cannot decode (format 1, which has no marker, or a newer format) is kept and
 //! skipped by [`read_all`] with a counted warning. `open` checks the chain only and never decodes a
@@ -234,6 +236,12 @@ pub const FORMAT_PAYER: u8 = 4;
 /// misreading them. A record of an earlier frame has no input value: the network fee of its
 /// transaction is unknown.
 pub const FORMAT_IN_VALUE: u8 = 5;
+
+/// Format 6: format 5 whose records may be of user-lane transactions (`record::TxRecord::lane`, flagged by bit 27 of a
+/// record's position, R9-K). Only a frame that holds one is written as format 6, and every other section may be in it
+/// too. Every other frame stays format 2 to 5, so an older build skips only those frames, with a counted "newer format"
+/// warning, instead of reading a user-lane spend as a native transaction.
+pub const FORMAT_LANE: u8 = 6;
 
 impl LogOp {
     fn encode(&self, w: &mut Writer) {
@@ -455,7 +463,9 @@ impl LogBatch {
         let mut w = Writer::new();
         w.u8(0);
         let txs = || self.blocks.iter().flat_map(|b| &b.txs);
-        w.u8(if txs().any(|t| t.in_value.is_some()) {
+        w.u8(if txs().any(|t| t.lane.is_some()) {
+            FORMAT_LANE
+        } else if txs().any(|t| t.in_value.is_some()) {
             FORMAT_IN_VALUE
         } else if txs().any(|t| t.payer.is_some()) {
             FORMAT_PAYER
@@ -493,10 +503,10 @@ impl LogBatch {
         w.buf
     }
 
-    /// Decodes a frame body (format 2, 3, 4 or 5).
+    /// Decodes a frame body (format 2 to 6).
     pub fn decode(body: &[u8]) -> Result<DecodedBatch, WireError> {
         match body {
-            [0, FORMAT | FORMAT_KCC23 | FORMAT_PAYER | FORMAT_IN_VALUE, rest @ ..] => {
+            [0, FORMAT | FORMAT_KCC23 | FORMAT_PAYER | FORMAT_IN_VALUE | FORMAT_LANE, rest @ ..] => {
                 let mut r = Reader::new(rest);
                 let written_ms = r.var()?;
                 let orders = read_table(&mut r)?;
@@ -1462,6 +1472,7 @@ mod tests {
                     kcc23: None,
                     payer: None,
                     in_value: None,
+                    lane: None,
                 }],
             }],
             ops: vec![LogOp::CloseGap { txid: Hash32([1; 32]), index: 2, covenant_id: Hash32([3; 32]) }],
@@ -2180,6 +2191,7 @@ mod tests {
             kcc23: None,
             payer: None,
             in_value: None,
+            lane: None,
         }
     }
 
