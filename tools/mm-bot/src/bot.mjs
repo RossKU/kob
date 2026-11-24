@@ -696,9 +696,9 @@ export class Bot {
    * list when the node shows it (an output of it to the bot's address; the order live at its
    * outpoint; for a placement, the order live at all: its covenant id comes from that very
    * transaction) or shows it can never confirm (the order live at an outpoint that is neither
-   * the amend's input nor its own: the input was spent by another transaction), or, for an amend
-   * whose sent state is known, when neither that state nor the one it spent is on the node (its
-   * input is spent, by it or by another). A timeout settles nothing.
+   * the amend's input nor its own: the input was spent by another transaction). "Gone" settles
+   * nothing: its states are read in separate node calls, and one can confirm between them (R8T-4).
+   * A timeout settles nothing either.
    */
   resolveInflight(s, r) {
     if (!s.inflight?.length) return;
@@ -706,7 +706,6 @@ export class Bot {
     s.inflight = s.inflight.filter((e) => {
       if (e.txid && shown.has(e.txid)) return false;
       if (r.status === 'live') return !(e.kind === 'place' || r.txid === e.txid || (e.input && r.txid !== e.input));
-      if (r.status === 'gone' && r.verified && e.kind === 'amend' && e.exact && e.state && e.from) return false;
       return true;
     });
   }

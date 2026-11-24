@@ -2012,6 +2012,7 @@ test('a kob binary swapped under the running bot: no whole-fill end for the earl
     reset();
   }
 });
+
 // R8T-1: a stray on an order makes kob replace refuse for good; the bot cancels that order through
 // the node after AMEND_REFUSALS refusals, with an alert, and places its level again.
 test('a_refused_amend_with_strays_cancels_and_requotes (R8T-1)', { timeout: 180_000 }, async () => {
@@ -2068,3 +2069,14 @@ test('cancel_replace_record_carries_the_replacement_state (R8T-2)', { timeout: 1
   }
 });
 
+// R8T-4: an amend's two states are read in two node calls, and it can confirm between them, so
+// "gone" at both never settles it: only a live sighting or an output of its transaction does.
+test('an exact amend not found at either state stays in flight (R8T-4)', () => {
+  reset();
+  const { bot } = setup();
+  const s = { inflight: [{ kind: 'amend', txid: 'f1'.repeat(32), state: { kind: 'KobAsk', state: { price: '2' } }, from: { kind: 'KobAsk', state: { price: '1' } }, input: 'f0'.repeat(32), exact: true }] };
+  bot.resolveInflight(s, { status: 'gone', verified: true, spent: false });
+  assert.equal(s.inflight.length, 1);
+  bot.resolveInflight(s, { status: 'live', txid: 'f1'.repeat(32) });
+  assert.equal(s.inflight.length, 0, 'the node holds it at its own outpoint');
+});
