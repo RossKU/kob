@@ -389,6 +389,9 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
         }
     }
 
+    // The fee bound of every signing path (R8FX2-1): a change the fee pass left out is not sent as
+    // fee.
+    crate::fee::check_fee_bound(&built, 0, true).map_err(|e| anyhow!("nothing was sent: {e}"))?;
     let sigs = key.sign(&built).map_err(|e| anyhow!(e))?;
     let signed = finalize(&built, &sigs, FinalizeOptions::default()).context("signing the withdrawal")?;
     let (tx, _) = signed.tx.to_tx()?;

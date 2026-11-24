@@ -206,8 +206,16 @@ pub struct MaintReport {
 /// KCC-20 transfers keep the extension.
 type Group = ([u8; 32], TemplateId, [u8; 32]);
 
-fn build_sign(action: &Action, signer: &dyn Signer, validate: bool) -> Result<(BuiltTx, SignedTx, Option<Validation>), String> {
+fn build_sign(
+    action: &Action,
+    signer: &dyn Signer,
+    validate: bool,
+    max_tx_fee: u64,
+) -> Result<(BuiltTx, SignedTx, Option<Validation>), String> {
     let built = build_with(action, &budgets).map_err(|e| e.to_string())?;
+    // A maintenance job is paid from the operator's coins and its change is the operator's: nothing
+    // is signed above the fee bound (R8FX2-1).
+    crate::fee::check_fee_bound(&built, max_tx_fee, true)?;
     let sigs = signer.sign(&built)?;
     let signed = finalize(&built, &sigs, FinalizeOptions::default()).map_err(|e| e.to_string())?;
     let v = if validate { Some(validate_signed(&signed).map_err(|e| format!("engine rejected: {e}"))?) } else { None };
@@ -609,7 +617,7 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
                 };
                 match carrier.and_then(|c| {
                     let a = sale(c)?;
-                    let (built, signed, v) = build_sign(&a, signer, cfg.validate)?;
+                    let (built, signed, v) = build_sign(&a, signer, cfg.validate, cfg.fees.max_tx_fee)?;
                     // The operator's free KAS (its funding) comes back whole: the change pays it
                     // back, whatever the bid paid.
                     let change = built.fee.change_output.map(|i| built.tx.outputs[i as usize].value).unwrap_or(0);
@@ -660,7 +668,7 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
                     continue;
                 }
             };
-            match build_sign(&action, signer, cfg.validate) {
+            match build_sign(&action, signer, cfg.validate, cfg.fees.max_tx_fee) {
                 Ok((built, signed, validation)) => {
                     let profit = operator_kas(&built, &funding, &utxos, carrier);
                     let spends = built.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect();

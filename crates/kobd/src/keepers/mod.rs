@@ -629,7 +629,17 @@ fn sweep_request(o: &ListedOrder, funding: Option<&KeyUtxo>, fee: &FeeOptions) -
     };
     let mut strays: Vec<TokenUtxo> = vec![];
     for tok in o.strays.iter().filter_map(|s| s.utxo.covenant_id).collect::<BTreeSet<_>>() {
-        let group: Vec<&TokenUtxo> = o.strays.iter().filter(|s| s.utxo.covenant_id == Some(tok) && s.state.is_plain()).collect();
+        // A twin of a custody (a unit with exactly a custody's state at another outpoint) is never
+        // swept: the builder refuses it, which would hold every other stray of the token for ever. It is
+        // left where it is (R8FX2-5).
+        let twin = |s: &TokenUtxo| {
+            [o.custody.as_ref(), o.custody_b.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|c| c.utxo.covenant_id == s.utxo.covenant_id && c.state == s.state)
+        };
+        let group: Vec<&TokenUtxo> =
+            o.strays.iter().filter(|s| s.utxo.covenant_id == Some(tok) && s.state.is_plain() && !twin(s)).collect();
         let Some(first) = group.first() else { continue };
         let ext = first.state.extension();
         let cap = slots(tok);
@@ -685,12 +695,13 @@ fn finish(
     signer: &dyn Signer,
     validate: bool,
     funding: &[KeyUtxo],
+    max_tx_fee: u64,
 ) -> Result<(BuiltTx, SignedTx, Option<Validation>, i64), String> {
     operator_only(&action, signer.pubkey())?;
-    match finish_with(&action, signer, validate, funding, 0) {
+    match finish_with(&action, signer, validate, funding, 0, max_tx_fee) {
         Err(e) if e.contains("ExceededCommittedScriptUnits") => {
             crate::matcher::lower::note_budget_slack("keeper job", &e);
-            finish_with(&action, signer, validate, funding, 1)
+            finish_with(&action, signer, validate, funding, 1, max_tx_fee)
         }
         r => r,
     }
@@ -702,9 +713,13 @@ fn finish_with(
     validate: bool,
     funding: &[KeyUtxo],
     slack: u16,
+    max_tx_fee: u64,
 ) -> Result<(BuiltTx, SignedTx, Option<Validation>, i64), String> {
     let with_slack = move |role: &str| budgets(role).map(|b| b.saturating_add(slack));
     let built = build_with(action, &with_slack).map_err(|e| e.to_string())?;
+    // Every job, the opt-in sweep included, at every rate: nothing is signed above the bound
+    // (R8FX2-1). A funded job's change is the operator's.
+    crate::fee::check_fee_bound(&built, max_tx_fee, !funding.is_empty())?;
     let sigs = signer.sign(&built)?;
     let signed = finalize(&built, &sigs, FinalizeOptions::default()).map_err(|e| e.to_string())?;
     let v = if validate { Some(validate_signed(&signed).map_err(|e| format!("engine rejected: {e}"))?) } else { None };
@@ -826,7 +841,7 @@ pub fn reprice(
             return Err(format!("no rate above {above} fits the fee cap"));
         }
         crate::fee::set_rate(&mut action, rate);
-        let (built, signed, validation, profit) = finish(action.clone(), signer, cfg.validate, &funding)?;
+        let (built, signed, validation, profit) = finish(action.clone(), signer, cfg.validate, &funding, cfg.fees.max_tx_fee)?;
         if let Some(r) = cfg.fees.capped(rate, built.fee.fee, floor) {
             rate = r;
             continue;
@@ -1076,7 +1091,7 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
         let subsidised = rates.subsidised.and_then(|rate| {
             let mut a = action.clone();
             crate::fee::set_rate(&mut a, rate);
-            let r = finish(a.clone(), signer, cfg.validate, &funding_vec).ok()?;
+            let r = finish(a.clone(), signer, cfg.validate, &funding_vec, cfg.fees.max_tx_fee).ok()?;
             let fits = cfg.fees.max_tx_fee == 0 || r.0.fee.fee <= cfg.fees.max_tx_fee;
             (fits && r.3 >= subsidy_floor(cap)).then_some((a, r))
         });
@@ -1090,7 +1105,7 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
         }
         crate::fee::set_rate(&mut action, rates.plain);
         let mut funding = funding;
-        let mut result = finish(action.clone(), signer, cfg.validate, &funding_vec);
+        let mut result = finish(action.clone(), signer, cfg.validate, &funding_vec, cfg.fees.max_tx_fee);
         // A paid job is rebuilt without its funding input or its foreign strays when it loses money
         // only because of that input (its mass, a change output), or fails or loses money only
         // because of those strays. The order's own tip then pays the fee and the keeper keeps what
@@ -1106,7 +1121,7 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
                     continue;
                 }
                 let fv: &[KeyUtxo] = if no_funding { &[] } else { &funding_vec };
-                if let Ok(r) = finish(alt.clone(), signer, cfg.validate, fv) {
+                if let Ok(r) = finish(alt.clone(), signer, cfg.validate, fv, cfg.fees.max_tx_fee) {
                     if r.3 >= cfg.min_profit {
                         action = alt;
                         if no_funding {

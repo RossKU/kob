@@ -193,6 +193,41 @@ impl Default for FeeRates {
     }
 }
 
+/// Jobs the fee bound refused before signing ([`check_fee_bound`]), process-wide.
+pub static FEE_BOUND_REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The fee bound every job of the executor and the keepers is held to, on its built transaction,
+/// before anything is signed (R8FX2-1).
+///
+/// The builder's fee pass leaves out a change that would put the transaction over a block mass
+/// limit, and that change becomes fee (`kob_protocol::tx::Draft::seal`). So a job is not signed
+/// when its built transaction pays more than `max_tx_fee` (when set, at every rate, the floor
+/// included), or, when `operator_change`, more than a dust change
+/// ([`kob_protocol::tx::DUST_OUTPUT_MIN`]) above the fee the builder targeted (`min_fee`): a
+/// change of the operator's that the fee pass folded into the fee. A refusal is counted.
+pub fn check_fee_bound(built: &kob_protocol::tx::BuiltTx, max_tx_fee: u64, operator_change: bool) -> Result<(), String> {
+    let f = &built.fee;
+    let why = if max_tx_fee > 0 && f.fee > max_tx_fee {
+        Some(format!("the fee {} sompi is above the cap of {max_tx_fee} (max_tx_fee)", f.fee))
+    } else if operator_change && f.fee.saturating_sub(f.min_fee) > kob_protocol::tx::DUST_OUTPUT_MIN {
+        Some(format!(
+            "the fee {} sompi is {} above the {} the builder targeted: the change was left out (the transaction would not fit a block with it), so nothing is signed",
+            f.fee,
+            f.fee - f.min_fee,
+            f.min_fee
+        ))
+    } else {
+        None
+    };
+    match why {
+        Some(w) => {
+            FEE_BOUND_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err(format!("fee bound: {w}"))
+        }
+        None => Ok(()),
+    }
+}
+
 impl FeeRates {
     /// Every urgency at `rate`, no total cap.
     pub fn flat(rate: u64) -> Self {
