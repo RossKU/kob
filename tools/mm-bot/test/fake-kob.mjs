@@ -85,7 +85,8 @@ function chain() {
   const out = (o) => { process.stdout.write(JSON.stringify(o)); process.exit(0); };
   const fee = 500000;
   if (args[0] === 'balances') {
-    out(balancesDoc({ maker: c.maker, kasFree: c.kasFree, token: c.token, free: c.tokenFree, freeUtxos: c.tokenUtxos }));
+    // FAKE_KOB_TOKEN_CUT=reason: the holdings list was read only in part (R9T-1).
+    out(balancesDoc({ maker: c.maker, kasFree: c.kasFree, token: c.token, free: c.tokenFree, freeUtxos: c.tokenUtxos, cut: process.env.FAKE_KOB_TOKEN_CUT ?? null }));
   }
   const txid = (c.n + 1).toString(16).padStart(64, '0');
   const submit = (extra = {}) => {
@@ -110,6 +111,16 @@ function chain() {
   if (args[0] === 'place') {
     // FAKE_KOB_REFUSE_PLACE: every placement is refused before signing (R2-T3).
     if (process.env.FAKE_KOB_REFUSE_PLACE) { process.stderr.write('error: its decimals come from the indexer alone: give --decimals 6; nothing signed\n'); process.exit(1); }
+    // FAKE_KOB_CROSS / FAKE_KOB_CLOCK: the plan's error issue, as place prints a plan it cannot build
+    // (crates/kob-cli/src/trade/place.rs:1125-1129 with flow.rs print_issues: "error: <message> [<CODE>]").
+    if (process.env.FAKE_KOB_CROSS && args.includes('--crossing') && val('--crossing') === 'reject') {
+      process.stderr.write(`error: your limit crosses the market at ${val('--price').replace('sompi', '')} [MARKETABLE_REJECTED]\nerror: the order could not be planned: nothing signed\n`);
+      process.exit(1);
+    }
+    if (process.env.FAKE_KOB_CLOCK && args.includes('--gtd')) {
+      process.stderr.write("error: the node's and the indexer's view of the chain's time disagree: a timed order is not placed (try again, or place it good-till-cancelled) [CLOCK_DISPUTED]\nerror: the order could not be planned: nothing signed\n");
+      process.exit(1);
+    }
     const side = val('--side');
     const amount = Number(val('--amount').replace('base', ''));
     const price = Number(val('--price').replace('sompi', ''));
@@ -137,6 +148,11 @@ function chain() {
       process.exit(1);
     }
     const np = args.includes('--price') ? Number(val('--price').replace('sompi', '')) : o.price;
+    // FAKE_KOB_CROSS: the amend's crossing refusal (actions.rs amend_crossing), exit 1.
+    if (process.env.FAKE_KOB_CROSS && (!args.includes('--crossing') || val('--crossing') === 'reject')) {
+      process.stderr.write('error: the new price crosses the market (best bid at 4100000000): refused, nothing signed. Pass --crossing limit to fill at your price (a matcher keeps the difference), or cancel and place it (a crossing placement starts as an auction)\n');
+      process.exit(1);
+    }
     // FAKE_KOB_REPLACE_NEW: a cancel-replace (strays on the order); `lost`: a fill of 1,500,007
     // lands first and the replace never confirms (R6T-2). No change comes back: it rides on the
     // replacement.

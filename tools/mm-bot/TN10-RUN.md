@@ -113,3 +113,10 @@ its expiry (at most `lifeMin`) when the indexer cannot be trusted; run your own 
   mempool past `orderVisibleTimeoutSec` raises one `own-tx-unconfirmed` alert, and the order stays in `state.json`
   (`inflight`) until the node shows it; when it confirms, the order is found at its new state and the entry clears.
 - R7T-5: replacing the `kob` binary under a running bot logs "the kob CLI changed" in the next cycle.
+
+## To check on the next live run (round-9 fixes, not testable offline)
+
+- Placements and amends carry `--crossing reject`: a quote whose price crosses the book is refused with `[MARKETABLE_REJECTED]`
+  (the log says the level waits) and no order rests as an auction (`/v1/orders/<id>` shows no `auction`).
+- A whole-fill ask filled in full while its amend is in the mempool ends in the next due cycle ("its amend ... can no
+  longer land") and its level is placed again.

@@ -199,6 +199,7 @@ export class Bot {
   /** One cycle. Returns 'stopped' once the bot has stopped. */
   async cycle() {
     const c = this.cfg;
+    this.cycles = (this.cycles ?? 0) + 1;
     const now = Date.now();
     const stop = this.stopRequested();
     const snap = stop ? { ok: false, reason: 'stopping', jump: 0, used: [], dropped: [], venues: {} } : await readReference(c, this.refMemory, now);
@@ -231,6 +232,9 @@ export class Bot {
       await this.blindPull(stop, snap, now, e);
       throw e;
     }
+    // A token list read in part is a lower bound (R9T-1): sizing then quotes less, never more.
+    if (!bal.token.freeComplete && !this.state.tokenListCut) this.alert('warn', 'token-list-incomplete', `The token UTXOs of the bot's key were read only in part (someone may have sent it many small ones): its free tokens are at least what was read, and the ask side is sized on that. kob merge folds what it reads; the bot merges before its asks.`);
+    this.state.tokenListCut = !bal.token.freeComplete;
     if (bal.token.decimals != null && bal.token.decimals !== c.token.decimals) {
       throw new Error(`the CLI reports ${bal.token.decimals} decimals for the token, the config says ${c.token.decimals}: fix token.decimals`);
     }
@@ -431,7 +435,7 @@ export class Bot {
    * 'unknown', why }. An order whose amend was not seen is looked up under its state before the
    * amend as well.
    */
-  async nodeCheck(ids, hints = {}) {
+  async nodeCheck(ids, hints = {}, only = null) {
     const out = new Map(ids.map((id) => [id, { status: 'unknown', why: 'no record or template to look it up by' }]));
     const pass = async (list, pick, k) => {
       const prev = k > 0;
@@ -455,8 +459,8 @@ export class Bot {
     };
     // Every state the order can be in (statesOf): its own, the one before an amend not yet seen,
     // and those of the bot's transactions on it still in flight (R7T-1), one call each.
-    await pass(ids, (s) => s.own?.state, 0);
-    for (let k = 1; ; k++) {
+    await pass(ids, only ?? ((s) => s.own?.state), 0);
+    for (let k = 1; !only; k++) {
       const more = ids.filter((id) => out.get(id).status === 'gone' && this.statesOf(this.state.orders[id]).length > k);
       if (!more.length) break;
       const first = new Map(more.map((id) => [id, out.get(id)]));
@@ -708,6 +712,28 @@ export class Bot {
       if (r.status === 'live') return !(e.kind === 'place' || r.txid === e.txid || (e.input && r.txid !== e.input));
       return true;
     });
+  }
+
+  /**
+   * An exact in-place amend in flight whose order the node no longer shows (R9T-2: a full fill beat
+   * it): its input state is looked up first, then its own. Not found at its input, the order's
+   * outpoint is spent; still not found at its own state after that, the amend did not make it (it
+   * would have to be on the node by then), so it can never land, and the entry is settled at once.
+   * Read in this order, a confirmation between the two calls is found (R8T-4).
+   */
+  async settleBeatenAmends(id, s, tag) {
+    for (const e of (s.inflight ?? []).filter((x) => x.kind === 'amend' && x.exact && x.state && x.from)) {
+      if ((await this.lookAt(id, e.from)) !== 'gone') continue;
+      if ((await this.lookAt(id, e.state)) !== 'gone') continue;
+      s.inflight = s.inflight.filter((x) => x !== e);
+      this.log.info(`${tag}: its amend ${e.txid ?? ''} can no longer land: the order's outpoint is spent and the amend's state is not on the node`);
+    }
+  }
+
+  /** One lookup of order `id` at `state` on the node: 'live', 'gone' (verified) or 'unknown'. */
+  async lookAt(id, state) {
+    const r = (await this.nodeCheck([id], {}, () => state)).get(id);
+    return r.status === 'live' ? 'live' : r.status === 'gone' && r.verified ? 'gone' : 'unknown';
   }
 
   /** One alert per transaction of the bot's own still in flight past orderVisibleTimeoutSec (a hint, R7T-1). */
@@ -1074,6 +1100,7 @@ export class Bot {
       // nothing (the node cannot hold a state before its transaction confirms), so nothing ends.
       // A confirmed cancel ends it whatever was in flight: it spent the order.
       if (cancelled) s.inflight = [];
+      if (r.status === 'gone' && r.verified) await this.settleBeatenAmends(id, s, tag);
       this.resolveInflight(s, r);
       if (s.inflight?.length) {
         const exp = Math.max(s.expiresAt ?? 0, ...s.inflight.map((e) => e.expiresAt ?? 0)) || null;
@@ -1514,9 +1541,15 @@ export class Bot {
       // shown, never matched.
       const s = this.state.orders[a.id];
       if (a.kind === 'amend' && s && !r.sentFee && !this.dryRun) {
-        s.amendRefusals = (s.amendRefusals ?? 0) + 1;
+        // In consecutive cycles only (R9T-5): an old refusal and a passing one are no pattern.
+        s.amendRefusals = s.amendRefusedCycle != null && this.cycles - s.amendRefusedCycle <= 1 ? (s.amendRefusals ?? 0) + 1 : 1;
+        s.amendRefusedCycle = this.cycles;
         if (s.amendRefusals >= AMEND_REFUSALS) {
-          this.alert('warn', 'amend-refused', `Order ${short(a.id)} (${a.side} L${a.level}): the CLI refused its amend ${s.amendRefusals} times (${r.error}); it is cancelled through the node and its level placed again.`);
+          // One alert, then one a day while it goes on (R9T-6: a cancel can fail too).
+          if (s.amendAlertAt == null || Date.now() - s.amendAlertAt > 86_400_000) {
+            s.amendAlertAt = Date.now();
+            this.alert('warn', 'amend-refused', `Order ${short(a.id)} (${a.side} L${a.level}): the CLI refused its amend ${s.amendRefusals} times (${r.error}); it is cancelled through the node and its level placed again. If that cancel fails too (more units of the order's own custody sent to it than one transaction moves), kob can neither amend nor cancel it: it stays at its terms until it is filled or refunded at its expiry, and nothing is lost.`);
+          }
           s.amendRefusals = 0;
           this.save();
           return this.run1({ kind: 'cancel', id: a.id, side: a.side, level: a.level, reason: 'its amend is refused' });
@@ -1635,6 +1668,20 @@ export class Bot {
       // In flight (R7T-1): it ends as "never went out" only once its expiry has passed by 2 h.
       this.noteInflight(rec, { kind: 'place', txid, exact: false, expiresAt });
       this.alert('warn', 'place-unknown', `A placement (${a.side} L${a.level}) may have gone out (${r.error}); it counts toward the caps as order ${short(id)} until the node says.`);
+      return;
+    }
+    // A level through the market (--crossing reject) or a timed order while the node's and the
+    // indexer's time disagree: an ordinary outcome, the level waits for the next cycle (not a
+    // refusal toward IDLE/placement). The codes are the CLI's issue codes, printed in brackets.
+    if (/\[MARKETABLE_REJECTED\]/.test(r.error ?? '')) {
+      this.log.info(`place ${a.side} L${a.level}: the level is through the market; it waits for the next cycle`);
+      return;
+    }
+    if (/\[CLOCK_DISPUTED\]/.test(r.error ?? '')) {
+      if (Date.now() - (this.clockAlertAt ?? 0) > 3_600_000) {
+        this.clockAlertAt = Date.now();
+        this.alert('warn', 'clock-disputed', `The node's and the indexer's view of the chain's time disagree: no timed quote is placed until they agree (cancels go through). Check the indexer and the node.`);
+      }
       return;
     }
     this.state.placeFails = (this.state.placeFails ?? 0) + 1;

@@ -57,7 +57,7 @@ test('a quote is placed and amended with --gtd (its expiry), the same on the pla
   assert.equal(c.length, 4);
   for (const a of c.slice(0, 2)) assert.equal(a[a.indexOf('--gtd') + 1], '2026-11-20T13:30:00Z');
   for (const a of c.slice(2)) {
-    assert.deepEqual(a.slice(0, 6), ['replace', 'cd'.repeat(32), '--price', '3790000000sompi', '--gtd', '2026-11-20T13:31:00Z']);
+    assert.deepEqual(a.slice(0, 8), ['replace', 'cd'.repeat(32), '--price', '3790000000sompi', '--crossing', 'reject', '--gtd', '2026-11-20T13:31:00Z']);
   }
   // Without one, nothing is added (a 90-day GTC).
   const { kob: k2, calls: c2 } = fake('ok');
@@ -96,7 +96,7 @@ test('--dry-run never runs --yes', async () => {
 test('balances: integer units and the maker key', async () => {
   const { kob } = fake('ok');
   const b = await kob.balances(TOKEN);
-  const row = { free: 5000000, inOrders: 0, freeUtxos: 2, decimals: 6, freeVerified: true };
+  const row = { free: 5000000, inOrders: 0, freeUtxos: 2, decimals: 6, freeVerified: true, freeComplete: true };
   assert.deepEqual(b, { maker: 'ef'.repeat(32), kasFree: 100000000000, kasTotal: 100000000000, token: row, tokens: { [TOKEN]: row } });
 });
 
