@@ -16,6 +16,7 @@ import type { BuiltTx, ForeignStrays, Hex, Kcc20State, SweepOrderRequest, TokenU
 import { loadKobNode } from './wasm.node';
 import { MAKER, OTHER, TOKEN, ZERO32, keyUtxo, nodeFactsOf, orderViewOf, placeGolden, signAndValidate, tokenUtxoView, tradableRegistryJson } from '../testing/chain-fixtures';
 import { orderTitle, tokenAmountText, tokenLabel } from '../ui/confirm/confirm-model';
+import { sweepTakingCustody } from '../testing/hostile-tx';
 import { t } from '../i18n';
 
 const kob = loadKobNode();
@@ -223,10 +224,10 @@ describe('the pre-sign decoder blocks a sweep that is not one', () => {
   it('the custody swept along, and a plan that claims another sweep or a cancel', () => {
     const snap = withStrays(snapOf('create.ask'));
     const ok = planSweep(env(), snap);
-    // the builder accepts the custody as one more stray of the order's token: the plan's
-    // `untouched` outpoint catches it
-    const req = { ...(ok.request as SweepOrderRequest), strays: [snap.custody!, ...(ok.request as SweepOrderRequest).strays!] };
-    const greedy = kob.build({ ...req, ownKeys: [MAKER.pk] });
+    // a sweep that also takes the custody, made from the honest build at the transaction level
+    // (the builder refuses to build it): the plan's `untouched` outpoint and the decoder's own
+    // continuing-custody rule catch it
+    const greedy = sweepTakingCustody(kob, ok.built!, snap, (ok.request as SweepOrderRequest).strays![0]!);
     expect(codes(decode(greedy, ok.expected).blocking)).toContain('sweep-custody-spent');
     // a cancel plan's expectations against a sweep, and a sweep plan's against another order id
     expect(blocking(built, { cancelIds: [snap.covenantId] })).toEqual(expect.arrayContaining(['expected-cancel-ids', 'expected-sweep-ids']));
