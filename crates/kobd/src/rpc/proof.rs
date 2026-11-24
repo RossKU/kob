@@ -269,6 +269,26 @@ pub struct Plan {
     last: Option<Anchor>,
 }
 
+impl Plan {
+    /// The chain blocks of the batch.
+    pub fn blocks(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// The longest prefix of the batch's chain blocks whose lanes, with the native lane, are at
+    /// most `max`; at least one chain block ([`MAX_BATCH_LANES`]).
+    pub fn lane_prefix(&self, max: usize) -> usize {
+        let mut seen: std::collections::HashSet<Hash> = std::collections::HashSet::from([native_lane()]);
+        for (k, b) in self.blocks.iter().enumerate() {
+            seen.extend(b.lanes.keys().copied());
+            if seen.len() > max {
+                return k.max(1);
+            }
+        }
+        self.blocks.len()
+    }
+}
+
 /// Counters for `/v1/health`.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct ChainProofStatus {
@@ -408,8 +428,30 @@ pub const FLOOR_SEED_MAX_DAA: u64 = 36_000;
 /// The `meta` key the floor's targets are stored under.
 pub const FLOOR_META_KEY: &str = "chain_proof_floor";
 
-/// Lanes remembered at most. A lane beyond this is proven again at the anchor when it shows up.
-const MAX_LANES: usize = 64;
+/// Lane tips kept between batches, at most (R8C1-H1). A batch keeps every lane it needs, whatever
+/// their number: this bounds only what is remembered after it. A lane left out is proven again at
+/// the anchor when it shows up. The lanes of the batch just proven are kept first, then the most
+/// recently active.
+pub const KEEP_LANES: usize = 4_096;
+
+/// The lanes one batch of more than one chain block may need, at most (R8C1-H1). A window that
+/// needs more is proven and applied in pieces: its longest prefix of chain blocks within this
+/// bound, at least one chain block ([`Plan::lane_prefix`]). One chain block is always proven
+/// whole: consensus bounds its lanes ([`chain_block_lane_bound`]). It is kobd's own bound, never a
+/// refusal and never the node's fault. Each lane costs two lane proofs (at the anchor and at the
+/// batch's end) and about 150 bytes of state.
+pub const MAX_BATCH_LANES: usize = 4_096;
+
+/// The most lanes one chain block can need on `network` by consensus (rusty-kaspa v2.1.0): the
+/// transactions of its merge set, at most `mergeset_size_limit` blocks (248 at 10 BPS), each with
+/// at most `DEFAULT_LANES_PER_BLOCK_LIMIT` (50) lanes, and the native lane: 12,401. Its proof state
+/// is about 12,401 x 150 bytes, under 2 MB.
+pub fn chain_block_lane_bound(network: &str) -> usize {
+    use kaspa_consensus_core::config::constants::consensus::DEFAULT_LANES_PER_BLOCK_LIMIT;
+    use kaspa_consensus_core::config::params::{MAINNET_PARAMS, TESTNET_PARAMS};
+    let p = if network == "mainnet" { &MAINNET_PARAMS } else { &TESTNET_PARAMS };
+    DEFAULT_LANES_PER_BLOCK_LIMIT * p.mergeset_size_limit() as usize + 1
+}
 
 fn median(v: impl Iterator<Item = Uint256>) -> Option<Uint256> {
     let mut all: Vec<Uint256> = v.collect();
@@ -672,12 +714,8 @@ impl ChainProof {
             lane_proof_gives(a.accepted_id_merkle_root, lane, claimed, p).map_err(|e| ProofError::BadProof(from, e))?;
         }
         self.status.lane_proofs_total += 1;
-        if self.lanes.len() >= MAX_LANES && !self.lanes.contains_key(&lane) {
-            let native = native_lane();
-            if let Some(k) = self.lanes.keys().copied().find(|k| *k != native) {
-                self.lanes.remove(&k);
-            }
-        }
+        // Never evicted here: the batch being proven may need every lane it learns (R8C1-H1).
+        // What is kept between batches is trimmed in `finish`.
         self.lanes.insert(lane, claimed);
         Ok(())
     }
@@ -690,7 +728,10 @@ impl ChainProof {
         };
         let mut tips: HashMap<Hash, Option<LaneTip>> = HashMap::new();
         for lane in &plan.lanes {
-            let Some(t) = self.lanes.get(lane) else { return refuse(format!("lane {lane} is not known at the anchor")) };
+            // kobd's own bookkeeping, never the node's fault: the lane is proven again (R8C1-H1).
+            let Some(t) = self.lanes.get(lane) else {
+                return Err(ProofError::Unavailable(format!("lane {lane} is not known at the anchor yet")));
+            };
             tips.insert(*lane, *t);
         }
         for b in &plan.blocks {
@@ -749,6 +790,7 @@ impl ChainProof {
         for (lane, t) in expected {
             self.lanes.insert(*lane, *t);
         }
+        self.trim_lanes(expected);
         self.targets.extend(plan.targets);
         let window = self.cfg.floor_window.max(1);
         while self.targets.len() > window {
@@ -760,6 +802,31 @@ impl ChainProof {
         self.status.floor_headers = self.targets.len();
         self.anchor = plan.last;
         Ok(())
+    }
+
+    /// Keeps at most [`KEEP_LANES`] lane tips, or the lanes of the batch just proven when they are
+    /// more: those of `kept` first, the native lane always, then the most recently active.
+    fn trim_lanes(&mut self, kept: &[(Hash, Option<LaneTip>)]) {
+        if self.lanes.len() <= KEEP_LANES {
+            return;
+        }
+        let keep: std::collections::HashSet<Hash> = kept.iter().map(|(l, _)| *l).chain([native_lane()]).collect();
+        let mut others: Vec<(u64, Hash)> =
+            self.lanes.iter().filter(|(l, _)| !keep.contains(*l)).map(|(l, t)| (t.map_or(0, |t| t.blue_score), *l)).collect();
+        let room = KEEP_LANES.saturating_sub(keep.len());
+        if others.len() > room {
+            // The most recent first; ties by lane, so that the choice does not depend on hashing.
+            others.sort_unstable_by(|a, b| b.cmp(a));
+            for (_, l) in others.drain(room..) {
+                self.lanes.remove(&l);
+            }
+        }
+    }
+
+    /// The lanes kept now (tests).
+    #[cfg(test)]
+    pub(crate) fn lanes_kept(&self) -> usize {
+        self.lanes.len()
     }
 
     /// Checks a merged block, served by `from`, fetched for the signature scripts of `txs` (its
@@ -817,8 +884,12 @@ impl<S: crate::rpc::ChainSource> HeaderSource for S {
 }
 
 /// Headers fetched at most to find a merged block below its chain block ([`check_merged_into`]).
-/// A merged block is nearly always a direct parent, which needs none.
-pub const MERGESET_WALK_MAX: usize = 128;
+/// A merged block is nearly always a direct parent, which needs none. A path from a chain block to a
+/// block of its merge set lies inside the merge set, at most `mergeset_size_limit` blocks (248 at
+/// 10 BPS); the walk may also follow dead ends of more blue work, so it may fetch four times that.
+/// Reaching the bound is kobd's own limit: the batch waits (`Unavailable`), never refused and never
+/// the node's fault (R8C1-H1 (d)).
+pub const MERGESET_WALK_MAX: usize = 1_024;
 
 /// Proves that the merged block `merged` (its header checked against its hash) is in the merge set
 /// of the chain block `chain` that accepted its transactions.
@@ -869,6 +940,12 @@ pub async fn check_merged_into<H: HeaderSource>(chain: &Header, merged: &Header,
             }
         }
         level = next;
+    }
+    if !level.is_empty() {
+        return Err(ProofError::Unavailable(format!(
+            "merged block {target}: no parent path below chain block {} within {MERGESET_WALK_MAX} headers yet",
+            chain.hash
+        )));
     }
     refuse(format!(
         "merged block {target} is not in the merge set of chain block {} (no parent path within {MERGESET_WALK_MAX} headers)",
@@ -1144,6 +1221,59 @@ pub(crate) mod tests {
                 fx.run(&mut fx.checker().skipping(skip::LANES), raw).unwrap();
             }
         }
+    }
+
+    /// The mainnet window with `extra` more transactions in chain block 0, each in a user lane of its own
+    /// (`[i, i >> 8, i >> 16, 1, 0 x 16]`), and a lane proof of each recorded under its lane (the lane checks left out: only
+    /// the bookkeeping of the lanes is under test).
+    fn with_lanes(extra: usize) -> (Fixture, RawVspcResponse) {
+        let mut fx = fixture(MAINNET);
+        let mut raw = fx.raw();
+        let (b, k) = native_tx(&raw);
+        let t0 = raw.chain_block_accepted_transactions[b].accepted_transactions[k].clone();
+        let native = fx.proofs.get(&native_lane()).unwrap().clone();
+        for i in 0..extra {
+            let mut t = t0.clone();
+            let mut sub = [0u8; 20];
+            sub[..4].copy_from_slice(&[i as u8, (i >> 8) as u8, (i >> 16) as u8, 1]);
+            t.subnetwork_id = Some(crate::hex::HexBytes(sub.to_vec()));
+            reid(&mut t);
+            fx.proofs.insert(lane_of(&sub), native.clone());
+            raw.chain_block_accepted_transactions[b].accepted_transactions.push(t);
+        }
+        (fx, raw)
+    }
+
+    /// R8C1-H1: a batch is proven whatever number of lanes it needs: 65 (one more than the 64 lanes kept before), 200,
+    /// and the most one chain block can need by consensus. Before, learning the 65th lane evicted one the batch needed,
+    /// and the batch was refused ("not known at the anchor") on every node, for ever.
+    #[test]
+    fn a_batch_needing_more_lanes_than_were_kept_is_proven() {
+        // The window has the native lane and one user lane already: 12,399 more make the consensus bound of one chain
+        // block, 12,401 (`chain_block_lane_bound`).
+        for extra in [65usize, 200, 12_399] {
+            let (fx, raw) = with_lanes(extra);
+            let r = fx.run(&mut fx.checker().skipping(skip::LANES), &raw);
+            assert!(r.is_ok(), "{extra} more lanes: {r:?}");
+        }
+    }
+
+    /// R8C1-H1: what is kept between batches is bounded ([`KEEP_LANES`]) and a batch of more is kept whole; the prefix
+    /// within [`MAX_BATCH_LANES`] is at least one chain block; the consensus bound of one chain block is 12,401 lanes.
+    #[test]
+    fn kept_lanes_are_bounded_and_a_window_splits_by_lanes() {
+        assert_eq!(chain_block_lane_bound("mainnet"), 12_401);
+        let (fx, raw) = with_lanes(KEEP_LANES + 100);
+        let mut cp = fx.checker().skipping(skip::LANES);
+        let plan = cp.check_local(fx.start, &raw).unwrap().unwrap();
+        assert!(plan.lanes.len() > KEEP_LANES);
+        assert_eq!(plan.lane_prefix(10), 1, "at least one chain block");
+        assert_eq!(plan.lane_prefix(usize::MAX), plan.blocks());
+        fx.run(&mut cp, &raw).unwrap();
+        assert!(cp.lanes_kept() <= plan.lanes.len(), "{}", cp.lanes_kept());
+        let (fx2, raw2) = with_lanes(5);
+        fx2.run(&mut cp, &raw2).ok();
+        assert!(cp.lanes_kept() <= KEEP_LANES.max(plan.lanes.len()));
     }
 
     /// The mainnet window has a transaction in a lane other than the native one (subnetwork
