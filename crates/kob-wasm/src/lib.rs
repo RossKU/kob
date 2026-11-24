@@ -58,6 +58,21 @@ pub mod api {
     pub fn templates() -> R<String> {
         out(&artifacts::template_infos())
     }
+    /// Every token UTXO an order's state holds, which a spend that ends it must release, from
+    /// `build::held_custodies`: `[{token: {covenantId, program}, state, bought}]`.
+    pub fn held_custodies(state: &str, order_cov: &str) -> R<String> {
+        let s: AnyState = parse("state", state)?;
+        let cov: [u8; 32] = from_hex(order_cov)?.try_into().map_err(|_| "orderCov: 32 bytes of hex".to_string())?;
+        out(&build::held_custodies(&s, cov).map_err(|e| e.to_string())?)
+    }
+    /// Checks that the token inputs of a spend that ends an order release everything its state holds,
+    /// each by its whole state (`build::check_releases_held`). An error says what is left behind.
+    pub fn check_releases(state: &str, order_cov: &str, inputs: &str) -> R<()> {
+        let s: AnyState = parse("state", state)?;
+        let cov: [u8; 32] = from_hex(order_cov)?.try_into().map_err(|_| "orderCov: 32 bytes of hex".to_string())?;
+        let t: Vec<tx::TokenUtxo> = parse("inputs", inputs)?;
+        build::check_releases_held(&s, cov, &t).map_err(|e| e.to_string())
+    }
     /// The trigger evidence of a batch leg, from `build::touch_of`.
     ///
     /// It holds the side, token, scale, quote, amount (base units) and `exposedSince` of a plain
@@ -1277,6 +1292,20 @@ pub fn templates() -> Result<String, JsError> {
 #[wasm_bindgen(js_name = touchOf)]
 pub fn touch_of(leg: &str) -> Result<String, JsError> {
     js(api::touch_of(leg))
+}
+
+/// The token UTXOs an order's state holds, which a spend that ends it must release (custody
+/// token, amount and class, and a bought-custody): `[{token: {covenantId, program}, state, bought}]`.
+#[wasm_bindgen(js_name = heldCustodies)]
+pub fn held_custodies(state: &str, order_cov: &str) -> Result<String, JsError> {
+    js(api::held_custodies(state, order_cov))
+}
+
+/// Checks that a spend ending an order (its token inputs, JSON `TokenUtxo`s) releases everything the
+/// order's state holds, each by its whole state; throws what is left behind.
+#[wasm_bindgen(js_name = checkReleases)]
+pub fn check_releases(state: &str, order_cov: &str, inputs: &str) -> Result<(), JsError> {
+    js(api::check_releases(state, order_cov, inputs))
 }
 
 /// Builds any action into an unsigned transaction with its signing plan.

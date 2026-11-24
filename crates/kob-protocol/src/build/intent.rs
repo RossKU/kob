@@ -58,7 +58,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{check_custody, check_custody_ext, check_token_input, holder_change, nb, one_borrow, pos, token_witness, BudgetFn, Token};
+use super::{check_custody, check_token_input, holder_change, nb, one_borrow, pos, token_witness, BudgetFn, Token};
 use crate::artifacts::TemplateId;
 use crate::error::{invalid, Error, Result};
 use crate::family::Family;
@@ -494,8 +494,7 @@ fn plan_ask(ask: &IntentAsk, token: Token, lock: i64) -> Result<AskPlan> {
     if program != token.1 {
         return invalid(format!("an ask of the {} program; the intent buys {} tokens", program.name(), token.1.name()));
     }
-    check_custody(&ask.custody, Some(cov), token, state.custody_amount())?;
-    check_custody_ext(&ask.custody, state.extension_commitment)?;
+    check_custody(&ask.custody, Some(cov), token, state.custody_amount(), state.extension_commitment)?;
     if state.slope != 0 || state.interval != 0 {
         return invalid("intent executions take plain asks only (no auction, no TWAP)");
     }
@@ -617,8 +616,8 @@ fn plan_bid(bid: &IntentBid, token: Token, lock: i64) -> Result<BidPlan> {
     let have_kas = match (&bid.custody, custody) {
         (Some(c), true) => {
             let cov = bid.order.utxo.covenant_id.ok_or_else(|| Error::Invalid("bid UTXO has no covenant id".into()))?;
-            check_custody(c, Some(cov), token, state.bought).map_err(|e| Error::Invalid(format!("the bid's bought-custody: {e}")))?;
-            check_custody_ext(c, state.extension_commitment)?;
+            check_custody(c, Some(cov), token, state.bought, state.extension_commitment)
+                .map_err(|e| Error::Invalid(format!("the bid's bought-custody: {e}")))?;
             c.utxo.amount as i64
         }
         (None, true) => {
@@ -646,9 +645,19 @@ fn plan_bid(bid: &IntentBid, token: Token, lock: i64) -> Result<BidPlan> {
     let mut refund = None;
     let (delivery, cont) = if rests {
         let next = if accumulate { BidState { bought: delivered, ..state.clone() } } else { state.clone() };
-        (have_kas + released + used - all_in, Some((pos(left - released, "bid continuation")?, next.spk_for(fam))))
+        (
+            have_kas
+                .checked_add(released)
+                .and_then(|x| x.checked_add(used))
+                .and_then(|x| x.checked_sub(all_in))
+                .ok_or_else(|| Error::Invalid("the bid's delivery overflows".into()))?,
+            Some((pos(left - released, "bid continuation")?, next.spk_for(fam))),
+        )
     } else {
-        let rem = order_value - all_in - released;
+        let rem = order_value
+            .checked_sub(all_in)
+            .and_then(|x| x.checked_sub(released))
+            .ok_or_else(|| Error::Invalid("the bid's rest overflows".into()))?;
         if rem >= crate::tx::REFUND_MIN as i64 {
             refund = Some(rem as u64);
             (have_kas + released, None)
@@ -760,12 +769,16 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
             return invalid("an order appears twice in one execution");
         }
     }
+    // checked: the orders' numbers are counterparties' (R8F1c-3)
+    fn total(mut v: impl Iterator<Item = i64>, what: &str) -> Result<i64> {
+        v.try_fold(0i64, |a, x| a.checked_add(x)).ok_or_else(|| Error::Invalid(format!("{what} overflow")))
+    }
     let mut facts = ExecutionFacts {
-        bought: asks.iter().map(|a| a.take).sum(),
-        sold: bids.iter().map(|b| b.sold).sum(),
-        quote_pay: asks.iter().map(|a| a.quote).sum(),
-        ask_all_in: asks.iter().map(|a| a.all_in).sum(),
-        bid_all_in: bids.iter().map(|b| b.all_in).sum(),
+        bought: total(asks.iter().map(|a| a.take), "the asks' amounts")?,
+        sold: total(bids.iter().map(|b| b.sold), "the bids' amounts")?,
+        quote_pay: total(asks.iter().map(|a| a.quote), "the asks' quotes")?,
+        ask_all_in: total(asks.iter().map(|a| a.all_in), "the asks' proceeds")?,
+        bid_all_in: total(bids.iter().map(|b| b.all_in), "the bids' spends")?,
         merchant_output: 0,
     };
     // The router's own bounds, checked here so a built execution never fails on them.
@@ -1056,7 +1069,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         if built.fee.change_output != Some(intent_input as u32) {
             return invalid("the payer's KAS change must be the intent's output j (the budget does not cover the execution)");
         }
-        if change + facts.quote_pay + max_extra < r.intent.amount as i64 {
+        if (change as i128 + facts.quote_pay as i128 + *max_extra as i128) < r.intent.amount as i128 {
             return invalid(format!(
                 "carriers, fillers and the fee exceed the intent's max_extra: the payer's change {change} + quote {} + max_extra {max_extra} < {}",
                 facts.quote_pay, r.intent.amount

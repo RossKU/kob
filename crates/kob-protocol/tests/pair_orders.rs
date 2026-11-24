@@ -97,6 +97,21 @@ fn builders_refuse_what_the_covenants_refuse() {
         custody.state = custody.state.with_amount(custody.state.amount() - 1);
     }
     assert!(build(b).is_err());
+    // a look-alike of the custody owned by another covenant id, or carrying a borrow setting (R8F3c-1)
+    let mut b = route_ask(ask.clone(), pa, pb, 4);
+    if let Leg::Pair { custody, .. } = &mut b.legs[0] {
+        if let TokenState::Kcc20(k) = &mut custody.state {
+            k.owner = [0x5c; 32];
+        }
+    }
+    assert!(build(b).unwrap_err().to_string().contains("not owned by its order"));
+    let mut b = route_ask(ask.clone(), pa, pb, 4);
+    if let Leg::Pair { custody, .. } = &mut b.legs[0] {
+        if let TokenState::Kcc20(k) = &mut custody.state {
+            k.borrow_scheme = 1;
+        }
+    }
+    assert!(build(b).is_err());
     // the delivery the route cannot fund (the ask of B sells too little)
     let mut b = route_ask(ask.clone(), pa, pb, 4);
     if let Leg::Ask { amount, .. } = &mut b.legs[2] {
