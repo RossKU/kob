@@ -476,7 +476,11 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
     // guarantee is derived from `priceEnd` and labelled the worst price (matcher.md 10.2). The
     // start is only what the order is expected to get at the touch.
     const decays = !!d.auction && d.auction.slope > 0n; // priceEnd 0 decays to 0: the worst price IS 0
-    const bound = decays ? d.auction!.priceEnd : d.price;
+    // An order with a take-profit AND a stop (OCO, trailing with a take-profit) may end by its stop,
+    // so what it receives at least (pays at most) is at the worse of the take-profit and the stop's
+    // worst fill, never at the take-profit alone (R8F4-3).
+    const stopWorst = isCond && d.trigger!.stopPrice > 0n ? stopWorstPrice(sell ? 'sell' : 'buy', d.trigger!.stopPrice, d.trigger!.slipBps) : null;
+    const bound = decays ? d.auction!.priceEnd : stopWorst === null ? d.price : sell ? (stopWorst < d.price ? stopWorst : d.price) : stopWorst > d.price ? stopWorst : d.price;
     const allIn = sell ? (bound > tip ? bound - tip : 0n) : bound + tip;
     if (tip > 0n || d.entry || isCond || d.tif !== null || decays) {
       const a = p(allIn);

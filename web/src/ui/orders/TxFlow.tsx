@@ -8,6 +8,7 @@ import { WalletError } from '../../wallet/types';
 import { claimSessionRun } from './session-run';
 import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
+import type { SignerNote } from '../../signer/protocol';
 import { Banner, Button, IssueLine, Spinner, Stepper } from '../kit';
 import { toasts } from '../kit/toast-store';
 import { SendStatusLine, useSend } from '../confirm/SendStatus';
@@ -40,6 +41,12 @@ export interface FlowStep {
    * `SendJob.locks`).
    */
   locks?: readonly { until: string; key: string }[];
+  /**
+   * Lines the final confirmation states before anything is signed (ui/confirm/send.ts
+   * `SendJob.notes`), and the same as codes for the private-key signer (`signerNotes`).
+   */
+  notes?: readonly string[];
+  signerNotes?: readonly SignerNote[];
 }
 
 export type StepState = 'pending' | 'preparing' | 'sending' | 'submitted' | 'cancelled' | 'failed';
@@ -214,7 +221,7 @@ export function TxFlow(props: TxFlowProps) {
         return end();
       }
       const sid = live.current?.sid;
-      const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label, ...(step.preconfirmed ? { preconfirmed: true } : {}), ...(sid ? { session: sid } : {}), ...(step.locks?.length ? { locks: step.locks } : {}) });
+      const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label, ...(step.preconfirmed ? { preconfirmed: true } : {}), ...(sid ? { session: sid } : {}), ...(step.locks?.length ? { locks: step.locks } : {}), ...(step.notes?.length ? { notes: step.notes } : {}), ...(step.signerNotes?.length ? { signerNotes: step.signerNotes } : {}) });
       checkSession();
       if (out.status !== 'submitted') {
         st[i] = out.send.phase === 'rejected' ? 'cancelled' : 'failed';

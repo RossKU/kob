@@ -247,3 +247,15 @@ describe('a take moves its own token only (mutations)', () => {
     expect(c).toContain('take-amount');
   });
 });
+
+describe("the frame holds a take's token line to the taken orders' scale (R8F2b-3, R8F2-I2)", () => {
+  it('app decimals that do not fit the scale of the orders it takes block Approve; the fitting ones do not', async () => {
+    const { summarize } = await import('../signer/summary');
+    const a1 = resting('sell', 250_000_000n, 2n * TOK);
+    const p = take(takerEnv([a1]), 'buy', 2n * TOK, 255_000_000n);
+    const fits = summarize(K, p.built!, MAKER_PK, [{ covenantId: M.covenantId, ticker: 'TST', decimals: 3, source: 'declared' }]);
+    expect(fits.problemCodes).not.toContain('token-scale');
+    const lie = summarize(K, p.built!, MAKER_PK, [{ covenantId: M.covenantId, ticker: 'TST', decimals: 8, source: 'declared' }]);
+    expect(lie.problemCodes).toContain('token-scale');
+  });
+});

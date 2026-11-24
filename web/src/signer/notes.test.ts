@@ -18,3 +18,12 @@ describe("the frame's words for the app's notes", () => {
     expect(noteSentences([{ kind: 'farThrough', bps: 1000 }, { kind: 'belowMin', value: '1', min: '2', source: 'default' }]).map((s) => s.slice(0, 10))).toEqual(['Your price', 'Worth 0.00']);
   });
 });
+
+describe('the note of token UTXOs a closing order leaves behind (R8F4-2)', () => {
+  it('passes the protocol as a count only and is worded by the frame', async () => {
+    const { sanitizeNotes } = await import('./protocol');
+    expect(sanitizeNotes([{ kind: 'straysLost', utxos: 2 }])).toEqual([{ kind: 'straysLost', utxos: 2 }]);
+    expect(sanitizeNotes([{ kind: 'straysLost', utxos: 0 }, { kind: 'straysLost', utxos: 'x' }, { kind: 'straysLost', utxos: 1, text: 'hi' }])).toEqual([]);
+    expect(noteSentences([{ kind: 'straysLost', utxos: 2 }])).toEqual(['This closes an order that owns 2 token UTXO(s) its maker cannot move. They stay behind and cannot be recovered.']);
+  });
+});

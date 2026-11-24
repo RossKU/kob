@@ -47,7 +47,8 @@ function realOrder(base: OrderSnapshot, n: number, over: Over, chain: FakeChain)
     ...clone(base),
     covenantId: txid,
     order: { ...base.order, transactionId: txid, covenantId: txid, state: st },
-    custody: { ...base.custody!, transactionId: txid, covenantId: tokenCov },
+    // the custody is owned by this order (its covenant id)
+    custody: { ...base.custody!, transactionId: txid, covenantId: tokenCov, state: { ...base.custody!.state, owner: txid } },
   };
   chain.add({ transactionId: txid, index: snap.order.index, amount: snap.order.amount, scriptPublicKey: kob.scriptPublicKey(st), covenantId: txid });
   chain.add({ transactionId: txid, index: snap.custody!.index, amount: snap.custody!.amount, scriptPublicKey: kob.tokenScriptPublicKey(TOKEN.program, snap.custody!.state), covenantId: tokenCov });
@@ -222,7 +223,9 @@ describe('the node check binds the book to the market (audit 2026-10-29 F2)', ()
     const tpl = w.reg(realOrder(w.real, 0xb2, { price: p / 2n, state: { tokenTplHash: 'cd'.repeat(32) } }, w.chain));
     const ext = w.reg(realOrder(w.real, 0xb3, { price: p / 3n, state: { extensionCommitment: '11'.repeat(32) } }, w.chain));
     const part = await readMarketPart(w.services([rowOf(ext), rowOf(tpl), rowOf(w.real)]), w.market);
-    expect(part.dropped.map((d) => [d.covenantId, d.reason])).toEqual([[ext.covenantId, 'other-market'], [tpl.covenantId, 'not-on-node']]);
+    // the order pinning another class holds a custody of the market's class: that UTXO is not the custody its state implies, so the node
+    // check does not confirm it (R8F4-1)
+    expect(part.dropped.map((d) => [d.covenantId, d.reason])).toEqual([[ext.covenantId, 'not-on-node'], [tpl.covenantId, 'not-on-node']]);
     expect(part.book.asks.map((l) => l.price)).toEqual([p]);
   });
 

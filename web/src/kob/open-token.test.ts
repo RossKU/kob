@@ -46,10 +46,18 @@ describe('synthesizeOpenToken', () => {
     expect(m).toMatchObject({ covenantId: ID, program: 'KCC20Ref_8x8', scale: 1000n, tick: 1n, decimals: 3, extensionCommitment: EXT });
   });
 
-  it('a KCC-20 token without an extension commitment takes it from an order, else it cannot be traded', () => {
+  it('a KCC-20 token without an extension commitment takes it only from the own holdings of the wallet, never from an order alone (R8F4-4)', () => {
     expect(synthesizeOpenToken(kob, view({ extension_commitment: null }), scales)).toEqual({ ok: false, reason: 'no-extension' });
-    const r = synthesizeOpenToken(kob, view({ extension_commitment: null }), scales, 'cd'.repeat(32));
+    // the first order an indexer lists, anyone's, does not decide the class the user buys
+    expect(synthesizeOpenToken(kob, view({ extension_commitment: null }), scales, 'cd'.repeat(32))).toEqual({ ok: false, reason: 'no-extension' });
+    // an order whose class the wallet's node-verified holdings confirm, or the holdings alone
+    const refs = [{ commitment: 'cd'.repeat(32), source: 'holdings' as const }];
+    const r = synthesizeOpenToken(kob, view({ extension_commitment: null }), scales, 'cd'.repeat(32), null, refs);
     expect(r.ok && r.info.extensionCommitment).toBe('cd'.repeat(32));
+    const h = synthesizeOpenToken(kob, view({ extension_commitment: null }), scales, null, null, refs);
+    expect(h.ok && h.info.extension).toMatchObject({ commitment: 'cd'.repeat(32), source: 'holdings', mismatch: [] });
+    // two classes held: none is picked
+    expect(synthesizeOpenToken(kob, view({ extension_commitment: null }), scales, null, null, [...refs, { commitment: 'ce'.repeat(32), source: 'holdings' }])).toEqual({ ok: false, reason: 'no-extension' });
   });
 
   it('no orders: no scale yet', () => {
@@ -78,8 +86,9 @@ describe('A1-2: the extension commitment of an open-list KCC-20 token is kept wi
   it('records where the commitment came from: the indexer row, else the listed orders', () => {
     const a = synthesizeOpenToken(kob, view(), scales);
     expect(a.ok && a.info.extension).toEqual({ commitment: EXT, source: 'indexer', references: [], mismatch: [] });
-    const b = synthesizeOpenToken(kob, view({ extension_commitment: null }), scales, OTHER);
-    expect(b.ok && b.info.extension).toEqual({ commitment: OTHER, source: 'orders', references: [], mismatch: [] });
+    const refs = [{ commitment: OTHER, source: 'holdings' as const }];
+    const b = synthesizeOpenToken(kob, view({ extension_commitment: null }), scales, OTHER, null, refs);
+    expect(b.ok && b.info.extension).toEqual({ commitment: OTHER, source: 'orders', references: refs, mismatch: [] });
     // KRON has no commitment: nothing to check
     const k = synthesizeOpenToken(kob, view({ template_hash: kron.hash, extension_commitment: null }), scales);
     expect(k.ok && k.info.extension).toBeUndefined();

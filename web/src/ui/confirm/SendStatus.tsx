@@ -409,7 +409,15 @@ export function useSend(): Sender {
         const again = await checkBeforeSigning(services, w, { ...next, retimed: true }).catch(() => null);
         if (!again) return stopped({ phase: 'blocked', code: 'check-failed', text: t('send.checkFailed') });
         if ('blocked' in again) return stopped({ phase: 'blocked', ...again.blocked });
-        final = again.job;
+        // An external wallet signs the re-timed copy only once the app has compared its decoding with
+        // the one the user confirmed: the same or better goes on, anything worse shows the table
+        // again before the wallet is asked, as at a late Continue (R8F2-L1). The private-key signer
+        // applies the same rule itself.
+        if ((w.adapter!.id !== 'local-key' || again.job.built.sign.length === 0) && !again.job.preconfirmed) {
+          const confirmed = await confirmInApp(id, { ...again.job, retimed: true }, again.decoded);
+          if ('phase' in confirmed) return stopped(confirmed);
+          final = confirmed;
+        } else final = again.job;
       }
     }
     const { built } = final;

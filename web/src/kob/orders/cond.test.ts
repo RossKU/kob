@@ -149,8 +149,20 @@ describe('stop-market', () => {
     const env = makeEnv();
     const sell = planOk(env, { type: 'oco', side: 'sell', amount: 4_321n, takeProfit: 300_000_000n, stop: 230_000_000n, tip: 7n });
     expect(sell.recovered[0]!.custody!.state.amount).toBe('4321');
-    // a seller receives at least ceil(4321 x (300 KAS - 7 sompi) / 1000)
-    expect(sell.plan.disclosure!.allInTotal).toBe(ceilDiv(4_321n * (300_000_000n - 7n), SCALE));
+    // an OCO may end by its stop: a seller receives at least ceil(4321 x (worst - 7 sompi) / 1000) at
+    // the stop's worst fill, below the take-profit (R8F4-3)
+    const worst = sell.plan.disclosure!.worstPrice!;
+    expect(worst).toBeLessThan(230_000_000n);
+    expect(sell.plan.disclosure!.allInPrice).toBe(worst - 7n);
+    expect(sell.plan.disclosure!.allInTotal).toBe(ceilDiv(4_321n * (worst - 7n), SCALE));
+    // a buy OCO pays at most at the stop's worst fill, above the take-profit
+    const ocoBuy = planOk(env, { type: 'oco', side: 'buy', amount: 4_321n, takeProfit: 200_000_000n, stop: 260_000_000n, tip: 7n });
+    const bWorst = ocoBuy.plan.disclosure!.worstPrice!;
+    expect(bWorst).toBeGreaterThan(260_000_000n);
+    expect(ocoBuy.plan.disclosure!.allInPrice).toBe(bWorst + 7n);
+    expect(ocoBuy.plan.disclosure!.allInTotal).toBe((4_321n * (bWorst + 7n)) / SCALE);
+    // the take-profit stays the limit shown
+    expect(sell.plan.disclosure!.limitPrice).toBe(300_000_000n);
     const buy = planOk(env, { type: 'takeProfit', side: 'buy', amount: 4_321n, price: 200_000_000n, tip: 7n });
     // a buyer pays at most floor(4321 x (200 KAS + 7 sompi) / 1000); the escrow is the same floor
     // plus one carrier (one fill)

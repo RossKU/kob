@@ -9,6 +9,7 @@ import { MAKER, goldenRequest, goldenTx, tradableRegistryJson, nodeFactsOf } fro
 import { loadKobNode } from '../../kob/wasm.node';
 import { t } from '../../i18n';
 import { orderRows, orderTitle, orderTypeCode, tokenAmountText, tokenLabel, type Fmt, type Row } from './confirm-model';
+import { stopWorstPrice } from '../../kob/orders/cond-legs';
 
 const kob = loadKobNode();
 const registry: TokenRegistry = parseRegistry(tradableRegistryJson(), { kob });
@@ -141,6 +142,22 @@ describe('decoded order terms', () => {
     const buy = created('create.condBid').rows;
     expect(rowOf(buy, 'exposure').value).toMatch(/buy order resting at or above the stop/);
     expect(rowOf(buy, 'stopWorst').value).not.toBe(rowOf(buy, 'stop').value);
+  });
+
+  it('an order with a take-profit AND a stop: "at least / at most" is at the worse of the take-profit and the worst fill of the stop, both sides (R8F4-3)', () => {
+    for (const [name, sell] of [['create.condAsk', true], ['create.condBid', false]] as const) {
+      const { order, rows, f } = created(name);
+      const d = order.description;
+      const trg = d.trigger!;
+      if (!(d.price > 0n && trg.stopPrice > 0n)) continue;
+      const sw = stopWorstPrice(sell ? 'sell' : 'buy', trg.stopPrice, trg.slipBps);
+      const bound = sell ? (sw < d.price ? sw : d.price) : sw > d.price ? sw : d.price;
+      const allIn = sell ? bound - d.tip : bound + d.tip;
+      // the row reads the same as a price row of that number would
+      const probe = orderRows({ ...d, trigger: null, price: allIn, tip: 0n, entry: null, tif: 'ioc' } as never, { value: null, locked: null, deadline: null }, f);
+      expect(rowOf(rows, 'allIn').value, name).toBe(rowOf(probe, 'price').value);
+      expect(rowOf(rows, 'price').value, name).not.toBe(rowOf(rows, 'allIn').value);
+    }
   });
 
   it('TWAP / DCA / Dutch / market describe their schedule and auction', () => {

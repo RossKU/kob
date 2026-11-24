@@ -169,8 +169,10 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
   const limitPrice = hasTp ? tp! : stopWorst!;
   const expected = hasTp ? (hasStop ? null : tp) : legs.stopPrice;
   const worst = hasTp && hasStop ? (sell ? minBigOf(tp!, stopWorst!) : maxBigOf(tp!, stopWorst!)) : limitPrice;
-  const allInLimit = sell ? limitPrice - tip : limitPrice + tip;
-  const allInTotal = sell ? env.kob.condAskProceeds(order, amount, limitPrice) : env.kob.condBidSpend(order, amount, limitPrice);
+  // What the order receives at least (pays at most) is at its worst price: with both legs that is
+  // the worse of the take-profit and the stop's worst fill, since it may end by its stop (R8F4-3).
+  const allInLimit = sell ? worst - tip : worst + tip;
+  const allInTotal = sell ? env.kob.condAskProceeds(order, amount, worst) : env.kob.condBidSpend(order, amount, worst);
 
   const notes = [...NOTES_BY_TYPE[intent.type]];
   if (keeper !== null) notes.push('keeperReserve');

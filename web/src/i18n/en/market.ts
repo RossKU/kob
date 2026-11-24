@@ -508,7 +508,7 @@ export default {
   'market.first.use': 'Use these decimals',
   'market.first.entered': 'Decimals {decimals}, entered by you: this is the first order of this token.',
   'market.first.change': 'Change',
-  'market.open.no-extension': 'the extension commitment of this token could not be read from its orders',
+  'market.open.no-extension': 'the extension commitment of this token is not known: the indexer names none, and your wallet holds none of it to confirm one',
   'market.open.scale-invalid': 'the price scale its orders use is not one this build can trade',
   'market.open.scale-conflict': 'the decimals entered, or the decimals this token recorded on chain, give another price scale than the one the first order of this token set for its market, which every order of it uses',
   'market.first.clear': 'Use the market\'s scale',

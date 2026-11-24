@@ -353,7 +353,9 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   cells.text.set('fee', fee);
   list.append(el('div', { class: 'line fee' }, el('dt', {}, t('signer.fee')), fee));
   // The KAS of the order UTXOs, custodies and strays this transaction spends is not covered by the
-  // wallet's signature. It is the node's word, which is accepted because the user chooses the node.
+  // wallet's signature. The frame reads no node: it is the app's report, and the KAS lines and the fee
+  // are computed with it. An understated input makes the real fee larger than shown (R8F2b-2), so the
+  // line says whose word it is rather than calling the fee a bound.
   if (s.unsignedKas) list.append(el('div', { class: 'line fee muted', 'data-testid': 'signer-unsigned-kas' }, el('dt', {}, t('signer.unsignedKas'))));
   const reject = el('button', { type: 'button', 'data-testid': 'signer-reject' }, t('signer.reject'));
   // On a merge session's screen, Allow opens the session and that click signs nothing. The fixed

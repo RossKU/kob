@@ -15,6 +15,8 @@ export function noteSentences(notes: readonly SignerNote[]): string[] {
       ? t(`signer.hint.minValue.${n.source}`, { value: formatKas(BigInt(n.value), { group: ',' }), min: formatKas(BigInt(n.min), { group: ',' }) })
       : n.kind === 'congestion'
         ? t('signer.hint.congestion')
+        : n.kind === 'straysLost'
+          ? t('signer.hint.straysLost', { utxos: n.utxos })
         : t('signer.hint.farThrough', { percent: formatUnits(BigInt(n.bps), 2, { maxFraction: 1 }) }),
   );
 }

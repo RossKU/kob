@@ -62,7 +62,7 @@ import { countText, tCount } from './plural';
 import { downloadText, exportFileName } from '../kit/download';
 import { backupFileText } from './recover';
 import {
-  abandoningOrders, abandonsStrays, describeActionError, liveExitsOfRepeatEntry, markCancelling, mergeFlow, rawActionError, planCancelFor, planCancelMany, planMergeFor,
+  abandoningOrders, abandonsStrays, describeActionError, lostStrays, strandedCount, liveExitsOfRepeatEntry, markCancelling, mergeFlow, rawActionError, planCancelFor, planCancelMany, planMergeFor,
   planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, isOwnFill, ownOrderIds, type OrderRowModel } from './orders-model';
@@ -364,7 +364,12 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     }
   };
 
-  const stepOf = (title: string, plan: CancelPlan, label?: string): FlowStep => ({ title, plan, spends: plan.cancelIds, ...(label ? { label } : {}) });
+  // A step that closes an order owning token UTXOs its maker cannot move says so in the final
+  // confirmation, before anything is signed: they are lost with the order (R8F4-2).
+  const stepOf = (title: string, plan: CancelPlan, label?: string): FlowStep => {
+    const lost = lostStrays(plan);
+    return { title, plan, spends: plan.cancelIds, ...(label ? { label } : {}), ...(lost ? { notes: [t('orders.strays.lostOnClose', { utxos: lost })], signerNotes: [{ kind: 'straysLost' as const, utxos: lost }] } : {}) };
+  };
 
   /**
    * Sweeps of the given orders, each in its own transaction, so the order lives on. After them the
@@ -406,8 +411,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       // More strays than one transaction can move. A sweep first moves them while the order lives.
       // Abandoning stays a choice.
       if (abandonsStrays(plan) && row.live) {
-        const count = plan.issues.filter((i) => i.code === 'cancel.strays-abandoned').reduce((a, i) => a + Number(i.params?.count ?? 0), 0);
-        return setSweepFirst({ ids: [row.id], count, proceed: go, retry: () => cancelOne(row) });
+        return setSweepFirst({ ids: [row.id], count: strandedCount([plan]), proceed: go, retry: () => cancelOne(row) });
       }
       go();
     });
@@ -461,8 +465,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       // they live on, then cancel.
       const abandoning = abandoningOrders(good).filter((id) => rowById.get(id)?.live);
       if (abandoning.length) {
-        const count = good.flatMap((p) => p.issues.filter((i) => i.code === 'cancel.strays-abandoned')).reduce((a, i) => a + Number(i.params?.count ?? 0), 0);
-        return setSweepFirst({ ids: abandoning, count, proceed: go, retry: () => cancelMany(heading, ids, busyId) });
+        return setSweepFirst({ ids: abandoning, count: strandedCount(good), proceed: go, retry: () => cancelMany(heading, ids, busyId) });
       }
       go();
     });

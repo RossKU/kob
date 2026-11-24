@@ -209,7 +209,15 @@ export function synthesizeOpenToken(
   const templateId = PROGRAM_TEMPLATE_ID[program];
   if (!templateId) return { ok: false, reason: 'program-unknown' };
   if (!programAllowed(program, opts.network)) return { ok: false, reason: 'program-unreviewed' };
-  const ext = family === 'kron' ? null : (view.extension_commitment ?? extFromOrders);
+  // The class (extension commitment) is the indexer's token row, else one the wallet's own
+  // node-verified holdings (or a genesis-verified registry entry) name. An order the indexer lists
+  // names one only where such a reference agrees: when the wallet holds none of the token, the first
+  // order an indexer lists, anyone's, must not decide the class the user buys (R8F4-4). No class
+  // known, a KCC-20 token stops with no-extension.
+  const refCommits = [...new Set(references.map((r) => r.commitment.toLowerCase()))];
+  const orderExt = extFromOrders && refCommits.includes(extFromOrders.toLowerCase()) ? extFromOrders : null;
+  const refExt = refCommits.length === 1 ? (refCommits[0] as Hex) : null;
+  const ext = family === 'kron' ? null : (view.extension_commitment ?? orderExt ?? refExt);
   if (family === 'kcc20' && !ext) return { ok: false, reason: 'no-extension' };
   const fromOrders = marketScaleOf(view, orderScales);
   if (fromOrders === 'invalid') return { ok: false, reason: 'scale-invalid' };
@@ -261,7 +269,7 @@ export function synthesizeOpenToken(
       ...(convention ? { decimalsConvention: convention.source } : {}),
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
-      ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : opts.fromChain ? 'chain' : view.extension_commitment ? 'indexer' : 'orders', references) } : {}),
+      ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : opts.fromChain ? 'chain' : view.extension_commitment ? 'indexer' : orderExt ? 'orders' : 'holdings', references) } : {}),
     },
   };
 }
