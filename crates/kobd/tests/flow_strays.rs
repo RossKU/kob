@@ -360,7 +360,6 @@ async fn foreign_strays_are_flagged_and_the_maker_sweeps_every_stray_in_place() 
     let req = SweepOrder {
         order: c.w.order(&create, 0, AnyState::KobAsk(a.clone())),
         strays: vec![c.w.token_at(&own, oi, Kcc20State::custody(3 * WHOLE, cov.0, EXT))],
-        kept: vec![],
         foreign: vec![ForeignStrays {
             token: TokenRef { covenant_id: TOKEN_COV_KRON, program: K3 },
             utxos: vec![c.w.token_at(&kron, ki, TokenState::custody(Family::Kron, 40, cov.0, [0; 32]))],

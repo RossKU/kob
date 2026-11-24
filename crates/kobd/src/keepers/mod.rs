@@ -642,7 +642,6 @@ fn sweep_request(o: &ListedOrder, funding: Option<&KeyUtxo>, fee: &FeeOptions) -
     Some(SweepOrder {
         order: typed_order(o),
         strays,
-        kept: vec![],
         foreign,
         funding: funding.cloned().into_iter().collect(),
         change: None,

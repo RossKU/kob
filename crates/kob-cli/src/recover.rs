@@ -49,7 +49,7 @@ kob recover: find orders on the node from a backup, a recovery / export file or 
 USAGE
   kob recover --from <FILE>... --node ws://HOST:PORT [--network NET] [--maker <PUBKEY>] [--out <report.json>]
               [--amount-left [<COVENANT ID>=]<AMOUNT>]...
-              [--cancel (--key-file <PATH> | --key-env <NAME>) [--yes | --dry-run] [--custody-gone] [--fee-rate N] [--priority-fee] [--out-dir <DIR>]]
+              [--cancel (--key-file <PATH> | --key-env <NAME>) [--yes | --dry-run] [--fee-rate N] [--priority-fee] [--out-dir <DIR>]]
 
 INPUT
   --from        repeatable. The web wallet's backup ({\"format\":\"kob-backup\",..}), the indexer recovery / export file
@@ -97,10 +97,6 @@ CANCEL
                 `kob sweep --view FILE` first); before it asks, the cancel shows the decoded transaction and its fee.
                 The fee comes from the order's released KAS; if that is not enough, the smallest sufficient plain KAS UTXO
                 of the maker on the node is added.
-  --custody-gone  the way back for a live order whose custody is gone (the node shows no unit at the custody script
-                its state pins, e.g. after a transaction moved it out): the cancel ends the order WITHOUT its custody and
-                returns the order's KAS only; the order's tokens are not returned by it, and anything the order still owns
-                elsewhere is lost. It is said, the decoded transaction is shown and a terminal asks; never with --yes.
   --key-file    the maker's signing key: a file holding the 64-hex secret
   --key-env     ... or the environment variable holding it (default $KOB_KEY); a key that is not the order's maker is
                 refused. (`--key` was removed: a key on the
@@ -150,8 +146,6 @@ pub struct Args {
     pub out_dir: Option<PathBuf>,
     /// `--allow-high-fee`: no fee ceiling.
     pub allow_high_fee: bool,
-    /// `--custody-gone`: cancel a live order whose custody the node shows nowhere (R8FX-1), without it.
-    pub custody_gone: bool,
 }
 
 /// One `--amount-left` value: `<amount>` or `<covenant id>=<amount>`.
@@ -195,7 +189,6 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
         priority_fee: false,
         out_dir: None,
         allow_high_fee: false,
-        custody_gone: false,
     };
     let mut it = args.iter();
     while let Some(flag) = it.next() {
@@ -211,7 +204,6 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
             k if crate::token::is_removed_key_flag(k) => return Err(crate::token::KEY_FLAG_REMOVED.into()),
             "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
             "--allow-high-fee" => a.allow_high_fee = true,
-            "--custody-gone" => a.custody_gone = true,
             "--dry-run" => a.dry_run = true,
             "--yes" | "-y" => a.yes = true,
             "--fee-rate" => {
@@ -234,18 +226,13 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
     if a.cancel && a.key.is_none() {
         return Err("--cancel needs a key: give --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY".into());
     }
-    if !a.cancel
-        && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some() || a.priority_fee || a.allow_high_fee || a.custody_gone)
-    {
+    if !a.cancel && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some() || a.priority_fee || a.allow_high_fee) {
         return Err(
-            "--key-file, --key-env, --yes, --dry-run, --priority-fee, --allow-high-fee, --custody-gone and --out-dir belong to --cancel".into()
+            "--key-file, --key-env, --yes, --dry-run, --priority-fee, --allow-high-fee and --out-dir belong to --cancel".into()
         );
     }
     if a.yes && a.dry_run {
         return Err("--yes and --dry-run exclude each other".into());
-    }
-    if a.custody_gone && a.yes {
-        return Err("--custody-gone is confirmed at a terminal, never with --yes: it ends an order without its tokens".into());
     }
     if a.fee_rate < MIN_FEE_RATE {
         return Err(format!("--fee-rate must be at least {MIN_FEE_RATE}"));
@@ -926,17 +913,13 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     let custody = match &f.custody {
         Custody::None => None,
         Custody::Verified(c, st) => Some(TokenUtxo { utxo: utxo_of(c), state: st.clone() }),
-        Custody::Missing(_) if a.custody_gone => None,
-        Custody::Missing(_) => {
-            return Err("custody not found on the node: not cancelled (an order whose custody is gone is ended, without its tokens, by `--custody-gone`)".into())
-        }
+        Custody::Missing(_) => return Err("the node shows no custody of the state this order pins; nothing was built".into()),
         Custody::Unknown(why) => return Err(format!("custody {why}: not cancelled")),
     };
     // The B prefund of a sell-first pair entry, which is its second custody.
     let prefund = match &f.prefund {
         Custody::None => None,
         Custody::Verified(c, st) => Some(TokenUtxo { utxo: utxo_of(c), state: st.clone() }),
-        Custody::Missing(_) if a.custody_gone => None,
         Custody::Missing(_) => return Err("the B prefund custody was not found on the node: not cancelled".into()),
         Custody::Unknown(why) => return Err(format!("prefund custody {why}: not cancelled")),
     };
@@ -947,13 +930,10 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         Custody::Missing(_) => return Err("the bought-custody was not found on the node: not cancelled".into()),
         Custody::Unknown(why) => return Err(format!("bought-custody {why}: not cancelled")),
     };
-    // The way back for an order whose custody is gone (R8FX-1): only after the node shows no unit at a
-    // pinned custody script, through the builder's own entry for it.
-    let gone = a.custody_gone && (matches!(f.custody, Custody::Missing(_)) || matches!(f.prefund, Custody::Missing(_)));
     let utxo = utxo_of(u);
     let fee = FeeOptions { fee_rate: Some(a.fee_rate), fee_mode: if a.priority_fee { FeeMode::Priority } else { FeeMode::Relay } };
     let (built, funding) = build_funded(true, &a.node, &a.network, &maker, |funding| {
-        let r = CancelOrder {
+        build(&Action::CancelOrder(CancelOrder {
             retired: f.script.and_then(|s| s.retired()),
             order: OrderUtxo { utxo: utxo.clone(), state: state.clone() },
             custody: custody.clone(),
@@ -968,12 +948,7 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
             lock_time: 0,
             records: vec![],
             fee: fee.clone(),
-        };
-        if gone {
-            kob_protocol::build::build_cancel_custody_gone(&r, &kob_protocol::budget::lookup)
-        } else {
-            build(&Action::CancelOrder(r))
-        }
+        }))
     })?;
     let cov = to_hex(&f.entry.covenant_id);
     // The fee ceiling, as for every sending command.
@@ -981,12 +956,6 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         return Ok(json!({"status": "refused", "code": crate::feecap::CODE, "reason": m}));
     }
     let info = json!({"action": "cancel", "covenant_id": cov, "kind": state.template_id().name()});
-    if gone {
-        // said whatever the mode, before anything is signed
-        eprintln!(
-            "warning: {cov}: the node shows no unit at the order's custody script, so this cancel ends the order WITHOUT its custody: it returns the order's KAS only. The order's tokens are not returned by this transaction, and anything the order still owns elsewhere is lost for ever"
-        );
-    }
     if !a.dry_run {
         // The same rule as every other submitting command: `--yes`, or a terminal asks, else
         // nothing is signed.

@@ -1702,7 +1702,8 @@ fn a_node_that_underreports_an_unsigned_input_is_refused() {
 }
 
 /// R8FX-2: a cancel that would strand strays is refused by default; `--abandon-strays` builds it after naming each unit it
-/// leaves behind for ever. R8FX-1: `kob sweep` sweeps a twin of the custody and keeps the custody itself.
+/// leaves behind for ever. R8FX2-2: `kob sweep` never moves a unit of exactly the custody's state, a twin included, and says
+/// once that it stays with the order; the cancel takes it. A node that invents a twin cannot make the sweep take the custody.
 #[test]
 fn abandoning_strays_is_explicit_and_a_sweep_keeps_the_custody() {
     let f = fixture();
@@ -1716,7 +1717,7 @@ fn abandoning_strays_is_explicit_and_a_sweep_keeps_the_custody() {
     assert!(c.disclosure.contains("ABANDONED") && c.disclosure.contains(&outpoint_str_of([0x19; 32], 0)), "{}", c.disclosure);
     assert!(c.built.tx.inputs.iter().any(|i| i.transaction_id == [0x12; 32]), "the real custody returns");
     assert!(c.left.iter().any(|l| l["reason"].as_str().is_some_and(|r| r.contains("lost for ever"))), "{:?}", c.left);
-    // a twin of the custody at the custody's own script: the sweep takes the twin, never the custody
+    // a twin of the custody at the custody's own script: the sweep moves neither, and the cancel takes both
     let mut utxos = f.utxos.clone();
     utxos.push(token_node_utxo(P, TOKEN, 0x1a, 10 * SCALE, A1));
     let (url, _n) = mock::start(utxos);
@@ -1729,15 +1730,27 @@ fn abandoning_strays_is_explicit_and_a_sweep_keeps_the_custody() {
         Some(tview(P, TOKEN, 0x12, 10 * SCALE, A1, false, true)),
         vec![],
     );
-    let sw = prep(&opts(order::Op::Sweep, &url), &bare, 1).ok().expect("built");
-    let spent: Vec<[u8; 32]> = sw.built.tx.inputs.iter().map(|i| i.transaction_id).collect();
-    assert!(spent.contains(&[0x1a; 32]) && !spent.contains(&[0x12; 32]), "{spent:?}");
+    let (status, reason) = why(prep(&opts(order::Op::Sweep, &url), &bare, 1));
+    assert_eq!(status, "skipped");
+    assert!(reason.contains("nothing to sweep") && reason.contains("stays with the order"), "{reason}");
+    let c = prep(&opts(order::Op::Cancel, &url), &bare, 1).ok().expect("built");
+    let spent: Vec<[u8; 32]> = c.built.tx.inputs.iter().map(|i| i.transaction_id).collect();
+    assert!(spent.contains(&[0x1a; 32]) && spent.contains(&[0x12; 32]), "the cancel takes the custody and its twin: {spent:?}");
+    // R8FX2-2's hostile node: the view names no custody, and the node answers an invented unit first at the custody
+    // script, then the real custody. The sweep still moves no unit of that state.
+    let mut utxos = vec![token_node_utxo(P, TOKEN, 0x1b, 10 * SCALE, A1)];
+    utxos.extend(f.utxos.iter().cloned());
+    let (url, _n) = mock::start(utxos);
+    let no_custody = view(A1, template(TemplateId::KobAsk).hash, any_json(&f.a1), (0x11, 0), CARRIER, None, vec![]);
+    let (status, reason) = why(prep(&opts(order::Op::Sweep, &url), &no_custody, 1));
+    assert_eq!(status, "skipped", "{reason}");
+    assert!(reason.contains("stays with the order"), "{reason}");
 }
 
-/// R8FX-1, the way back: `kob recover --cancel --custody-gone` ends a live order whose custody the node shows nowhere,
-/// without it; without the flag such an order is not cancelled; the flag is never taken with --yes.
+/// R8FX2-3: an order whose custody the node shows nowhere is not cancelled by `kob recover --cancel`, and the refusal
+/// suggests no override (there is none: a custody that exists but is hidden would be locked for ever).
 #[test]
-fn recover_ends_an_order_whose_custody_is_gone_only_on_request() {
+fn recover_does_not_cancel_an_order_whose_custody_the_node_does_not_show() {
     let f = fixture();
     let utxos: Vec<NodeUtxo> = f.utxos.iter().filter(|u| u.txid != [0x12; 32]).cloned().collect();
     let (url, node) = mock::start(utxos);
@@ -1754,14 +1767,42 @@ fn recover_ends_an_order_whose_custody_is_gone_only_on_request() {
             dir.join("out").display()
         )))
     };
-    assert!(args("--custody-gone --yes").unwrap_err().contains("never with --yes"));
     let report = recover::execute(&args("--dry-run").unwrap()).unwrap().0;
     assert_eq!(by_cov(&report, A1)["custody"]["status"], "missing", "{report}");
-    assert!(by_cov(&report, A1)["cancel"].to_string().contains("--custody-gone"), "{report}");
-    let report = recover::execute(&args("--dry-run --custody-gone").unwrap()).unwrap().0;
-    assert_eq!(by_cov(&report, A1)["cancel"]["status"], "signed", "{report}");
-    let s = signed_from(by_cov(&report, A1)["cancel"]["file"].as_str().unwrap());
-    assert!(s.tx.inputs.iter().all(|i| i.utxo.covenant_id != Some(TOKEN)), "no token input: the custody is gone");
+    let c = by_cov(&report, A1)["cancel"].to_string();
+    assert!(c.contains("the node shows no custody of the state this order pins; nothing was built"), "{report}");
+    assert!(!c.contains("--"), "no override is suggested: {c}");
+    assert!(args("--custody-gone").is_err(), "the flag is gone");
     assert!(node.lock().unwrap().submitted.is_empty(), "a dry run sends nothing");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// R8FX2-6: the CLI's own decode checks the custody rules, independent of the builder: a cancel that ends the order without
+/// exactly its custody, and a sweep that keeps the order alive but spends a unit of exactly its custody's state, are caught
+/// on the transaction itself; what the builders make passes.
+#[test]
+fn the_decode_checks_the_custody_rules_of_the_transaction() {
+    use kob_protocol::tx::SigPlan;
+    let f = fixture();
+    let (url, _n) = mock::start(f.utxos.clone());
+    let c = prep(&opts(order::Op::Cancel, &url), &a1_view(&f, (0x11, 0)), 1).ok().expect("built");
+    assert!(crate::trade::show::custody_issues(&c.built).is_empty(), "{:?}", crate::trade::show::custody_issues(&c.built));
+    // the custody input's state one unit short: the order ends without its custody
+    let mut bad = c.built.clone();
+    let at = bad.tx.inputs.iter().position(|i| i.transaction_id == [0x12; 32]).unwrap();
+    if let SigPlan::TokenLeader { state, .. } | SigPlan::TokenDelegator { state, .. } = &mut bad.plans[at] {
+        state.amount -= 1;
+    }
+    let issues = crate::trade::show::custody_issues(&bad);
+    assert!(issues.iter().any(|m| m.contains("ends")), "{issues:?}");
+    // a sweep whose stray is made exactly the custody's state: the order would live on without its custody
+    let sw = prep(&opts(order::Op::Sweep, &url), &a1_view(&f, (0x11, 0)), 1).ok().expect("built");
+    assert!(crate::trade::show::custody_issues(&sw.built).is_empty());
+    let mut bad = sw.built.clone();
+    let at = bad.plans.iter().position(|p| matches!(p, SigPlan::TokenLeader { .. })).unwrap();
+    if let SigPlan::TokenLeader { state, .. } = &mut bad.plans[at] {
+        state.amount = 10 * SCALE;
+    }
+    let issues = crate::trade::show::custody_issues(&bad);
+    assert!(issues.iter().any(|m| m.contains("stays live")), "{issues:?}");
 }

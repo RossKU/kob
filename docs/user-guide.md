@@ -323,9 +323,8 @@ Status words: open, partly filled, filled, cancelled, refunded, expired (IOC/FOK
   `kob sweep <id>` first: the order stays open and the strays come back. `kob cancel <id> --abandon-strays` cancels anyway
   after naming each stray it leaves behind, which is then lost for good. `kob replace` refuses the same way while the order
   owns strays of other tokens or of another extension commitment. `kob recover --from FILE --cancel` cancels from the node
-  alone; the node cannot list strays, so the ones it does not know of are lost with the order. An order whose custody is gone
-  (the node shows none at the custody script its terms pin) is ended by `kob recover --from FILE --cancel --custody-gone`,
-  which returns the order's KAS only.
+  alone; the node cannot list strays, so the ones it does not know of are lost with the order. Where the node shows no
+  custody of the state the order pins, nothing is built.
 * **Older contract versions.** A contract change gives new orders a new contract version; an order you placed before keeps its own
   until it ends. Nothing fills it any more, arms or trails its stop or runs its exits. An order of a version this app still knows is
   marked "older contract version — cancel only": its terms are shown, **Cancel** (and "Cancel all") returns its tokens, carriers,

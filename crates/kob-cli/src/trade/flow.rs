@@ -80,6 +80,10 @@ pub fn finish(c: &Common, signer: &Signer, mut r: Ready, units: &Units, argv_hin
     if let Some(m) = crate::feecap::Ceiling::from_answer(estimate.as_ref(), c.allow_high_fee).violation_of(&r.built) {
         r.issues.push(super::plan::error(crate::feecap::CODE, m));
     }
+    // The custody rules, checked on the transaction itself, independent of the builder (R8FX2-6).
+    for m in show::custody_issues(&r.built) {
+        r.issues.push(super::plan::error("CUSTODY_RULE", m));
+    }
     let decoded = show::decode(&r.built, &signer.pubkey, units);
     let failed = print_issues(&r.issues, c.json);
     let new_ids: Vec<String> = r.built.covenants.iter().map(|x| to_hex(&x.covenant_id)).collect();

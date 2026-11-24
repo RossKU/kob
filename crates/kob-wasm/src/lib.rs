@@ -115,22 +115,6 @@ pub mod api {
         }
         out(&build::build(&a).map_err(|e| e.to_string())?)
     }
-    /// The maker's cancel of an order whose custody is gone, from `build::build_cancel_custody_gone`:
-    /// a `CancelOrder` request (with optional `ownKeys`) without custody. Offer it only after the node
-    /// shows no unit at the pinned custody scripts, and tell the maker the order's tokens are not
-    /// returned by it.
-    pub fn build_cancel_custody_gone(request: &str) -> R<String> {
-        let mut v: serde_json::Value = parse("request", request)?;
-        let own = v.as_object_mut().and_then(|o| o.remove("ownKeys"));
-        let r: build::CancelOrder = serde_json::from_value(v).map_err(|e| format!("request: {e}"))?;
-        if let Some(k) = own.filter(|k| !k.is_null()) {
-            let list: Vec<String> = serde_json::from_value(k).map_err(|e| format!("ownKeys: {e}"))?;
-            let own: Vec<[u8; 32]> =
-                list.iter().map(|s| kob_protocol::json::hex32(s).map_err(|e| format!("ownKeys: {e}"))).collect::<R<_>>()?;
-            check_own_keys(&Action::CancelOrder(r.clone()), &own)?;
-        }
-        out(&build::build_cancel_custody_gone(&r, &budget::lookup).map_err(|e| e.to_string())?)
-    }
     /// The keys an action pays back to the user must be the wallet's own (see [`build`]).
     pub fn check_own_keys(a: &Action, own: &[[u8; 32]]) -> R<()> {
         let chk = |what: &str, k: Option<[u8; 32]>| -> R<()> {
@@ -1322,13 +1306,6 @@ pub fn held_custodies(state: &str, order_cov: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = checkReleases)]
 pub fn check_releases(state: &str, order_cov: &str, inputs: &str) -> Result<(), JsError> {
     js(api::check_releases(state, order_cov, inputs))
-}
-
-/// The maker's cancel of an order whose custody is gone (no custody input; the order's own KAS
-/// returns). Offer it only after the node shows no unit at the pinned custody scripts.
-#[wasm_bindgen(js_name = buildCancelCustodyGone)]
-pub fn build_cancel_custody_gone(request: &str) -> Result<String, JsError> {
-    js(api::build_cancel_custody_gone(request))
 }
 
 /// Builds any action into an unsigned transaction with its signing plan.

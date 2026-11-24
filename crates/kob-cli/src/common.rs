@@ -465,6 +465,11 @@ pub fn sign_validate_send(
     if let Some(r) = built.sign.iter().find(|r| r.pubkey != signer.pubkey) {
         return Err(format!("input {} needs the signature of {}, not of this key", r.input_index, to_hex(&r.pubkey)));
     }
+    // Every signing command passes here: a transaction that breaks the custody rules is never signed,
+    // whichever builder made it (R8FX2-6).
+    if let Some(m) = crate::trade::show::custody_issues(built).into_iter().next() {
+        return Err(format!("not signed: {m}"));
+    }
     if !dry_run {
         // A signature commits to no network. Never sign for one network what a node of another
         // would accept.

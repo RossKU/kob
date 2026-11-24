@@ -253,3 +253,84 @@ pub fn json_of(d: &Decoded, built: &BuiltTx) -> Value {
     }
     v
 }
+
+/// The custody rules a decoded transaction must keep, the CLI's second line after the builder (R8FX2-6).
+///
+/// It reads only the transaction and its signing plan. For every order the transaction spends
+/// through its maker's `cancel` entry (the one entry no covenant rule guards beyond the signature):
+/// - a spend that ends the order releases exactly the custodies its state holds (token, owner,
+///   amount, class), and its bought-custody;
+/// - a spend that keeps the order alive (a sweep, an amend, a claim) spends no unit of exactly a
+///   custody's state, since nothing re-creates it.
+///
+/// Every other entry (settle, fill, refund, update) is held by its covenant. Each string is one
+/// broken rule; empty means the transaction keeps them.
+pub fn custody_issues(built: &BuiltTx) -> Vec<String> {
+    use kob_protocol::build::{check_releases_held, curve_bound, held_custodies};
+    use kob_protocol::state::AnyState;
+    use kob_protocol::tx::{TokenUtxo, Utxo};
+    let tokens: Vec<TokenUtxo> = built
+        .tx
+        .inputs
+        .iter()
+        .zip(&built.plans)
+        .filter_map(|(inp, plan)| {
+            let state = match plan {
+                SigPlan::TokenLeader { state, .. } | SigPlan::TokenDelegator { state, .. } => TokenState::Kcc20(state.clone()),
+                SigPlan::KronToken { state, .. } => TokenState::Kron(state.clone()),
+                _ => return None,
+            };
+            let utxo = Utxo {
+                transaction_id: inp.transaction_id,
+                index: inp.index,
+                amount: inp.utxo.amount,
+                block_daa_score: inp.utxo.block_daa_score,
+                covenant_id: inp.utxo.covenant_id,
+            };
+            Some(TokenUtxo { utxo, state })
+        })
+        .collect();
+    let mut issues = vec![];
+    for (i, (inp, plan)) in built.tx.inputs.iter().zip(&built.plans).enumerate() {
+        let (template, bytes) = match plan {
+            SigPlan::Entry { template, state, entry, .. } if entry == "cancel" => (*template, state),
+            SigPlan::RetiredCancel { template, state, .. } => (*template, state),
+            _ => continue,
+        };
+        let Some(cov) = inp.utxo.covenant_id else { continue };
+        let Ok(state) = AnyState::decode(template, bytes) else {
+            issues.push(format!("input {i}: the order's state does not decode, so its custody cannot be checked"));
+            continue;
+        };
+        // an unbound curve names its token from its custody, the output of its own genesis it owns
+        let owned: Vec<TokenUtxo> = tokens.iter().filter(|t| t.state.is_covenant_owned() && t.state.owner() == cov).cloned().collect();
+        let state = match &state {
+            AnyState::KobCurveAsk(c) if c.is_unbound() => match owned.first() {
+                Some(t) => AnyState::KobCurveAsk(curve_bound(c, t)),
+                None => state,
+            },
+            _ => state,
+        };
+        let held = match held_custodies(&state, cov) {
+            Ok(h) => h,
+            Err(e) => {
+                issues.push(format!("input {i}: the order's custodies cannot be named: {e}"));
+                continue;
+            }
+        };
+        let continues = built.tx.outputs.iter().any(|o| o.covenant.as_ref().is_some_and(|c| c.covenant_id == cov));
+        if continues {
+            for h in held.iter().filter(|h| !h.bought) {
+                if owned.iter().any(|t| t.utxo.covenant_id == Some(h.token.covenant_id) && t.state == h.state) {
+                    issues.push(format!(
+                        "input {i}: order {} stays live but this transaction spends a unit of exactly its custody's state: the order would be left without its custody",
+                        show_id(&cov, "")
+                    ));
+                }
+            }
+        } else if let Err(e) = check_releases_held(&state, cov, &owned) {
+            issues.push(format!("input {i}: order {} ends: {e}", show_id(&cov, "")));
+        }
+    }
+    issues
+}

@@ -125,6 +125,19 @@ pub(crate) fn stranded_text(stranded: &[Value], cov: &[u8; 32]) -> String {
     )
 }
 
+/// Said once when a sweep saw units of exactly a custody's state: they stay with the order.
+fn twins_note(n: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    format!(
+        "; {n} token UTXO{} of exactly the state the order pins for its custody stay{} with the order (a sweep never moves one; the cancel takes {})",
+        if n == 1 { "" } else { "s" },
+        if n == 1 { "s" } else { "" },
+        if n == 1 { "it" } else { "them" }
+    )
+}
+
 /// The limit a cancel that sees strays cannot close: one sent after this read is lost.
 pub(crate) const LATE_STRAY_NOTE: &str = "a token UTXO sent to this order after this read and before the cancel confirms stays owned by the ended covenant id and can never move";
 
@@ -318,8 +331,9 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
         twins.extend(all.into_iter().map(|u| TokenUtxo { utxo: u, state: st.clone() }));
     }
     let taken: Vec<([u8; 32], u32)> = held.iter().chain(twins.iter()).map(|t| (t.utxo.transaction_id, t.utxo.index)).collect();
-    // what a sweep leaves where it is: the order's custodies, next to which a twin may go (R8FX-1)
-    let kept: Vec<TokenUtxo> = if a.op == Op::Sweep { held.clone() } else { vec![] };
+    // A sweep never moves a unit of exactly a custody's state, a twin included: it stays with the
+    // order, and the cancel takes it (R8FX2-2). A cancel takes every twin as a stray of its token.
+    let twins_left = if a.op == Op::Sweep { std::mem::take(&mut twins).len() } else { 0 };
     let (custody, prefund, bought) = match a.op {
         Op::Cancel => {
             let n = targets.len();
@@ -329,8 +343,7 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
             let prefund = if own_custodies.len() > 1 { own_custodies.pop() } else { None };
             (own_custodies.pop(), prefund, bought)
         }
-        // A sweep never moves a custody or the bought-custody: the order continues with them. A
-        // custody's twins are ordinary strays of its token.
+        // A sweep never moves a custody or the bought-custody: the order continues with them.
         Op::Sweep => (None, None, None),
     };
     let mut confirmed: Vec<Stray> = vec![];
@@ -427,7 +440,7 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
         }
     }
     if a.op == Op::Sweep && strays.is_empty() && foreign.is_empty() {
-        let mut o = skip("nothing to sweep");
+        let mut o = skip(format!("nothing to sweep{}", twins_note(twins_left)));
         o.json["left_behind"] = json!(left);
         return Ok(Err(o));
     }
@@ -448,7 +461,6 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
             build(&Action::SweepOrder(SweepOrder {
                 order: OrderUtxo { utxo: order_utxo.clone(), state: state.clone() },
                 strays: strays.clone(),
-                kept: kept.clone(),
                 foreign: foreign.clone(),
                 funding,
                 change: None,
@@ -497,7 +509,7 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
                 "sweep {covh}: returns {} to the maker; the order continues unchanged (same covenant id, same script{}) and its 90-day idle window restarts with this transaction; fee paid by {paid_by}",
                 describe(&returned),
                 if state.custody_amount().is_some_and(|x| x > 0) { ", custody untouched" } else { "" }
-            ),
+            ) + &twins_note(twins_left),
         ),
         Op::Cancel => (
             format!("{covh}.cancel.json"),
