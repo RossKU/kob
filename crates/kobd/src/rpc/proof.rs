@@ -904,16 +904,44 @@ pub const MERGESET_WALK_MAX: usize = 1_024;
 /// followed. `chain` is proven (its hash, the lane proofs, the pair), so only real blocks are in
 /// its past. Returns the headers fetched.
 pub async fn check_merged_into<H: HeaderSource>(chain: &Header, merged: &Header, src: &H) -> Result<usize, ProofError> {
+    check_merged_into_from(chain, merged, src, &mut MergeWalk::default()).await
+}
+
+/// Where a walk of [`check_merged_into_from`] stands: the headers seen and the next level to fetch. Kept by the caller
+/// across attempts, so that a walk longer than one attempt's [`MERGESET_WALK_MAX`] headers goes on where it stopped
+/// (R9C1-L3): the walk is bounded only by the chain block's past above the merged block's blue work, which consensus
+/// bounds by its merge depth, never by a constant of kobd's.
+#[derive(Debug, Default, Clone)]
+pub struct MergeWalk {
+    seen: HashSet<Hash>,
+    level: Vec<Hash>,
+    started: bool,
+    /// Headers fetched by all attempts.
+    pub fetched: usize,
+}
+
+/// [`check_merged_into`], resuming `walk`: at most [`MERGESET_WALK_MAX`] headers in this call (at least one level),
+/// then `Unavailable` with the walk kept for the next attempt.
+pub async fn check_merged_into_from<H: HeaderSource>(
+    chain: &Header,
+    merged: &Header,
+    src: &H,
+    walk: &mut MergeWalk,
+) -> Result<usize, ProofError> {
     let target = merged.hash;
     let parents = chain.direct_parents();
     if parents.contains(&target) {
         return Ok(0);
     }
-    let mut seen: HashSet<Hash> = parents.iter().copied().collect();
-    let mut level: Vec<Hash> = parents.iter().skip(1).copied().collect();
-    let mut fetched = 0;
-    while !level.is_empty() && fetched + level.len() <= MERGESET_WALK_MAX {
-        fetched += level.len();
+    if !walk.started {
+        walk.seen = parents.iter().copied().collect();
+        walk.level = parents.iter().skip(1).copied().collect();
+        walk.started = true;
+    }
+    let mut this_call = 0usize;
+    while !walk.level.is_empty() && (this_call == 0 || this_call + walk.level.len() <= MERGESET_WALK_MAX) {
+        let level = walk.level.clone();
+        this_call += level.len();
         // Collected first: a lazy map over borrowed hashes makes the future not `Send` for every lifetime.
         let asks: Vec<_> = level.iter().map(|h| src.header(Hash32(h.as_bytes()))).collect();
         let headers = futures_util::future::join_all(asks).await;
@@ -936,24 +964,26 @@ pub async fn check_merged_into<H: HeaderSource>(chain: &Header, merged: &Header,
             }
             for p in x.direct_parents() {
                 if *p == target {
-                    return Ok(fetched);
+                    walk.fetched += level.len();
+                    return Ok(walk.fetched);
                 }
-                if seen.insert(*p) {
+                if walk.seen.insert(*p) {
                     next.push(*p);
                 }
             }
         }
-        level = next;
+        walk.fetched += level.len();
+        walk.level = next;
     }
-    if !level.is_empty() {
+    if !walk.level.is_empty() {
         return Err(ProofError::Unavailable(format!(
-            "merged block {target}: no parent path below chain block {} within {MERGESET_WALK_MAX} headers yet",
-            chain.hash
+            "merged block {target}: no parent path below chain block {} yet ({} headers walked; the walk goes on at the next attempt)",
+            chain.hash, walk.fetched
         )));
     }
     refuse(format!(
-        "merged block {target} is not in the merge set of chain block {} (no parent path within {MERGESET_WALK_MAX} headers)",
-        chain.hash
+        "merged block {target} is not in the merge set of chain block {} (no parent path, {} headers walked)",
+        chain.hash, walk.fetched
     ))
 }
 
