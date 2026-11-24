@@ -223,7 +223,7 @@ USAGE
   kob replace <COVENANT_ID> [--price P] [--amount AMOUNT] [--tip T] [--stop P] [--stop-limit P] [--add-kas KAS]
                             [--renew | --gtd WHEN]
   kob replace <COVENANT_ID> [...] [--take-profit P] [--exit-tip T] [--entry-stop P] [--trail-step P] [--trail-gap P]
-                            [--carrier KAS] [--crossing reject|limit] [--ack-no-guards]
+                            [--carrier KAS] [--crossing reject|limit] [--ack-no-guards] [--abandon-strays]
 
   plain limit orders (KobAsk / KobBid): --price, --tip, --amount (a sell; a buy keeps its KAS budget: --add-kas tops it
   up), --renew (a fresh 90-day expiry) or --gtd WHEN (a new expiry). With --price the order trades at exactly that
@@ -235,7 +235,9 @@ USAGE
   order's own KAS pays the fee. Otherwise the order is
   cancelled and the replacement placed in the same transaction (custody, strays and any top-up tokens move to the new
   order). A cancel-replace ends the old covenant id, so it is refused while the order owns strays of other tokens or of
-  another extension commitment: run `kob sweep <id>` first. Every changed term is listed, old and new; a re-planned order
+  another extension commitment, more strays than one transaction takes, or strays the indexer does not list: run
+  `kob sweep <id>` first, or pass --abandon-strays to replace anyway (each group left behind is named, lost for ever).
+  Every changed term is listed, old and new; a re-planned order
   whose price scale is not its market's is refused (cancel it and place anew).
   conditional orders (stop / take-profit / OCO): --price (the take-profit), --stop, --stop-limit, --amount, --tip, --renew,
   --gtd; always a cancel-replace, an armed stop restarts unarmed.
@@ -649,6 +651,7 @@ pub fn build_replace(
     maker: &[u8; 32],
     fee: &FeeOptions,
     token_carrier: Option<u64>,
+    abandon: bool,
 ) -> Result<(BuiltTx, bool, Vec<String>), String> {
     let mut notes = vec![];
     if amends_in_place(live, rep) {
@@ -684,16 +687,25 @@ pub fn build_replace(
         });
         return Ok((built, true, notes));
     }
-    if live.unlisted > 0 {
+    // `--abandon-strays`: nothing an outsider sends stops the maker from replacing an order. The strays a cancel-replace
+    // cannot take stay with the ended covenant id and are lost for ever; the plan names each group.
+    let lost = |notes: &mut Vec<String>, what: String| {
+        notes.push(format!("ABANDONED (--abandon-strays): {what}, owned by the ended covenant id, lost for ever"))
+    };
+    if live.unlisted > 0 && abandon {
+        lost(&mut notes, format!("{} stray UTXO(s) the indexer counts but does not list", live.unlisted));
+    } else if live.unlisted > 0 {
         return Err(format!(
-            "the indexer counts {} stray UTXO(s) of this order that it does not list; a cancel-replace would leave them locked for ever: run `kob sweep {}` first, then replace",
+            "the indexer counts {} stray UTXO(s) of this order that it does not list; a cancel-replace would leave them locked for ever: run `kob sweep {}` first, then replace (or pass --abandon-strays to lose them)",
             live.unlisted,
             to_hex(&live.cov)
         ));
     }
-    if live.foreign > 0 {
+    if live.foreign > 0 && abandon {
+        lost(&mut notes, format!("{} stray UTXO(s) of other tokens", live.foreign));
+    } else if live.foreign > 0 {
         return Err(format!(
-            "the order's covenant id owns {} stray UTXO(s) of other tokens, which a cancel-replace would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace",
+            "the order's covenant id owns {} stray UTXO(s) of other tokens, which a cancel-replace would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace (or pass --abandon-strays to lose them)",
             live.foreign,
             to_hex(&live.cov)
         ));
@@ -714,18 +726,35 @@ pub fn build_replace(
             .partition(|s| s.utxo.covenant_id != Some(token) || m.family == kob_protocol::Family::Kron || s.state.extension() == ext);
         // A cancel-replace ends the old covenant id: a stray it cannot take would be locked for ever
         // (R8F3c-4), and one transfer moves one class of a token.
-        if !other.is_empty() {
+        if !other.is_empty() && abandon {
+            lost(&mut notes, format!("{} token UTXO(s) of another extension commitment", other.len()));
+        } else if !other.is_empty() {
             return Err(format!(
-                "the order's covenant id owns {} token UTXO(s) of another extension commitment, which a cancel-replace cannot take and would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace",
+                "the order's covenant id owns {} token UTXO(s) of another extension commitment, which a cancel-replace cannot take and would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace (or pass --abandon-strays to lose them)",
                 other.len(),
                 to_hex(&live.cov)
             ));
         }
         strays = same;
+        let slots = m.slots.0.min(MAX_TOKEN_INPUTS);
+        if abandon {
+            // the strays one transaction cannot also take: the largest are kept, the rest abandoned
+            let room = slots.saturating_sub(held.len());
+            let (mut mine, rest): (Vec<TokenUtxo>, Vec<TokenUtxo>) =
+                strays.iter().cloned().partition(|s| s.utxo.covenant_id == Some(token));
+            mine.sort_by_key(|s| std::cmp::Reverse(s.state.amount()));
+            if mine.len() > room {
+                let gone = mine.split_off(room);
+                lost(
+                    &mut notes,
+                    format!("{} stray UTXO(s) of {} beyond the {slots} token inputs of one transaction", gone.len(), m.name()),
+                );
+            }
+            strays = rest.into_iter().chain(mine).collect();
+        }
         let have: i64 = held.iter().map(|h| h.state.amount()).sum::<i64>()
             + strays.iter().filter(|s| s.utxo.covenant_id == Some(token)).map(|s| s.state.amount()).sum::<i64>();
         let inputs = held.len() + strays.iter().filter(|s| s.utxo.covenant_id == Some(token)).count();
-        let slots = m.slots.0.min(MAX_TOKEN_INPUTS);
         if inputs > slots {
             return Err(format!(
                 "the order has more stray token UTXOs than one transaction moves ({slots} inputs): sweep them first (kob sweep)"
@@ -819,7 +848,7 @@ const REPLACE_VALUE_FLAGS: &[&str] = &[
 
 /// Runs `kob replace`.
 pub fn run_replace(args: &[String]) -> i32 {
-    let (p, c, signer) = match ctx(args, REPLACE_VALUE_FLAGS, &["--renew", "--ack-no-guards"], REPLACE_USAGE) {
+    let (p, c, signer) = match ctx(args, REPLACE_VALUE_FLAGS, &["--renew", "--ack-no-guards", "--abandon-strays"], REPLACE_USAGE) {
         Ok(x) => x,
         Err(code) => return code,
     };
@@ -897,7 +926,8 @@ pub fn run_replace(args: &[String]) -> i32 {
             vec![]
         };
         let fee = c.fee_options();
-        let (built, in_place, more) = build_replace(&live, &rep, value, &funding, &token_utxos, &ms, &signer.pubkey, &fee, None)?;
+        let (built, in_place, more) =
+            build_replace(&live, &rep, value, &funding, &token_utxos, &ms, &signer.pubkey, &fee, None, p.has("--abandon-strays"))?;
         notes.extend(more);
         let mut lines = order_lines(&live, &ms);
         lines.push(format!("replacement: {} holding {}", rep.template_id().name(), units::kas(value as i128)));
@@ -1050,7 +1080,18 @@ fn replan_replace(
         token_utxos.extend(pp.quote_utxos.iter().cloned());
     }
     let fee = c.fee_options();
-    let (built, _, more) = build_replace(live, &rep, value, &env.funding, &token_utxos, ms, &signer.pubkey, &fee, token_carrier)?;
+    let (built, _, more) = build_replace(
+        live,
+        &rep,
+        value,
+        &env.funding,
+        &token_utxos,
+        ms,
+        &signer.pubkey,
+        &fee,
+        token_carrier,
+        p.has("--abandon-strays"),
+    )?;
     let mut lines = order_lines(live, ms);
     lines.push(format!("replacement: {} holding {}", rep.template_id().name(), units::kas(value as i128)));
     lines.extend(changed_lines(s, &rep, a, b));

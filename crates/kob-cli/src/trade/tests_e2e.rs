@@ -2010,3 +2010,27 @@ fn a_long_holdings_list_degrades_and_does_not_stop_the_maker() {
     let doc: Value = serde_json::from_str(&out).unwrap();
     assert!(doc["issues"].as_array().unwrap().iter().any(|i| i["code"] == "TOKEN_LIST_INCOMPLETE"), "{doc}");
 }
+
+/// R9FC-5: a cancel-replace of an order whose stray list the indexer cut (`strays_total` above the strays listed) is
+/// refused, and goes on with `--abandon-strays`, naming what is left behind: nothing an outsider sends stops a replace.
+#[test]
+fn a_replace_with_unlisted_strays_needs_abandon_strays() {
+    let maker = pk(0x11);
+    let cov = [0xa1; 32];
+    let order = AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000));
+    let w = world_x("replaceunlisted", &[(order, cov, 0x10, 2 * KAS)], |_, routes| {
+        if let Some(v) = routes.get_mut(&format!("/v1/orders/{}", to_hex(&cov))) {
+            v["strays_total"] = json!(3);
+        }
+    });
+    let replace = crate::trade::actions::run_replace;
+    // the amount changes, so it is a cancel-replace
+    let a = w.args(0x11, &format!("{} --amount 15TST --json --yes", to_hex(&cov)));
+    let (code, _, err) = crate::text::capture_split(|| replace(&a));
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("does not list") && err.contains("--abandon-strays"), "{err}");
+    let a = w.args(0x11, &format!("{} --amount 15TST --abandon-strays --json --yes", to_hex(&cov)));
+    let (code, out, err) = crate::text::capture_split(|| replace(&a));
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("ABANDONED (--abandon-strays): 3 stray UTXO(s) the indexer counts but does not list"), "{out}");
+}

@@ -32,7 +32,8 @@ pub const DAA_PER_SEC: i64 = 10;
 pub const CLOCK_SKEW_SECS: i64 = 10;
 /// See [`CLOCK_SKEW_SECS`].
 pub const CLOCK_MARGIN_DAA: i64 = DAA_PER_SEC * CLOCK_SKEW_SECS;
-/// The indexer's witness (its cursor DAA plus its lag) is a poll old: it may trail by up to a minute.
+/// How far the node's present may be from the indexer's verified present ([`verified_present`]) before the clock is
+/// disputed: 600 DAA, a minute at the block rate (block time against the local clock, a cursor a round behind).
 pub const INDEXER_CLOCK_MARGIN_DAA: i64 = DAA_PER_SEC * 60;
 /// The node's past median time may trail the wall clock by a few minutes; beyond this the local
 /// clock (or the node) is off and a wall-clock date would be converted wrongly: a warning.
@@ -81,17 +82,38 @@ pub fn clock(node: &str) -> Result<Clock, String> {
     Ok(Clock { daa: lo, unix, rate_milli: 10_000, disputed: false })
 }
 
-/// The indexer as a third witness of the chain's time (R9FC-1): its cursor DAA plus its lag
-/// (`/v1/health`), one small read the plan makes anyway of a service it already uses. A present
-/// further than [`INDEXER_CLOCK_MARGIN_DAA`] from it marks the clock `disputed`: a timed order is
-/// refused, a cancel never is. No answer is no witness.
+/// Most seconds the indexer's verified present runs ahead of its cursor: kobd's
+/// `indexer::reads::PRESENT_AHEAD_MAX_SECS` (90 s), the same bound as the web's witness.
+pub const PRESENT_AHEAD_MAX_SECS: i64 = 90;
+
+/// The indexer's verified present, as kobd's `indexer::reads::present_daa` computes it: its cursor
+/// DAA (verified) advanced by the local wall clock since the cursor block's verified header time at
+/// the block rate, at most [`PRESENT_AHEAD_MAX_SECS`] ahead and never behind. `None` without a
+/// cursor or without the header time (an older kobd): then there is no witness.
+pub fn verified_present(cursor_daa: i64, cursor_time_ms: Option<i64>, now_ms: i64) -> Option<i64> {
+    let t = cursor_time_ms?;
+    if cursor_daa <= 0 {
+        return None;
+    }
+    let ahead = now_ms.saturating_sub(t).max(0).saturating_mul(DAA_PER_SEC) / 1_000;
+    Some(cursor_daa.saturating_add(ahead.min(PRESENT_AHEAD_MAX_SECS * DAA_PER_SEC)))
+}
+
+/// The indexer as a third witness of the chain's time (R9FC-1): its VERIFIED present
+/// ([`verified_present`] of `/v1/health` `cursor_daa` and `cursor_time_unix_ms`), never its
+/// node's claim (`node_daa`, `lag_daa`). A present further than [`INDEXER_CLOCK_MARGIN_DAA`] from
+/// it marks the clock `disputed`: a timed order is refused, a cancel never is. No answer, no cursor
+/// or no cursor time (an older kobd) is no witness.
 pub fn indexer_witness(indexer: &str, clock: Clock) -> Clock {
     let Ok(h) = http::get_ok(indexer, "/v1/health", INDEXER_TIMEOUT) else { return clock };
-    let (Some(cursor), lag) = (h.get("cursor_daa").and_then(Value::as_i64), h.get("lag_daa").and_then(Value::as_i64).unwrap_or(0))
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let Some(seen) = h
+        .get("cursor_daa")
+        .and_then(Value::as_i64)
+        .and_then(|c| verified_present(c, h.get("cursor_time_unix_ms").and_then(Value::as_i64), now_ms))
     else {
         return clock;
     };
-    let seen = cursor.saturating_add(lag.max(0));
     Clock { disputed: clock.disputed || (seen - clock.daa).abs() > INDEXER_CLOCK_MARGIN_DAA, ..clock }
 }
 
@@ -797,6 +819,17 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The third time witness is the indexer's verified present, as kobd computes it (`present_daa`): cursor plus the
+    /// wall clock since its header time, capped 90 s ahead, never behind; no header time (an older kobd) is no witness.
+    #[test]
+    fn the_witness_is_the_verified_present() {
+        assert_eq!(verified_present(1_000, Some(10_000), 15_000), Some(1_050));
+        assert_eq!(verified_present(1_000, Some(10_000), 10_000 + 3_600_000), Some(1_000 + 900));
+        assert_eq!(verified_present(1_000, Some(20_000), 10_000), Some(1_000));
+        assert_eq!(verified_present(1_000, None, 15_000), None);
+        assert_eq!(verified_present(0, Some(1), 15_000), None);
+    }
 
     /// R5C2-2, R9T-1: the owner's list of one token follows `next_cursor` through short and empty pages to its end; a list
     /// that does not advance is cut: what was read is kept, with the reason (never "nothing held", never an error).
