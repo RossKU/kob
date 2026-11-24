@@ -610,6 +610,8 @@ impl ChainProof {
         let mut targets = Vec::with_capacity(n);
         let mut blocks = Vec::with_capacity(n);
         let mut lanes: Vec<Hash> = vec![native_lane()];
+        // A set beside the ordered list: a window may touch thousands of lanes (R9C1-L1).
+        let mut seen_lanes: std::collections::HashSet<Hash> = std::collections::HashSet::from([native_lane()]);
         let coinbase = SUBNETWORK_ID_COINBASE.as_bytes();
         let mut prev: Option<Header> = None;
         let mut parent = start;
@@ -662,7 +664,7 @@ impl ChainProof {
             }
             let mut digests = BTreeMap::new();
             for (lane, l) in leaves {
-                if !lanes.contains(&lane) {
+                if seen_lanes.insert(lane) {
                     lanes.push(lane);
                 }
                 digests.insert(lane, activity_digest_lane(l.into_iter()));
