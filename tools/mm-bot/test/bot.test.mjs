@@ -1934,3 +1934,44 @@ test('an_amend_rolled_back_then_confirmed_leaves_the_ask_tracked_at_its_new_stat
     reset();
   }
 });
+
+// R7T-2: a cancel-replace's replacement is looked up every cycle until the node has held it, so a
+// replacement filled in full a cycle later still settles the old record.
+test('a cancel-replace whose replacement is filled in full later still ends the old record (R7T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const asks = askIds(bot);
+    // A lagging indexer keeps listing the old asks where they were, so their records are not
+    // looked up before orderVisibleTimeoutSec; it shows none of the replacements.
+    const was = chain();
+    staleViews = new Map(asks.map((k) => [k, { covenant_id: k, contract: 'KobAsk', side: 1, token: TOKEN, scale: 1_000_000, template_hash: TPL.KobAsk, state_known: true,
+      state: stateOf(was.orders[k]), price: String(was.orders[k].price), amount_left: String(was.orders[k].amount), current: { txid: was.orders[k].txid, index: 0, value: String(was.orders[k].value) }, status: 'open', expired: false }]));
+    bot.kob.env.FAKE_KOB_REPLACE_NEW = 'ok';
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle();
+    delete bot.kob.env.FAKE_KOB_REPLACE_NEW;
+    const repl = Object.fromEntries(asks.map((k) => [k, bot.state.orders[k].replacedBy]));
+    hiddenIds = new Set(Object.values(repl));
+    // The next cycle looks the replacements up, though the old records are not due yet.
+    await bot.cycle();
+    // Each replacement is now bought in full; the old records are checked only later.
+    const c = chain();
+    for (const n of Object.values(repl)) { delete c.orders[n]; c.ended[n] = 'filled'; }
+    writeFileSync(file, JSON.stringify(c));
+    staleViews = new Map();
+    for (let i = 0; i < 2; i++) {
+      age(bot);
+      await bot.cycle();
+    }
+    for (const k of asks) {
+      assert.equal(bot.state.orders[k], undefined, 'the old record ended on the node having held its replacement');
+      assert.ok(bot.state.recent[k]);
+    }
+  } finally {
+    reset();
+  }
+});

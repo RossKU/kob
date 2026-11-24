@@ -920,9 +920,9 @@ export class Bot {
       const one = Object.entries(this.state.orders).find(([id, s]) => s.own?.state?.kind === kind && !s.proven && !check.includes(id));
       if (one) check.push(one[0]);
     }
-    // A cancel-replaced record due for its check: its replacement is looked up too, and live on
-    // the node it proves that the replace confirmed (R6T-2).
-    const replaced = check.filter((id) => this.state.orders[this.state.orders[id]?.replacedBy]);
+    // A cancel-replaced record: its replacement is looked up every cycle until the node has held
+    // it, and live on the node it proves that the replace confirmed (R6T-2, R7T-2).
+    const replaced = Object.keys(this.state.orders).filter((id) => !this.state.orders[id].replaceSeen && this.state.orders[this.state.orders[id].replacedBy]);
     for (const id of replaced) if (!check.includes(this.state.orders[id].replacedBy)) check.push(this.state.orders[id].replacedBy);
     if (check.length) {
       const res = await this.nodeCheck(check, hints);
