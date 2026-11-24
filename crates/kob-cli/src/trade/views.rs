@@ -208,7 +208,7 @@ fn print_view(c: &Common, r: Result<(Value, Vec<String>), String>) -> i32 {
     match r {
         Ok((v, lines)) => {
             if c.json {
-                println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                println!("{}", crate::text::json(&v));
             } else {
                 for l in lines {
                     println!("{l}");
@@ -329,11 +329,22 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
 
 // ---------------------------------------------------------------------------- orders
 
-/// The orders of the maker from the indexer (`GET /v1/orders`), every page up to 20.
-pub fn fetch_orders(indexer: &str, maker: &[u8; 32], token: Option<&[u8; 32]>, all: bool) -> Result<Vec<Value>, String> {
+/// Most pages the order and holdings lists read before they say the list is incomplete.
+const LIST_PAGES_MAX: usize = 200;
+
+/// The orders of the maker from the indexer (`GET /v1/orders`), following the cursor to the end.
+///
+/// The second value says why the list is incomplete, when it is: past [`LIST_PAGES_MAX`] pages, or on a
+/// malformed or repeated cursor (R8DF-2). A caller never shows such a list as whole.
+pub fn fetch_orders(
+    indexer: &str,
+    maker: &[u8; 32],
+    token: Option<&[u8; 32]>,
+    all: bool,
+) -> Result<(Vec<Value>, Option<String>), String> {
     let mut out = vec![];
     let mut cursor: Option<String> = None;
-    for _ in 0..20 {
+    for _ in 0..LIST_PAGES_MAX {
         let mut path = format!("/v1/orders?maker={}", to_hex(maker));
         if let Some(t) = token {
             path.push_str(&format!("&token={}", to_hex(t)));
@@ -348,11 +359,16 @@ pub fn fetch_orders(indexer: &str, maker: &[u8; 32], token: Option<&[u8; 32]>, a
         let v = http::get_ok(indexer, &path, data::INDEXER_TIMEOUT)?;
         out.extend(v.get("items").and_then(Value::as_array).cloned().unwrap_or_default());
         match v.get("next_cursor").and_then(Value::as_str) {
-            Some(c) if !c.is_empty() => cursor = Some(c.to_string()),
-            _ => break,
+            Some(c) if !c.is_empty() => {
+                if !data::order_cursor_ok(c) || cursor.as_deref() == Some(c) {
+                    return Ok((out, Some(format!("the indexer gave a bad cursor {:?}", crate::text::clean(c)))));
+                }
+                cursor = Some(c.to_string());
+            }
+            _ => return Ok((out, None)),
         }
     }
-    Ok(out)
+    Ok((out, Some(format!("more than {LIST_PAGES_MAX} pages"))))
 }
 
 /// What one order trades, in words: its side, what is left, and its price or legs.
@@ -487,7 +503,9 @@ pub fn order_row(o: &Value, reg: &[TokenFacts], idx: &[TokenFacts]) -> Value {
 
 /// The text line of an [`order_row`].
 pub fn order_row_line(r: &Value) -> String {
-    let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
+    // the row carries the indexer's words as they came (its JSON is exact); the line shows them through
+    // the one sanitiser, line breaks included, so a status or contract name cannot add lines (R8FX-3)
+    let s = |k: &str| crate::text::clean_long(r[k].as_str().unwrap_or(""), 1_000);
     let exp = r["expiry_daa"].as_i64().map(|e| format!(", expiry DAA {e}")).unwrap_or_default();
     let flags = r["flags"].as_array().map(|f| f.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
     let delivery = r["delivery"].as_str().map(|d| format!("; {d}")).unwrap_or_default();
@@ -533,7 +551,7 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
             }),
             None => None,
         };
-        let items = fetch_orders(indexer, &maker, token.as_ref(), p.has("--all"))?;
+        let (items, incomplete) = fetch_orders(indexer, &maker, token.as_ref(), p.has("--all"))?;
         let rows: Vec<Value> = items.iter().map(|o| order_row(o, &reg, &idx)).collect();
         let mut lines = vec![format!(
             "orders of {} ({}, network {}, indexer {})",
@@ -548,7 +566,13 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
         for r in &rows {
             lines.push(format!("  {}", order_row_line(r)));
         }
-        Ok((json!({"network": c.network, "maker": to_hex(&maker), "orders": rows}), lines))
+        if let Some(why) = &incomplete {
+            lines.push(format!("  incomplete: the indexer's list was not read to its end ({why}): more orders may exist than shown"));
+        }
+        Ok((
+            json!({"network": c.network, "maker": to_hex(&maker), "orders": rows, "incomplete": incomplete.is_some(), "incomplete_reason": incomplete}),
+            lines,
+        ))
     }
 }
 
@@ -688,10 +712,14 @@ fn reserved_kas(s: &AnyState) -> (bool, i128) {
 /// The free token holdings of the maker that the indexer lists (`GET /v1/token-utxos?owner=`).
 ///
 /// The result is, per token, the base units and the number of UTXOs.
-fn indexer_holdings(indexer: &str, maker: &[u8; 32]) -> Result<BTreeMap<[u8; 32], (i128, usize)>, String> {
+/// Units and UTXOs per token, and why the list is incomplete when it is.
+type Holdings = (BTreeMap<[u8; 32], (i128, usize)>, Option<String>);
+
+/// The second value says why the list is incomplete, when it is (R8DF-2), as [`fetch_orders`].
+fn indexer_holdings(indexer: &str, maker: &[u8; 32]) -> Result<Holdings, String> {
     let mut out: BTreeMap<[u8; 32], (i128, usize)> = BTreeMap::new();
     let mut cursor: Option<String> = None;
-    for _ in 0..10 {
+    for _ in 0..LIST_PAGES_MAX {
         let mut path = format!("/v1/token-utxos?owner={}&limit=500", to_hex(maker));
         if let Some(c) = &cursor {
             path.push_str(&format!("&cursor={c}"));
@@ -716,11 +744,16 @@ fn indexer_holdings(indexer: &str, maker: &[u8; 32]) -> Result<BTreeMap<[u8; 32]
             e.1 += 1;
         }
         match v.get("next_cursor").and_then(Value::as_str) {
-            Some(c) if !c.is_empty() => cursor = Some(c.to_string()),
-            _ => break,
+            Some(c) if !c.is_empty() => {
+                if cursor.as_deref() == Some(c) {
+                    return Ok((out, Some(format!("the indexer repeated the cursor {:?}", crate::text::clean(c)))));
+                }
+                cursor = Some(c.to_string());
+            }
+            _ => return Ok((out, None)),
         }
     }
-    Ok(out)
+    Ok((out, Some(format!("more than {LIST_PAGES_MAX} pages"))))
 }
 
 /// Runs `kob balances`.
@@ -746,9 +779,19 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
         let indexer = c.need_indexer()?;
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
         let free_kas: i128 = data::funding(node, &c.network, &maker)?.iter().map(|u| u.utxo.amount as i128).sum();
-        let orders = fetch_orders(indexer, &maker, None, false)?;
+        let (orders, orders_cut) = fetch_orders(indexer, &maker, None, false)?;
         let (held, skipped) = escrowed(&orders);
-        let listed = indexer_holdings(indexer, &maker)?;
+        let (listed, holdings_cut) = indexer_holdings(indexer, &maker)?;
+        let incomplete: Option<String> = match (&orders_cut, &holdings_cut) {
+            (None, None) => None,
+            (o, h) => Some(
+                [o.as_ref().map(|w| format!("orders: {w}")), h.as_ref().map(|w| format!("holdings: {w}"))]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+        };
         let mut tokens: Vec<[u8; 32]> = held.keys().chain(listed.keys()).copied().collect();
         tokens.sort();
         tokens.dedup();
@@ -793,6 +836,8 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
             "kas": {"free": free_kas.to_string(), "locked": locked.to_string(), "total": (free_kas + locked).to_string()},
             "tokens": rows.clone(),
             "skipped": skipped.iter().map(|(c, r)| json!({"covenant_id": c, "reason": r})).collect::<Vec<_>>(),
+            "incomplete": incomplete.is_some(),
+            "incomplete_reason": incomplete.clone(),
         });
         let mut lines = vec![
             format!("balances of {} (network {})", to_hex(&maker), c.network),
@@ -803,6 +848,11 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
                 units::kas(free_kas + locked)
             ),
         ];
+        if let Some(why) = &incomplete {
+            lines.push(format!(
+                "  incomplete: the indexer's lists were not read to their end ({why}): the figures below may leave some out"
+            ));
+        }
         for r in rows.iter() {
             let t = &r["text"];
             let s = |v: &Value| v.as_str().unwrap_or("").to_string();

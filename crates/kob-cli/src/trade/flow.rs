@@ -96,7 +96,7 @@ pub fn finish(c: &Common, signer: &Signer, mut r: Ready, units: &Units, argv_hin
     // --json prints exactly one document on stdout, once the outcome is known. It is the plan,
     // with the result in it when the transaction was submitted. A person at a terminal who is
     // going to be asked reads the plan as text on stderr meanwhile.
-    let print_json = |doc: &Value| println!("{}", serde_json::to_string_pretty(doc).unwrap_or_default());
+    let print_json = |doc: &Value| println!("{}", crate::text::json(doc));
     let text_plan = |to_stderr: bool| {
         let mut out = vec![r.title.clone(), format!("  network: {}", c.network)];
         out.extend(r.lines.iter().map(|l| format!("  {l}")));

@@ -53,7 +53,7 @@ impl Out {
     /// An event: the human line with the time, or the frame as one JSON line.
     pub fn event(&mut self, human: &str, frame: &Value) {
         if self.json {
-            self.put(&frame.to_string());
+            self.put(&crate::text::json_line(frame));
         } else {
             let t = clock((self.now)());
             self.put(&format!("{t}  {human}"));
@@ -63,7 +63,7 @@ impl Out {
     /// An event of several lines, such as a book: the time heads the first.
     pub fn block(&mut self, human: &[String], frame: &Value) {
         if self.json {
-            self.put(&frame.to_string());
+            self.put(&crate::text::json_line(frame));
         } else {
             let t = clock((self.now)());
             for (i, l) in human.iter().enumerate() {
@@ -81,7 +81,7 @@ impl Out {
     /// A person reads the refetch instead.
     pub fn json_only(&mut self, frame: &Value) {
         if self.json {
-            self.put(&frame.to_string());
+            self.put(&crate::text::json_line(frame));
         }
     }
 
@@ -90,7 +90,7 @@ impl Out {
     /// That is a reconnect, a resync or a reorg.
     pub fn note(&mut self, msg: &str) {
         if self.json {
-            let line = json!({"type": "note", "data": {"message": msg}}).to_string();
+            let line = crate::text::json_line(&json!({"type": "note", "data": {"message": msg}}));
             self.put(&line);
         } else {
             let t = clock((self.now)());
@@ -101,7 +101,7 @@ impl Out {
     /// A note that is also a server frame. `--json` prints the frame itself.
     pub fn frame_note(&mut self, msg: &str, frame: &Value) {
         if self.json {
-            self.put(&frame.to_string());
+            self.put(&crate::text::json_line(frame));
         } else {
             self.note(msg);
         }

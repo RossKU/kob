@@ -683,7 +683,13 @@ fn keyf(n: u8) -> String {
 
 /// The options of `prepare` at the relay floor.
 fn opts(op: order::Op, url: &str) -> order::Opts {
-    order::Opts { op, node: url.to_string(), network: NET.to_string(), fee: FeeOptions { fee_rate: None, fee_mode: FeeMode::Relay } }
+    order::Opts {
+        op,
+        node: url.to_string(),
+        network: NET.to_string(),
+        fee: FeeOptions { fee_rate: None, fee_mode: FeeMode::Relay },
+        abandon_strays: false,
+    }
 }
 
 /// The sweep or cancel of the view `doc` for `maker`, built and not signed; `Err` is a skip or a refusal.
@@ -1693,4 +1699,69 @@ fn a_node_that_underreports_an_unsigned_input_is_refused() {
     let d = crate::trade::show::decode(&c.built, &pk(1), &units);
     assert_eq!(d.unsigned_inputs, c.built.tx.inputs.len() - c.built.sign.len());
     assert!(crate::trade::show::lines(&d, &units, &c.built.tx.id).iter().any(|l| l.contains("no signature of yours covers")));
+}
+
+/// R8FX-2: a cancel that would strand strays is refused by default; `--abandon-strays` builds it after naming each unit it
+/// leaves behind for ever. R8FX-1: `kob sweep` sweeps a twin of the custody and keeps the custody itself.
+#[test]
+fn abandoning_strays_is_explicit_and_a_sweep_keeps_the_custody() {
+    let f = fixture();
+    let lying = view(A1, template(TemplateId::KobAsk).hash, any_json(&f.a1), (0x11, 0), CARRIER, Some(decoy_view(0x19)), vec![]);
+    let mut utxos = f.utxos.clone();
+    utxos.push(node_utxo(&decoy_state().spk_with(token_template(P)), 0x19, 0, CARRIER, Some(TOKEN)));
+    let (url, _n) = mock::start(utxos);
+    let o = opts(order::Op::Cancel, &url);
+    assert_eq!(why(prep(&o, &lying, 1)).0, "refused");
+    let c = prep(&order::Opts { abandon_strays: true, ..o.clone() }, &lying, 1).ok().expect("built");
+    assert!(c.disclosure.contains("ABANDONED") && c.disclosure.contains(&outpoint_str_of([0x19; 32], 0)), "{}", c.disclosure);
+    assert!(c.built.tx.inputs.iter().any(|i| i.transaction_id == [0x12; 32]), "the real custody returns");
+    assert!(c.left.iter().any(|l| l["reason"].as_str().is_some_and(|r| r.contains("lost for ever"))), "{:?}", c.left);
+    // a twin of the custody at the custody's own script: the sweep takes the twin, never the custody
+    let mut utxos = f.utxos.clone();
+    utxos.push(token_node_utxo(P, TOKEN, 0x1a, 10 * SCALE, A1));
+    let (url, _n) = mock::start(utxos);
+    let bare = view(
+        A1,
+        template(TemplateId::KobAsk).hash,
+        any_json(&f.a1),
+        (0x11, 0),
+        CARRIER,
+        Some(tview(P, TOKEN, 0x12, 10 * SCALE, A1, false, true)),
+        vec![],
+    );
+    let sw = prep(&opts(order::Op::Sweep, &url), &bare, 1).ok().expect("built");
+    let spent: Vec<[u8; 32]> = sw.built.tx.inputs.iter().map(|i| i.transaction_id).collect();
+    assert!(spent.contains(&[0x1a; 32]) && !spent.contains(&[0x12; 32]), "{spent:?}");
+}
+
+/// R8FX-1, the way back: `kob recover --cancel --custody-gone` ends a live order whose custody the node shows nowhere,
+/// without it; without the flag such an order is not cancelled; the flag is never taken with --yes.
+#[test]
+fn recover_ends_an_order_whose_custody_is_gone_only_on_request() {
+    let f = fixture();
+    let utxos: Vec<NodeUtxo> = f.utxos.iter().filter(|u| u.txid != [0x12; 32]).cloned().collect();
+    let (url, node) = mock::start(utxos);
+    let dir = tmp("custodygone");
+    let export = json!({"version": 2, "network": NET, "orders": [{"template_hash": to_hex(&template(TemplateId::KobAsk).hash),
+        "state": hex_state(&f.a1), "covenant_id": to_hex(&A1), "extension_commitment": to_hex(&EXT)}]});
+    let ef = write(&dir, "export.json", &export);
+    let args = |extra: &str| {
+        recover::parse_args(&v(&format!(
+            "--from {} --node {url} --network {NET} --maker {} --cancel --key-file {} --out-dir {} {extra}",
+            ef.display(),
+            to_hex(&pk(1)),
+            keyf(1),
+            dir.join("out").display()
+        )))
+    };
+    assert!(args("--custody-gone --yes").unwrap_err().contains("never with --yes"));
+    let report = recover::execute(&args("--dry-run").unwrap()).unwrap().0;
+    assert_eq!(by_cov(&report, A1)["custody"]["status"], "missing", "{report}");
+    assert!(by_cov(&report, A1)["cancel"].to_string().contains("--custody-gone"), "{report}");
+    let report = recover::execute(&args("--dry-run --custody-gone").unwrap()).unwrap().0;
+    assert_eq!(by_cov(&report, A1)["cancel"]["status"], "signed", "{report}");
+    let s = signed_from(by_cov(&report, A1)["cancel"]["file"].as_str().unwrap());
+    assert!(s.tx.inputs.iter().all(|i| i.utxo.covenant_id != Some(TOKEN)), "no token input: the custody is gone");
+    assert!(node.lock().unwrap().submitted.is_empty(), "a dry run sends nothing");
+    let _ = std::fs::remove_dir_all(dir);
 }

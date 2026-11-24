@@ -185,7 +185,7 @@ pub fn run(args: &[&str]) -> i32 {
             "review_tasks": derived.review_tasks,
             "registry_template": entry,
         });
-        println!("{}", serde_json::to_string_pretty(&doc).expect("json"));
+        println!("{}", crate::text::json(&doc));
     } else {
         println!("detection: {}", derived.detection);
         if let Some(n) = &derived.already_embedded {

@@ -196,7 +196,7 @@ pub fn run_verify_genesis(args: &[&str]) -> i32 {
                 }
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&records).expect("json"));
+        println!("{}", crate::text::json(&records));
     }
     let mism = registry_mismatches(&reg, &verdicts);
     if mism.is_empty() {
