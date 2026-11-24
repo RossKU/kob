@@ -446,7 +446,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   onScreen = { id: req.id, shape: shapeOf(s), cells, hold };
   // Which network this is, under the title. Mainnet says that the funds are real.
   const net = networkOf();
-  const netLine = net ? [el('p', { class: net === 'mainnet' ? 'net net-main' : 'net', 'data-testid': 'signer-network', 'data-network': net }, t(net === 'mainnet' ? 'signer.network.mainnet' : 'signer.network.other', { network: net }))] : [];
+  const netLine = net ? [el('p', { class: net === 'mainnet' ? 'net net-main' : 'net', 'data-testid': 'signer-network', 'data-network': net }, t(net === 'mainnet' ? 'signer.network.mainnetFrame' : 'signer.network.otherFrame', { network: net }))] : [];
   show(title, ...netLine, list, ...orders, ...hintsView, ...sessionNote, ...problems, actions, waitWhy);
 }
 
