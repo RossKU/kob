@@ -60,9 +60,12 @@ export function loadState(dataDir, nowMs = Date.now()) {
 
 export function saveState(dataDir, state) {
   const p = paths(dataDir).state;
-  writeFileSync(`${p}.tmp`, JSON.stringify(state, null, 1) + '\n');
+  // One temporary file per process: a `once` or `drop` beside another process never renames the
+  // other's half-written file (R6T-I4).
+  const tmp = `${p}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 1) + '\n');
   if (existsSync(p)) copyFileSync(p, paths(dataDir).statePrev);
-  renameSync(`${p}.tmp`, p);
+  renameSync(tmp, p);
 }
 
 /** A log past this size moves to <file>.1, replacing the one before (T-11). */

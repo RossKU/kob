@@ -1410,7 +1410,7 @@ test('a STOP looks up every proven ask: one live on the node is cancelled before
     assert.ok(n != null, 'the stop ends');
     assert.equal(bot.state.orders[id], undefined, 'it ended on the node\'s word before the stop was done');
     const log = readFileSync(paths(dir).log, 'utf8');
-    assert.match(log, /stopped: no quote left.*proven asks: 11 of 11 looked up on the node, 1 found live and cancelled, 10 not found \(listed in .*proven-not-found\.json\)/);
+    assert.match(log, /stopped: no quote left that the node finds.*proven asks: 11 of 11 looked up on the node, 1 found live and cancelled, 10 not found \(listed in .*proven-not-found\.json\)/);
     assert.equal(JSON.parse(readFileSync(paths(dir).provenNotFound, 'utf8')).items.length, 10);
     // Never through the indexer's view.
     const cancels = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((a) => a[0] === 'cancel' && a[1] === id);

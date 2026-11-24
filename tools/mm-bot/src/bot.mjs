@@ -32,6 +32,7 @@ const OWN_TX_KEEP = 2000; // the bot's own transaction ids kept once a node read
 const OWN_TX_MAX = 20_000; // and kept at most while no node read succeeds
 const PAYMENTS_KEEP = 2000; // payments to the bot's address no longer shown on the node, kept ...
 const PAYMENT_KEEP_MS = 7 * 86_400_000; // ... for a week after the node last showed them
+const OWN_KEEP_MS = 86_400_000; // and the bot's own (change, a cancel's carrier) a day: one per send, they add up (R6T-I2)
 const FILLS_KEEP = 200; // fill events kept per order
 const HINTS_MAX = 32; // amounts left passed to kob recover per ask
 // Amounts left derived from the payments the node showed to the bot (R6T-1): from each payment
@@ -268,7 +269,7 @@ export class Bot {
       const pass = this.state.provenPass;
       if ((left === 0 && !pass) || this.dryRun) {
         const last = this.state.provenPassLast?.why === 'stop' ? this.state.provenPassLast : null;
-        this.log.info(`stopped: no quote left${parked ? `; ${parked} unresolved ask(s) past their expiry kept in the state file for the operator` : ''}${last ? `; ${passText(last, this.p.provenNotFound)}` : ''}${proven ? `; ${proven} paid ask(s) kept as proven: the next run keeps looking for them` : ''}`);
+        this.log.info(`stopped: no quote left that the node finds${parked ? `; ${parked} unresolved ask(s) past their expiry kept in the state file for the operator` : ''}${last ? `; ${passText(last, this.p.provenNotFound)}` : ''}${proven ? `; ${proven} paid ask(s) kept as proven: the next run keeps looking for them` : ''}`);
         return 'stopped';
       }
       if (pass) this.log.info(`stopping: proven asks: ${pass.looked} of ${pass.total} looked up on the node, ${pass.left.length} to go (${PROVEN_PASS_BATCH} a cycle)`);
@@ -1098,11 +1099,12 @@ export class Bot {
       delete pay[k].goneAt;
     }
     // One not shown is kept for a week after the node last showed it, so that one read that omits
-    // it does not make it new again (R5T-I1); the records of no use yet, at most PAYMENTS_KEEP.
+    // it does not make it new again (R5T-I1); the records of no use yet, at most PAYMENTS_KEEP; the
+    // bot's own a day (its txid stays in ownTx longer, so a re-shown one is flagged own again).
     for (const [k, p] of Object.entries(pay)) if (!shown.has(k)) p.goneAt ??= now;
     const gone = Object.entries(pay).filter(([k, p]) => !shown.has(k) && now - p.goneAt < PAYMENT_KEEP_MS);
     const plain = gone.filter(([, p]) => !p.own && !p.usedBy).sort((a, b) => b[1].goneAt - a[1].goneAt).slice(0, PAYMENTS_KEEP);
-    this.state.payments = Object.fromEntries([...Object.entries(pay).filter(([k]) => shown.has(k)), ...gone.filter(([, p]) => p.own || p.usedBy), ...plain]);
+    this.state.payments = Object.fromEntries([...Object.entries(pay).filter(([k]) => shown.has(k)), ...gone.filter(([, p]) => p.usedBy || (p.own && now - p.goneAt < OWN_KEEP_MS)), ...plain]);
     // Their outputs are flagged now: the list of own txids can roll.
     this.state.ownTx = (this.state.ownTx ?? []).slice(-OWN_TX_KEEP);
     for (const o of Object.values(this.state.orders)) if (o.ownAt == null) o.ownAt = now;
