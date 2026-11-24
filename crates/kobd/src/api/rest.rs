@@ -95,9 +95,20 @@ where
     T: Serialize + Send + 'static,
     F: FnOnce(&rusqlite::Connection) -> crate::indexer::db::DbResult<T> + Send + 'static,
 {
+    // A key whose computation ran past its budget is refused for a second, not computed again by every waiter (R7, A).
+    if app
+        .read_budget_refused
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .is_some_and(|t| t.elapsed() < READ_BUDGET_REFUSED_FOR)
+    {
+        return Err(ApiError::read_budget());
+    }
     let generation = app.state.generation.get();
     let permit = if app.cache.contains(generation, &key) { None } else { crate::indexer::db::client_permit(false).await? };
     let pool = app.state.pool.clone();
+    let refused_key = key.clone();
     let body = app
         .cache
         .get_or_compute(generation, key, move || async move {
@@ -119,8 +130,36 @@ where
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error")
             })
         })
-        .await?;
-    Ok(body)
+        .await;
+    if let Err(e) = &body {
+        if e.code == "read_budget" {
+            let mut m = app.read_budget_refused.lock().unwrap_or_else(|e| e.into_inner());
+            if m.len() >= READ_BUDGET_REFUSED_MAX {
+                m.retain(|_, t| t.elapsed() < READ_BUDGET_REFUSED_FOR);
+            }
+            if m.len() < READ_BUDGET_REFUSED_MAX {
+                m.insert(refused_key, std::time::Instant::now());
+            }
+        }
+    }
+    body
+}
+
+/// How long a cache key whose computation ran past its read budget is refused without a new computation (R7, A).
+pub(crate) const READ_BUDGET_REFUSED_FOR: std::time::Duration = std::time::Duration::from_secs(1);
+/// Most refused keys kept at once.
+const READ_BUDGET_REFUSED_MAX: usize = 10_000;
+
+/// The `/v1/metrics` series of the reads refused for their budget, by route (R7, A).
+pub(crate) fn read_budget_metrics(app: &App) -> String {
+    let m = app.read_budget_hits.lock().unwrap_or_else(|e| e.into_inner());
+    let undecided = crate::indexer::reads::UNDECIDED_ROWS.load(std::sync::atomic::Ordering::Relaxed);
+    let mut out = format!("# TYPE kob_live_book_undecided_rows_total counter\nkob_live_book_undecided_rows_total {undecided}\n");
+    out.push_str("# TYPE kob_api_read_budget_refused_total counter\n");
+    for (route, n) in m.iter() {
+        out.push_str(&format!("kob_api_read_budget_refused_total{{route=\"{route}\"}} {n}\n"));
+    }
+    out
 }
 
 fn parse_hash(what: &str, s: &str) -> Result<Hash32, ApiError> {
@@ -273,7 +312,7 @@ async fn health_counters(app: &Arc<App>, lean: bool) -> (Option<reads::Counters>
 pub async fn metrics(State(app): State<Arc<App>>) -> ApiResult {
     // The series of the indexer, then those of the Executor runner (`kobd --executor`).
     let snap = app.state.health.snapshot();
-    let text = snap.metrics_text() + &snap.executor_metrics;
+    let text = snap.metrics_text() + &snap.executor_metrics + &read_budget_metrics(&app);
     Ok(([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")], text).into_response())
 }
 
@@ -447,6 +486,18 @@ pub async fn pair_candles(State(app): State<Arc<App>>, Path((base, quote)): Path
     // A chart answers in whole buckets of its interval (R6C2b-1): the window is widened to them before
     // the key and the read, so no read scans the fills of a partial bucket at an edge.
     let (from, to) = (from.map(|f| snap_down(f, iv)), to.map(|t| snap_up(t, iv)));
+    // A token no order names is an immediate 404, before any read of fills or a cache key: the keys cannot be minted
+    // by arbitrary hashes (R7C2b-1).
+    let listed = |t: &Hash32| app.state.tokens.get(t).is_some();
+    let (lb, lq) = (listed(&base), listed(&quote));
+    let known = app
+        .state
+        .pool
+        .with_light(move |c| Ok((lb || reads::token_known(c, &base)?) && (lq || reads::token_known(c, &quote)?)))
+        .await?;
+    if !known {
+        return Err(ApiError::not_found("unknown token"));
+    }
     let tokens = app.state.tokens.clone();
     // Cached as the token candles are.
     let key = format!("pair-candles {base} {quote} {interval} {from:?} {to:?} {n}");
@@ -475,7 +526,22 @@ pub async fn order(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiRe
     let id = parse_hash("covenant_id", &id)?;
     let ctx = app.ctx();
     // One order is a few index lookups, on the light lane.
-    match app.state.pool.with_light(move |c| reads::order(c, &ctx, &id)).await? {
+    // An order that cannot be read or rendered is answered as not found, never 500: a client that fails closed on an
+    // unread order would otherwise stop at one hostile order (R7, 10). Budget and busy answers stay what they are.
+    let found = match app.state.pool.with_light(move |c| reads::order(c, &ctx, &id)).await {
+        Ok(v) => v,
+        Err(e @ (crate::indexer::db::DbError::ReadBudget | crate::indexer::db::DbError::Overloaded)) => return Err(e.into()),
+        Err(crate::indexer::db::DbError::Sqlite(rusqlite::Error::SqliteFailure(f, m)))
+            if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
+        {
+            return Err(crate::indexer::db::DbError::Sqlite(rusqlite::Error::SqliteFailure(f, m)).into())
+        }
+        Err(e) => {
+            tracing::warn!("api: the order view of {id} cannot be rendered, answered as not found: {e}");
+            return Err(ApiError::not_found("this order cannot be shown"));
+        }
+    };
+    match found {
         // The genesis warning of its tokens is on every order view of that token, see
         // `docs/spec/matcher.md` section 1.2a.
         Some(o) => json_ok(o.with_warnings(|t| app.state.tokens.warnings_for(t))),

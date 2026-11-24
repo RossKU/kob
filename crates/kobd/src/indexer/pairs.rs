@@ -510,13 +510,27 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64, daa: i64) -> DbRe
         closed_from = crate::indexer::processor::guarded(|| s.refund_due(udaa)).flatten().unwrap_or(i64::MAX);
         let custodies = pair_custodies(conn, &cov)?;
         // What one fill can take, by the matcher's pair rules, once the window opens (R6C2a-2).
-        let lo = super::book::listed_order_of(conn, order_id)?;
-        let at = daa.max(open_from).max(udaa);
-        let take =
-            lo.and_then(|o| crate::indexer::processor::guarded(|| super::takeable::pair_offer(&o, at)).flatten()).map_or(0, |x| x.0);
+        // The least of the window's two ends, as a KAS row (R7C2a-3): a rising pair bid's custody buys least at its
+        // highest quote, a decaying ask's custody is the same at each; a quote is monotone over the window.
+        let lo = super::reads::guarded_order(conn, order_id);
+        let last = closed_from.saturating_sub(1).max(udaa);
+        let first = daa.max(open_from).max(udaa).min(last);
+        let take = lo
+            .and_then(|o| {
+                crate::indexer::processor::guarded(|| {
+                    let cap = |t| super::takeable::pair_offer(&o, t).map_or(0, |x| x.0);
+                    cap(first).min(cap(last))
+                })
+            })
+            .unwrap_or(0);
         pair = crate::indexer::processor::guarded(|| PairSpec::of(s, udaa, take)).flatten();
         let funded = pair.is_some_and(|p| p.amount > 0);
-        ok = sql_ok.unwrap_or(false) && resting && funded && crate::sanity::check(s).is_ok() && custodies_match(&custodies, s);
+        ok = sql_ok.unwrap_or(false)
+            && resting
+            && funded
+            && crate::sanity::check(s).is_ok()
+            && custodies_match(&custodies, s)
+            && super::reads::renders(s, udaa, first);
     }
     Ok(Some(super::reads::LiveWindow {
         ok,
@@ -526,6 +540,7 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64, daa: i64) -> DbRe
         auction: false,
         dust: false,
         offer: pair.map_or(0, |p| p.amount),
+        take_min: None,
         key: None,
         levels: 1,
         pair,

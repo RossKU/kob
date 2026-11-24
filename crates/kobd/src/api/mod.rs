@@ -128,6 +128,11 @@ pub struct App {
     pub(crate) cache: cache::ResponseCache<ApiError>,
     /// The store counters `/v1/health` serves from memory (`rest::health_counters`).
     pub(crate) health_counters: std::sync::Mutex<rest::HealthCounters>,
+    /// The reads refused for their budget, by route (R7, A), served by `/v1/metrics`.
+    pub(crate) read_budget_hits: std::sync::Mutex<std::collections::BTreeMap<String, u64>>,
+    /// The cache keys whose computation ran past its budget, and when: they are refused for a second without a new
+    /// computation (R7, A).
+    pub(crate) read_budget_refused: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
     /// The lane permits and requests in flight of each client (`indexer::db::ClientLanes`).
     pub(crate) clients: std::sync::Mutex<std::collections::HashMap<IpAddr, Arc<crate::indexer::db::ClientLanes>>>,
     /// The requests in flight of each IPv6 site (`indexer::db::CLIENT_SITE_IN_FLIGHT`).
@@ -185,6 +190,14 @@ impl ApiError {
         e
     }
 
+    /// A 503 error with the code `read_budget` and `Retry-After: 1`: the read ran past its budget of work
+    /// (`db::READ_BUDGET_STEPS`) and was stopped (R7, A).
+    pub fn read_budget() -> Self {
+        let mut e = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "read_budget", "the read ran past its budget of work");
+        e.retry_after = Some(1);
+        e
+    }
+
     /// A 404 error with the code `not_found`.
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_found", message)
@@ -195,6 +208,9 @@ impl From<DbError> for ApiError {
     fn from(e: DbError) -> Self {
         if matches!(e, DbError::Overloaded) {
             return ApiError::overloaded();
+        }
+        if matches!(e, DbError::ReadBudget) {
+            return ApiError::read_budget();
         }
         let busy = matches!(&e, DbError::Sqlite(rusqlite::Error::SqliteFailure(f, _))
             if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked));
@@ -213,11 +229,27 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let body = serde_json::json!({"error": {"code": self.code, "message": self.message}});
         let mut resp = (self.status, Json(body)).into_response();
+        if self.code == "read_budget" {
+            resp.extensions_mut().insert(ReadBudgetHit);
+        }
         if let Some(s) = self.retry_after {
             resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(s));
         }
         resp
     }
+}
+
+/// Marks a response refused for its read budget, so the guard counts it by route.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReadBudgetHit;
+
+/// The route of a path for the refusal metric: 64-hex segments (ids, tokens) as `{id}`, so the labels are bounded.
+fn route_label(path: &str) -> String {
+    path.split('/')
+        .map(|seg| if seg.len() == 64 && seg.bytes().all(|b| b.is_ascii_hexdigit()) { "{id}" } else { seg })
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Builds the router. Rate limiting uses the system clock.
@@ -242,6 +274,8 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         shutdown,
         cache: cache::ResponseCache::default(),
         health_counters: Default::default(),
+        read_budget_hits: Default::default(),
+        read_budget_refused: Default::default(),
         clients: Default::default(),
         sites: Default::default(),
         state,
@@ -426,12 +460,14 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
             (Err(_), _, _) | (_, Err(_), _) | (_, _, Err(_)) => ApiError::overloaded().into_response(),
             (Ok(_mine), Ok(_site), Ok(_permit)) => {
                 let limit = Duration::from_millis(app.state.cfg.request_timeout_ms.max(1));
-                let run = async {
+                // Every read of the request runs under one budget of work (R7, A).
+                let budget = crate::indexer::db::ReadBudget::new();
+                let run = crate::indexer::db::READ_BUDGET.scope(budget, async {
                     match lanes {
                         Some(l) => crate::indexer::db::CLIENT_LANES.scope(l, next.run(req)).await,
                         None => next.run(req).await,
                     }
-                };
+                });
                 match tokio::time::timeout(limit, run).await {
                     Ok(r) => r,
                     Err(_) => ApiError::new(StatusCode::GATEWAY_TIMEOUT, "timeout", "request timed out").into_response(),
@@ -439,6 +475,12 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
             }
         }
     };
+    if resp.extensions().get::<ReadBudgetHit>().is_some() {
+        let mut m = app.read_budget_hits.lock().unwrap_or_else(|e| e.into_inner());
+        if m.len() < 256 || m.contains_key(&route_label(&path)) {
+            *m.entry(route_label(&path)).or_default() += 1;
+        }
+    }
     // What a CDN may keep of the answer, and for how long, see `edge_cache`.
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

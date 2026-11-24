@@ -217,7 +217,8 @@ async fn health_answers_while_the_light_lane_is_busy() {
     assert_eq!(s, StatusCode::OK);
     assert!(t0.elapsed() < std::time::Duration::from_secs(1), "{:?}", t0.elapsed());
     assert_eq!(v["counters"]["orders_total"], 7, "the last counters: {v}");
-    busy.await.unwrap().unwrap();
+    // a read of 3 s is past its wall budget (R7, A): it ends refused
+    assert!(matches!(busy.await.unwrap(), Err(crate::indexer::db::DbError::ReadBudget)));
 }
 
 #[tokio::test]
@@ -1934,9 +1935,9 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
     assert_eq!(items[1]["pair_fills"], 1);
     // Errors and an unknown pair.
     assert_eq!(get(&app, &format!("/v1/pairs/{}/{}/candles?interval=7m", h(BASE), h(QUOTE))).await.0, StatusCode::BAD_REQUEST);
+    // a token the store does not know is a 404 at once, before any read (R7C2b-1)
     let (s, v) = get(&app, &format!("/v1/pairs/{}/{}/candles", h(0x55), h(0x56))).await;
-    assert_eq!(s, StatusCode::OK);
-    assert!(v["items"].as_array().unwrap().is_empty());
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")));
 
     // Pair fills come newest first, with their counterparty and no price source. The 24 h pair
     // volume follows.
@@ -3332,4 +3333,134 @@ async fn a_node_claim_ahead_or_behind_changes_no_public_answer() {
     assert_eq!(present_daa(1_000, Some(now - 1_000_000_000), 10, now), Some(1_000 + PRESENT_AHEAD_MAX_SECS * 10));
     assert_eq!(present_daa(1_000, Some(now + 5_000), 10, now), Some(1_000), "a header from the future never moves it back");
     assert_eq!(present_daa(0, Some(now), 10, now), None);
+}
+
+/// R7 (A): every public read runs under the read budget. On an absurd store (10^6 fills of one token, half of them its
+/// maker's own takes, 10^6 junk orders, 10^6 strays of one order, 10^6 pair fills and 10^6 token events), every public
+/// route answers within its budget: a bounded answer (200, 404) or `503 read_budget`, never an error or a timeout, in
+/// well under the request timeout. With a budget below any real read, every route that reads the store is refused with
+/// `read_budget`, a refused key is refused again at once without a new computation, and the refusals are counted by route.
+#[tokio::test]
+async fn every_public_read_ends_at_the_read_budget() {
+    use kob_protocol::state::{AnyState, AskState};
+    let e = env(|c| c.metrics = true);
+    seed_pair(&e.w);
+    let ask = AskState { token_cov_id: [TOKEN; 32], ..crate::testkit::ask(2, 130_000_000) };
+    seed_live(&e.w, 0x51, &AnyState::KobAsk(ask), 4, 10 * W);
+    let n: i64 = std::env::var("KOB_BUDGET_ROWS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000_000);
+    let maker_spk = [&[0x00, 0x00, 0x20][..], &[MAKER; 32][..], &[0xac][..]].concat();
+    e.w.execute("INSERT INTO scripts (id, spk) VALUES (77, ?1)", [maker_spk]).unwrap();
+    let tok = "(SELECT id FROM ids WHERE h = ?2)";
+    // the fills of the last day, so the 24 h statistics read them too
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let order = "(SELECT id FROM orders WHERE covenant_id = ?3)";
+    e.w.execute_batch("BEGIN").unwrap();
+    e.w.execute(
+        &format!(
+            "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1) \
+             INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail, executor_id) \
+             SELECT {order}, 9, 900, ?4 - 1 - i, CAST(printf('f%031d', i) AS BLOB), 0, 'fill', {tok}, 1, 1000, 130000000, 0, '{{}}', \
+             CASE WHEN i % 2 = 0 THEN 77 END FROM k"
+        ),
+        params![n, cid(TOKEN), cid(0x51), now_ms],
+    )
+    .unwrap();
+    e.w.execute(
+        &format!(
+            "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1) \
+             INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
+             SELECT CAST(printf('s%031d', i) AS BLOB), 0, {tok}, {order}, 1, 1000, 'stray', 9, 900 FROM k"
+        ),
+        params![n, cid(TOKEN), cid(0x51)],
+    )
+    .unwrap();
+    e.w.execute(
+        &format!(
+            "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1) \
+             INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, in_book, genesis_state, genesis_block, genesis_daa, listed) \
+             SELECT CAST(printf('o%031d', i) AS BLOB), 'KobAsk', 1, 1, 1, (SELECT id FROM ids WHERE h = ?3), {tok}, 0, x'00', 8, 800, 0 FROM k"
+        ),
+        params![n, cid(TOKEN), cid(MAKER)],
+    )
+    .unwrap();
+    e.w.execute(
+        "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1) \
+         INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, order_id, contract, base_id, quote_id, side, amount_a, amount_b, a_scale, counterparty) \
+         SELECT 9, 900, 1700000000000 + i, CAST(printf('p%031d', i) AS BLOB), 0, 1, 'KobPair', (SELECT id FROM ids WHERE h = ?2), \
+         (SELECT id FROM ids WHERE h = ?3), 1, 1, 1, 1000, 'inventory' FROM k",
+        params![n, cid(BASE), cid(QUOTE)],
+    )
+    .unwrap();
+    e.w.execute(
+        "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1) \
+         INSERT INTO token_events (token_cov_id, tpl_hash, ext_commit, kind, txid, block_seq, daa) \
+         SELECT ?2, NULL, NULL, 'seen', CAST(printf('t%031d', i) AS BLOB), 9, 900 FROM k",
+        params![n, cid(TOKEN)],
+    )
+    .unwrap();
+    e.w.execute_batch("COMMIT").unwrap();
+    e.state.generation.bump();
+    let t = h(TOKEN);
+    let routes = [
+        "/v1/tokens".to_string(),
+        format!("/v1/books/{t}?depth=200"),
+        format!("/v1/books/{t}?aggregate=false&depth=200&include_dust=true"),
+        format!("/v1/depth/{t}?levels=200&include_dust=true"),
+        format!("/v1/stats/{t}"),
+        "/v1/stats?since=0".to_string(),
+        format!("/v1/trades/{t}?limit=200"),
+        format!("/v1/candles/{t}?interval=1m&from=0&limit=1500"),
+        format!("/v1/candles/{t}?interval=1d&from=0&limit=1500"),
+        format!("/v1/quotes/{t}?interval=1d&from=0&limit=1500"),
+        format!("/v1/fills?token={t}&limit=200"),
+        format!("/v1/orders?token={t}&status=cancelled&limit=200"),
+        format!("/v1/orders?maker={}&status=active&limit=200", h(MAKER)),
+        format!("/v1/orders/{}", h(0x51)),
+        format!("/v1/orders/{}/events?limit=200", h(0x51)),
+        format!("/v1/strays?maker={}&limit=200", h(MAKER)),
+        format!("/v1/token-utxos?token={t}&spent=true&limit=200"),
+        format!("/v1/token-events?token={t}&limit=200"),
+        "/v1/pairs".to_string(),
+        format!("/v1/pairs/{}/{}/book", h(BASE), h(QUOTE)),
+        format!("/v1/pairs/{}/{}/candles?interval=1m&from=0&limit=1500", h(BASE), h(QUOTE)),
+        format!("/v1/pairs/{}/{}/fills?limit=200", h(BASE), h(QUOTE)),
+        format!("/v1/tokens/{t}/declaration"),
+        "/v1/creator-locks?due=1800000000000".to_string(),
+    ];
+    let app = router(e.state.clone());
+    // the real budget: bounded answers or a refusal, quickly
+    for r in &routes {
+        let started = std::time::Instant::now();
+        let (s, v) = get(&app, r).await;
+        let ok = s == StatusCode::OK
+            || s == StatusCode::NOT_FOUND
+            || (s == StatusCode::SERVICE_UNAVAILABLE && v["error"]["code"] == "read_budget");
+        assert!(ok, "{r}: {s} {v}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{r}: {:?}", started.elapsed());
+    }
+    // a budget below any real read: every route that reads the store is refused, at once
+    e.state.pool.set_budget(2_000, std::time::Duration::from_secs(1));
+    e.state.generation.bump();
+    let mut answered = vec![];
+    for r in &routes {
+        let started = std::time::Instant::now();
+        let (s, v) = get(&app, r).await;
+        let refused = s == StatusCode::SERVICE_UNAVAILABLE && v["error"]["code"] == "read_budget";
+        assert!(refused || s == StatusCode::OK || s == StatusCode::NOT_FOUND, "{r}: {s} {v}");
+        if !refused {
+            answered.push(r.clone());
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{r}: {:?}", started.elapsed());
+    }
+    // every route whose honest answer reads many of the 10^6 rows (the 24 h window, a trade page, a maker's strays among the
+    // newest 10,000, the 24 h pair volume) is refused; the others are pages read by their index, within 2,000 steps
+    for scan in ["/v1/stats/", "/v1/trades/", "/v1/strays?", "/fills?limit"] {
+        assert!(!answered.iter().any(|r| r.contains(scan)), "{scan} answered under a 2,000-step budget: {answered:?}");
+    }
+    // the refused key is refused again without a computation
+    let (s, v) = get(&app, &format!("/v1/stats/{t}")).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("read_budget")));
+    let (_, _, body) = raw(&app, "/v1/metrics", &[]).await;
+    let metrics = String::from_utf8_lossy(&body).to_string();
+    assert!(metrics.contains("kob_api_read_budget_refused_total{route=\"/v1/stats/{id}\"}"), "{metrics}");
 }

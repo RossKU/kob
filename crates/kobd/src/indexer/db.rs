@@ -51,6 +51,10 @@ pub enum DbError {
     /// answers `503 overloaded` to that client (R4C2-1).
     #[error("too many reads of this client in flight")]
     Overloaded,
+    /// A public API read ran past its budget of work ([`READ_BUDGET_STEPS`], [`READ_BUDGET_WALL`]) and was stopped. The API
+    /// answers `503 read_budget` to that request only (R7, A).
+    #[error("the read ran past its budget of work")]
+    ReadBudget,
 }
 
 /// Result of a database operation.
@@ -219,9 +223,13 @@ pub fn refuse_pre_v3(conn: &Connection, path: &Path) -> DbResult<()> {
 /// ([`refuse_old_layout`]). The layout of the tables is what `schema.sql` says.
 fn migrate(conn: &Connection) -> DbResult<()> {
     ensure_live_columns(conn)?;
+    if ensure_priced_fills(conn)? > 0 {
+        tracing::info!("marked the fills that make prices once (kept by triggers from now on)");
+    }
     if backfill_counters(conn)? {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }
+    ensure_kas_locked(conn)?;
     if backfill_candidate_bytes(conn)? {
         tracing::info!("counted the bytes of the KCC-23 candidate preparations once (kept by triggers from now on)");
     }
@@ -411,18 +419,29 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for id in ids {
-            let w = if table == "book_live" {
-                super::reads::book_window(conn, id, dust / 2, daa)?
-            } else {
-                super::pairs::pair_window_of(conn, id, daa)?
+            // A row whose decision panics is not open, is counted, and the commit goes on (R7C2a-I2).
+            let decided = crate::indexer::processor::guarded(|| {
+                if table == "book_live" {
+                    super::reads::book_window(conn, id, dust / 2, daa)
+                } else {
+                    super::pairs::pair_window_of(conn, id, daa)
+                }
+            });
+            let Some(w) = decided else {
+                super::reads::UNDECIDED_ROWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::warn!(order_id = id, "live book: the decision of the row panicked, so it is not open");
+                conn.prepare_cached(&format!("UPDATE {table} SET ok = 0, open = 3 WHERE order_id = ?1"))?.execute([id])?;
+                set += 1;
+                continue;
             };
+            let w = w?;
             let Some(w) = w else {
                 conn.prepare_cached(&format!("DELETE FROM {table} WHERE order_id = ?1"))?.execute([id])?;
                 continue;
             };
             // What the reads take of the row without decoding its state (R5C2-6).
             let extra = if table == "book_live" {
-                ", auction = ?8, key = COALESCE(?9, key), levels = ?10, offer = ?11"
+                ", auction = ?8, key = COALESCE(?9, key), levels = ?10, offer = ?11, take_min = ?12"
             } else {
                 ", ask = ?8, entry = ?9, scale = ?10, amount = ?11, q_kind = ?12, quote = ?13, q_end = ?14, q_slope = ?15, q_step = ?16, q_origin = ?17"
             };
@@ -444,7 +463,8 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
                     w.class(),
                     w.key,
                     w.levels,
-                    w.offer
+                    w.offer,
+                    w.take_min
                 ])?;
             } else {
                 let p = w.pair;
@@ -496,15 +516,16 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
 /// 2: what one fill can take (R5A-1, R5A-2) and the dust class (R5C2-1). 3: the columns the reads take
 /// instead of decoding states (`book_live.levels`, the `pair_live` spec, R5C2-6). 4: every kind by the matcher's own
 /// candidate rules and KIP-9 (`book_live.offer`), an auction at its least favourable quote, dust below half the
-/// listing minimum (R6C2a-1, R6C2a-2, R6C2a-I2).
-pub const BOOK_RULES_VERSION: u32 = 4;
+/// listing minimum (R6C2a-1, R6C2a-2, R6C2a-I2). 5: the least of both ends of the window (R7C2a-1, R7C2a-3), a curve ranked
+/// and shown by its smallest valid fill (`book_live.take_min`, R7C2a-2).
+pub const BOOK_RULES_VERSION: u32 = 5;
 
 /// The columns of `book_live` and `pair_live` that a store an earlier build of schema 14 created lacks
 /// (`CREATE TABLE IF NOT EXISTS` keeps an existing table as it is). They are derived: added empty, they
 /// are set by the reset [`BOOK_RULES_VERSION`] triggers.
 fn ensure_live_columns(conn: &Connection) -> DbResult<()> {
     let want: [(&str, &[&str]); 2] = [
-        ("book_live", &["levels", "offer"]),
+        ("book_live", &["levels", "offer", "take_min"]),
         ("pair_live", &["ask", "entry", "scale", "amount", "q_kind", "quote", "q_end", "q_slope", "q_step", "q_origin"]),
     ];
     for (table, cols) in want {
@@ -519,6 +540,73 @@ fn ensure_live_columns(conn: &Connection) -> DbResult<()> {
         }
     }
     Ok(())
+}
+
+/// The KAS locked in live order UTXOs, kept in `counters` (`kas_locked`) by triggers on `order_utxos`, so
+/// `/v1/stats?since=` reads one row instead of summing every live UTXO (R7C2b-3). Counted once on a store an earlier
+/// build wrote.
+fn ensure_kas_locked(conn: &Connection) -> DbResult<()> {
+    let live = |r: &str| format!("CASE WHEN {r}.spent_block IS NULL THEN COALESCE({r}.value, 0) ELSE 0 END");
+    let add = |e: String| {
+        format!("INSERT INTO counters (name, n) VALUES ('kas_locked', {e}) ON CONFLICT(name) DO UPDATE SET n = n + excluded.n;")
+    };
+    conn.execute_batch(&format!(
+        "CREATE TRIGGER IF NOT EXISTS order_utxos_locked_ins AFTER INSERT ON order_utxos BEGIN {} END; \
+         CREATE TRIGGER IF NOT EXISTS order_utxos_locked_upd AFTER UPDATE OF spent_block, value ON order_utxos BEGIN {} END; \
+         CREATE TRIGGER IF NOT EXISTS order_utxos_locked_del AFTER DELETE ON order_utxos BEGIN {} END;",
+        add(live("NEW")),
+        add(format!("{} - {}", live("NEW"), live("OLD"))),
+        add(format!("-{}", live("OLD")))
+    ))?;
+    let have: bool = conn.prepare("SELECT 1 FROM counters WHERE name = 'kas_locked'")?.exists([])?;
+    if !have || meta_get(conn, "kas_locked")?.as_deref() != Some("1") {
+        conn.execute(
+            "INSERT INTO counters (name, n) SELECT 'kas_locked', COALESCE(SUM(value), 0) FROM order_utxos WHERE spent_block IS NULL \
+             ON CONFLICT(name) DO UPDATE SET n = excluded.n",
+            [],
+        )?;
+        meta_set(conn, "kas_locked", "1")?;
+    }
+    Ok(())
+}
+
+/// Whether a fill (the row `e`, written `NEW` in a trigger and `order_events` in an update: a trigger takes no alias)
+/// makes a price: a positive amount at a price on a side, not a take its own maker's key paid for.
+const PRICED_EXPR: &str = "(e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2) AND NOT EXISTS \
+    (SELECT 1 FROM scripts sc JOIN orders o ON o.id = e.order_id WHERE sc.id = e.executor_id AND length(sc.spk) = 36 \
+     AND substr(sc.spk, 1, 3) = x'000020' AND substr(sc.spk, 36, 1) = x'ac' \
+     AND substr(sc.spk, 4, 32) = (SELECT mk.h FROM ids mk WHERE mk.id = o.maker_id)))";
+
+/// The stored "priced" flag of every fill (R7C2b-1): the column (an earlier store gains it), the triggers that set it at
+/// every write of a fill, its two partial indexes, and once the flag of the fills an earlier build wrote. Returns the
+/// fills it marked now.
+pub(crate) fn ensure_priced_fills(conn: &Connection) -> DbResult<usize> {
+    let have: bool = conn.prepare("SELECT 1 FROM pragma_table_info('order_events') WHERE name = 'priced'")?.exists([])?;
+    if !have {
+        conn.execute_batch("ALTER TABLE order_events ADD COLUMN priced INTEGER")?;
+    }
+    let set = format!("UPDATE order_events SET priced = {} WHERE id = NEW.id;", PRICED_EXPR.replace("e.", "NEW."));
+    conn.execute_batch(&format!(
+        "CREATE INDEX IF NOT EXISTS order_events_priced ON order_events (token_id, id) WHERE kind = 'fill' AND priced = 1; \
+         CREATE INDEX IF NOT EXISTS order_events_priced_ts ON order_events (token_id, ts) WHERE kind = 'fill' AND priced = 1; \
+         CREATE TRIGGER IF NOT EXISTS order_events_priced_ins AFTER INSERT ON order_events WHEN NEW.kind = 'fill' BEGIN {} END; \
+         CREATE TRIGGER IF NOT EXISTS order_events_priced_upd AFTER UPDATE OF executor_id, amount, price, side, order_id ON order_events \
+         WHEN NEW.kind = 'fill' BEGIN {} END;",
+        set,
+        set
+    ))?;
+    if meta_get(conn, "priced_fills")?.as_deref() == Some("1") {
+        return Ok(0);
+    }
+    let n = conn.execute(
+        &format!(
+            "UPDATE order_events SET priced = {} WHERE kind = 'fill' AND priced IS NULL",
+            PRICED_EXPR.replace("e.", "order_events.")
+        ),
+        [],
+    )?;
+    meta_set(conn, "priced_fills", "1")?;
+    Ok(n)
 }
 
 /// Drops and recreates every trigger and index of this build's schema whose stored SQL differs from
@@ -960,6 +1048,72 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<(
     Ok(())
 }
 
+/// Most SQLite VM steps one public API request may run, over all its statements on the read pool (R7, A). A shared
+/// computation of the response cache (one per key and data generation) has a budget of its own. About 5 times the
+/// largest honest worst case measured (`docs/ops/api-bounds.md`: a lean store's chart, 1.4 million steps), so an honest
+/// answer never meets it; a read an attacker's rows made larger stops there, whatever its plan.
+pub const READ_BUDGET_STEPS: u64 = 5_000_000;
+
+/// Longest wall time one public API request (or one shared computation) may spend on its reads, the Rust work between
+/// its statements included: checked at every [`READ_BUDGET_TICK`] VM steps and when each read ends (R7, A).
+pub const READ_BUDGET_WALL: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+/// The VM steps between two checks of the budget (`sqlite3_progress_handler`).
+pub const READ_BUDGET_TICK: i32 = 1_000;
+
+/// The work a public API request has done so far on the read pool ([`READ_BUDGET_STEPS`]).
+#[derive(Debug)]
+pub struct ReadBudget {
+    steps: std::sync::atomic::AtomicU64,
+    /// Microseconds spent in the reads that ended (the wait for a connection is not counted).
+    wall_us: std::sync::atomic::AtomicU64,
+    hit: std::sync::atomic::AtomicBool,
+}
+
+impl ReadBudget {
+    pub fn new() -> Arc<ReadBudget> {
+        Arc::new(ReadBudget { steps: Default::default(), wall_us: Default::default(), hit: Default::default() })
+    }
+    /// The VM steps counted so far.
+    pub fn steps(&self) -> u64 {
+        self.steps.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Whether it is spent, with `running` the time of the read in progress.
+    fn over(&self, max_steps: u64, max_wall: std::time::Duration, running: std::time::Duration) -> bool {
+        let used = std::time::Duration::from_micros(self.wall_us.load(std::sync::atomic::Ordering::Relaxed)) + running;
+        self.hit.load(std::sync::atomic::Ordering::Relaxed) || self.steps() > max_steps || used > max_wall
+    }
+}
+
+/// What the progress handler of a budgeted read checks.
+struct BudgetTick {
+    budget: Arc<ReadBudget>,
+    started: std::time::Instant,
+    max_steps: u64,
+    max_wall: std::time::Duration,
+}
+
+/// The progress handler of a budgeted read: counts [`READ_BUDGET_TICK`] steps, and stops the statement (non-zero) once the
+/// budget is spent.
+unsafe extern "C" fn budget_tick(p: *mut std::ffi::c_void) -> std::ffi::c_int {
+    use std::sync::atomic::Ordering::Relaxed;
+    // SAFETY: `p` is the `BudgetTick` the read set, alive while the handler is.
+    let t = unsafe { &*(p as *const BudgetTick) };
+    t.budget.steps.fetch_add(READ_BUDGET_TICK as u64, Relaxed);
+    if t.budget.over(t.max_steps, t.max_wall, t.started.elapsed()) {
+        t.budget.hit.store(true, Relaxed);
+        1
+    } else {
+        0
+    }
+}
+
+tokio::task_local! {
+    /// The budget of the public API request a read serves, set by the API guard. A read outside it (a computation of
+    /// the response cache, detached from its request) has a budget of its own for that read.
+    pub static READ_BUDGET: Arc<ReadBudget>;
+}
+
 /// Longest time one pooled read may run before SQLite is told to interrupt it.
 pub const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
@@ -1089,6 +1243,9 @@ struct Lane {
 struct PoolInner {
     heavy: Lane,
     light: Lane,
+    /// [`READ_BUDGET_STEPS`] and [`READ_BUDGET_WALL`] (in ms), lowered by tests.
+    budget_steps: std::sync::atomic::AtomicU64,
+    budget_wall_ms: std::sync::atomic::AtomicU64,
 }
 
 /// Tells a read that its caller went away.
@@ -1139,7 +1296,22 @@ fn open_lane(path: &Path, size: usize) -> DbResult<Lane> {
 impl ReadPool {
     /// Opens `size` read-only connections to an existing database file, and one for the light lane.
     pub fn open(path: &Path, size: usize) -> DbResult<Self> {
-        Ok(ReadPool { inner: Arc::new(PoolInner { heavy: open_lane(path, size.max(1))?, light: open_lane(path, 1)? }) })
+        Ok(ReadPool {
+            inner: Arc::new(PoolInner {
+                heavy: open_lane(path, size.max(1))?,
+                light: open_lane(path, 1)?,
+                budget_steps: READ_BUDGET_STEPS.into(),
+                budget_wall_ms: (READ_BUDGET_WALL.as_millis() as u64).into(),
+            }),
+        })
+    }
+
+    /// Sets the read budget of this pool (tests: a small budget over a large store).
+    #[cfg(test)]
+    pub(crate) fn set_budget(&self, steps: u64, wall: std::time::Duration) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.inner.budget_steps.store(steps, Relaxed);
+        self.inner.budget_wall_ms.store(wall.as_millis() as u64, Relaxed);
     }
 
     /// Runs a read on a pooled connection on the blocking thread pool.
@@ -1177,6 +1349,9 @@ impl ReadPool {
         // would run dry and the bound on concurrent reads would not hold.
         let permit = permits.clone().acquire_owned().await.map_err(|_| DbError::Invalid("read pool closed".into()))?;
         let inner = self.inner.clone();
+        // Every statement of every read of the pool runs under the budget of its request (R7, A): the pool serves the
+        // public API only (the writer, the executor and the follower read their own connections).
+        let budget = READ_BUDGET.try_with(Arc::clone).unwrap_or_else(|_| ReadBudget::new());
         let cancel = Arc::new(Cancel::default());
         let guard = CancelOnDrop(cancel.clone(), true);
         let r = tokio::task::spawn_blocking(move || {
@@ -1198,8 +1373,33 @@ impl ReadPool {
                         handle.interrupt();
                     }
                 });
+                use std::sync::atomic::Ordering::Relaxed;
+                let (max_steps, max_wall) =
+                    (inner.budget_steps.load(Relaxed), std::time::Duration::from_millis(inner.budget_wall_ms.load(Relaxed)));
+                let started = std::time::Instant::now();
+                let tick = BudgetTick { budget: budget.clone(), started, max_steps, max_wall };
+                // SAFETY: `tick` outlives every statement of the read: the handler is removed below, before it is dropped.
+                unsafe {
+                    rusqlite::ffi::sqlite3_progress_handler(
+                        conn.handle(),
+                        READ_BUDGET_TICK,
+                        Some(budget_tick),
+                        &tick as *const BudgetTick as *mut std::ffi::c_void,
+                    )
+                };
                 // The connection goes back even if the read panics.
-                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&conn)));
+                let r = if budget.over(max_steps, max_wall, std::time::Duration::ZERO) {
+                    Ok(Err(DbError::ReadBudget))
+                } else {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&conn)))
+                };
+                // SAFETY: removes the handler set above.
+                unsafe { rusqlite::ffi::sqlite3_progress_handler(conn.handle(), 0, None, std::ptr::null_mut()) };
+                drop(tick);
+                let spent = started.elapsed();
+                // A read past its budget fails, whatever its statement made of the interrupt.
+                let r = if budget.over(max_steps, max_wall, spent) { Ok(Err(DbError::ReadBudget)) } else { r };
+                budget.wall_us.fetch_add(spent.as_micros().min(u64::MAX as u128) as u64, Relaxed);
                 drop(done_tx);
                 if let Ok(w) = watchdog {
                     let _ = w.join();

@@ -102,13 +102,13 @@ async fn a_placed_curve_is_listed_as_its_levels_and_filled_across_them() {
     let listed = book::listed_orders(c.hs.ingest.lock().unwrap().conn()).unwrap();
     let o = listed.iter().find(|o| o.id() == cov.0).expect("listed");
     assert!(o.custody_ok());
-    // the public book: one level per table entry, one order each, the amounts summing to amountLeft (counted once)
+    // the public book: one level per table entry one fill reaches (R7C2a-2: at most `CURVE_MAX_CROSS`, 8), one order each
     let levels = ask_levels(&c, &read_ctx(&c));
-    assert_eq!(levels, table().into_iter().map(|p| (p, WHOLE, 1)).collect::<Vec<_>>());
+    assert_eq!(levels, table().into_iter().take(8).map(|p| (p, WHOLE, 1)).collect::<Vec<_>>());
     let rows = ask_rows(&c);
-    assert_eq!(rows.len(), 12);
+    assert_eq!(rows.len(), 8);
     assert!(rows.iter().all(|r| r.0 == cov.to_hex()), "every row is the one order");
-    assert_eq!(rows.iter().map(|r| r.1).collect::<Vec<_>>(), (0..12).map(Some).collect::<Vec<_>>());
+    assert_eq!(rows.iter().map(|r| r.1).collect::<Vec<_>>(), (0..8).map(Some).collect::<Vec<_>>());
 
     // a fill of 2.5 levels: levels 0 and 1 whole, half of level 2
     let n = 2 * WHOLE + WHOLE / 2;
@@ -133,7 +133,8 @@ async fn a_placed_curve_is_listed_as_its_levels_and_filled_across_them() {
     assert!(v.custody.as_ref().is_some_and(|k| k.ok), "the rest custody is the order's: {:?}", v.custody);
     let levels = ask_levels(&c, &read_ctx(&c));
     assert_eq!(levels[0], (t[2], WHOLE / 2, 1));
-    assert_eq!(levels.iter().map(|l| l.1).sum::<i64>(), after.amount_left);
+    // what one fill reaches: the rest of level 2 and the 7 levels after it (R7C2a-2), not the whole amount left
+    assert_eq!(levels.iter().map(|l| l.1).sum::<i64>(), WHOLE / 2 + 7 * WHOLE);
     let listed = book::listed_orders(c.hs.ingest.lock().unwrap().conn()).unwrap();
     assert!(listed
         .iter()
@@ -230,9 +231,9 @@ async fn a_curve_is_never_idle() {
     // 90 days on: a plain ask waits for its refund, the curve (no refund) is still liquidity
     let later = ReadCtx { node_daa: Some(c.daa() + MAX_IDLE as u64 + 10), settle_depth_daa: 100, now_unix: None };
     let levels = ask_levels(&c, &later);
-    assert_eq!(levels.len(), 12, "only the curve's levels: {levels:?}");
+    assert_eq!(levels.len(), 8, "only the curve's levels one fill reaches: {levels:?}");
     assert!(levels.iter().all(|l| l.0 != P250 * 3));
-    assert_eq!(ask_levels(&c, &read_ctx(&c)).len(), 13, "before, both");
+    assert_eq!(ask_levels(&c, &read_ctx(&c)).len(), 9, "before, both");
     assert!(view(&c, &cov).refund_due_daa.is_none());
 }
 
@@ -487,11 +488,13 @@ async fn a_shallow_book_and_a_view_take_only_the_best_levels_of_a_long_curve() {
     assert_eq!(seven, want);
     assert_eq!(rows(5), want[..5].to_vec());
     let all = rows(200);
-    assert_eq!(all.len(), 121);
+    // the levels one fill reaches (8) and the plain ask
+    assert_eq!(all.len(), 9);
     assert_eq!(&all[..7], &seven[..]);
     assert_eq!(all[7], curve_level(6));
-    // aggregated: the curve's three levels at a price are one level, the plain ask's tokens added at its price
-    assert_eq!(levels(3), vec![(P250, 3 * WHOLE), (P250 + 2_500_000, 13 * WHOLE), (P250 + 5_000_000, 3 * WHOLE)]);
+    // aggregated: the curve's levels at a price are one level, the plain ask's tokens added at its price; the curve shows the 8
+    // levels one fill reaches (R7C2a-2), so 2 of the three at 2.55
+    assert_eq!(levels(3), vec![(P250, 3 * WHOLE), (P250 + 2_500_000, 13 * WHOLE), (P250 + 5_000_000, 2 * WHOLE)]);
     assert_eq!(&levels(100)[..3], &levels(3)[..]);
     let v = reads::order(g.conn(), &ctx, &cov).unwrap().unwrap();
     let cv = v.curve.unwrap();
