@@ -94,13 +94,25 @@ pub(crate) fn kas_offer(o: &crate::matcher::book::ListedOrder, t: i64) -> Offer 
     let mut out = Offer::default();
     for c in candidates_of(&[o], &cx) {
         if out.take_min == 0 {
-            out.take_min = c.curve.as_ref().map_or(c.min_fill, |l| l.rules.min_fill).max(1);
+            // a curve's smallest valid fill is the smallest `n` its `CurveLeg::fill_ok` accepts (R8C2a-1): its minimum
+            // fill when KIP-9 leaves a partial fill of that size, else the whole rest
+            out.take_min = c.curve.as_ref().map_or(c.min_fill, |l| smallest_fill(&l.rules)).max(1);
         }
         let v = kob_protocol::state::quote_exact(c.cap, c.quote, c.scale, kob_protocol::state::Round::Down).unwrap_or(0);
         out.amount = out.amount.saturating_add(c.cap);
         out.value = out.value.saturating_add(v.max(0));
     }
     out
+}
+
+/// The smallest fill `CurveLeg::fill_ok` accepts under `r`: the minimum fill when a partial fill of that size exists
+/// (`part_cap >= min_fill`), else the fill that ends the order (`rest_from`).
+pub(crate) fn smallest_fill(r: &crate::matcher::candidate::QtyRules) -> i64 {
+    if r.part_cap >= r.min_fill {
+        r.min_fill
+    } else {
+        r.rest_from
+    }
 }
 
 /// The largest fill of a listed pair order at DAA `t` and its quote then, by the matcher's pair rules
