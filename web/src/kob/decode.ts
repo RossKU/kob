@@ -508,7 +508,7 @@ export interface ExpectedSigning {
    * R9FB3-1). The decoder checks the built orders' times against it, projected to now by the browser
    * clock: an expiry already past, or an auction's start further than the margin from now, blocks.
    */
-  present?: { daa: bigint; unixSeconds: bigint; witness?: 'agreed' | 'unverified' | 'disagree' };
+  present?: { daa: bigint; unixSeconds: bigint; witness?: 'agreed' | 'anchored' | 'own-node' | 'unverified' | 'disagree' };
   /**
    * KAS moved into covenants (order outputs + custody token outputs), see `decodeSigning` for the
    * accepted definitions

@@ -2,7 +2,7 @@
 // clock and UTXOs, the indexer book and own orders, and the token tracker. Every dependency comes
 // through `Services` and nothing touches the DOM, so tests can use fakes.
 import type { BookOrderView, LevelView, OrderView, PairBookView, PairLevelView } from '../data/indexer-types';
-import { indexerPresent, judgePresent } from '../kob/chain-present';
+import { currentAnchor, indexerPresent, isUserNamedNode, judgePresent, recordAnchor } from '../kob/chain-present';
 import { incompleteAsNull } from '../data/indexer';
 import { declaredToken } from '../data/token-declarations';
 import type { CancelEnv } from '../kob/cancel';
@@ -41,8 +41,10 @@ export function tokenMarketOf(s: Pick<Services, 'kob' | 'registry'>, token: Toke
 export async function readAgreedClock(s: Pick<Services, 'node'> & Partial<Pick<Services, 'indexer'>>, floorDaa: bigint | null = null): Promise<Clock> {
   const ix = s.indexer;
   const [c, h] = await Promise.all([readClock(s), ix && typeof ix.health === 'function' ? Promise.resolve().then(() => ix.health({ priority: 'high' })).catch(() => null) : Promise.resolve(null)]);
-  const p = judgePresent(c.daa, { indexer: indexerPresent(h, Date.now()), floor: floorDaa });
-  return { ...c, witness: p.verdict, witnessReason: p.reason };
+  const now = Date.now();
+  recordAnchor(h, now);
+  const p = judgePresent(c.daa, { indexer: indexerPresent(h, now), floor: floorDaa, anchor: currentAnchor(now), nowMs: now, userNode: isUserNamedNode() });
+  return { ...c, witness: p.verdict, witnessReason: p.reason, toleranceDaa: p.toleranceDaa };
 }
 
 /** The highest `blockDaaScore` of the coins a plan read: the present is not below it. */

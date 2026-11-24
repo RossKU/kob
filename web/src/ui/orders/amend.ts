@@ -86,7 +86,7 @@ export interface AmendOptions {
    */
   kob?: KobWasm;
   /** The verdict on the chain's present the renewal counts from (kob/chain-present.ts). */
-  nowWitness?: 'agreed' | 'unverified' | 'disagree';
+  nowWitness?: 'agreed' | 'anchored' | 'own-node' | 'unverified' | 'disagree';
 }
 
 /** The renewed expiry, or an issue when the clock is unknown. */

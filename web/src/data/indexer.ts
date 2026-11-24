@@ -16,6 +16,7 @@ import type {
   FillNoticeView, BookNotice, OrderNotice, ReorgNotice, HealthCursorNotice, HealthTickNotice,
   ActivityStatsView, CandleInterval, CandlesView, DepthView, QuotesView, StatsView, TradesView, PairBookView, PairCandlesView, PairFillsView, PairSummaryView,
 } from './indexer-types';
+import { recordAnchor } from '../kob/chain-present';
 import { adaptPairCandles, adaptPairFills, adaptPairSummaries, sanitizePairBook } from './pair-api';
 import type { Hex } from '../kob/types';
 import { dropZeroDepthLevels, dropEmptyRows } from './book-view';
@@ -581,7 +582,10 @@ export class HttpIndexer implements IndexerApi {
   }
 
   async health(o?: RequestOptions) {
-    return this.get<HealthView>('/v1/health', {}, o);
+    const h = await this.get<HealthView>('/v1/health', {}, o);
+    // the last verified present, the chain-time witness while the indexer is down (kob/chain-present.ts)
+    recordAnchor(h, Date.now());
+    return h;
   }
 
   async tokens(o?: RequestOptions) {

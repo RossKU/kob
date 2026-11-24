@@ -2,6 +2,7 @@
 // indexer, registry), providers, then App. A failure anywhere in that chain shows a clear error
 // page with details and a retry, never a blank page.
 import { render } from 'preact';
+import { setUserNamedNode } from './kob/chain-present';
 import './styles.css';
 import { App } from './app/App';
 import { ServicesContext, WalletProvider } from './app/context';
@@ -47,6 +48,9 @@ async function boot(): Promise<void> {
   try {
     const { config, warnings, storedOverrides } = await loadConfigWithWarnings();
     applyNetworkToHead(config.network);
+    // a node the user named in the settings (not a link, not the resolvers) is trusted for the
+    // chain's time by that choice (kob/chain-present.ts)
+    setUserNamedNode(storedOverrides.some((o) => o.field === 'nodeUrl'));
     const services = await createServices(config);
     // Amounts of tokens in sentences are whole tokens, as the pages show them, never "base units".
     installTokenAmounts(services.registry, config.network);
