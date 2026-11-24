@@ -270,9 +270,9 @@ web app (through `kob-wasm`), kobd and the tools share.
   state against the order's own: token, owner, amount, extension commitment (class) and no borrow setting. A unit of the
   token's covenant id of another class is a stray, never the custody. A cancel-replace's new order must pin the class of
   the tokens it takes.
-- **A sweep never takes a custody.** A "stray" whose state is exactly a custody the order still pins is refused; a twin of
-  the custody (the same state at another outpoint) is swept only next to the custody it keeps (`SweepOrder.kept`). An
-  unbound curve is not swept. `kob sweep` keeps the custody it finds from the order's state.
+- **A sweep never takes a custody.** A "stray" whose state is exactly a custody the order still pins is refused, with no
+  exception: a twin of the custody (the same state at another outpoint) stays with the order, and its cancel takes it.
+  An unbound curve is not swept. `kob sweep` says once when it leaves such a unit with the order.
 - `kob cancel`, `sweep`, `replace`, `take` and `recover` take the custody's whole state from the order's own state and
   accept any node UTXO at that script; a view or file naming another custody is not trusted. With none on the node,
   nothing is built.
@@ -284,9 +284,8 @@ web app (through `kob-wasm`), kobd and the tools share.
 - **`kob take`** refuses an order whose token program or class is not the market's. When no list names the class, the
   plan says the class is the order's own.
 - **`kob recover --cancel`** shows the decoded transaction and fee before it asks, and says that strays the node cannot
-  list are lost with the order. `--custody-gone` ends a live order whose custody the node shows nowhere, without it: it
-  returns the order's KAS only, says so, and is confirmed at a terminal, never with `--yes`
-  (`build_cancel_custody_gone`, kob-wasm `buildCancelCustodyGone`).
+  list are lost with the order. Where the node shows no custody of the state the order pins, it says so and builds
+  nothing.
 - **Text from outside.** `kob` shows tickers, names, server and node errors and the watch feed with control, line
   separator, bidirectional and invisible characters escaped as `\uXXXX`, cut at 160 characters (errors at 400). The
   escape is JSON's own, so `--json` output (and `kob watch --json`) stays valid JSON whose strings parse back to the
