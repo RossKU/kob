@@ -7,6 +7,24 @@ const view = (over: Partial<HealthView> = {}): HealthView => ({
 });
 const base = { error: null, configured: true, network: 'testnet-10' };
 
+/** An older indexer's answer: no `lag_seconds` key at all. */
+const older = (over: Partial<HealthView> = {}): HealthView => {
+  const v = view(over) as Partial<HealthView>;
+  delete v.lag_seconds;
+  return v as HealthView;
+};
+
+describe('lag_seconds sent as null is unknown, never read from the node\'s DAA claim (R8B-L1)', () => {
+  it('a current indexer that does not know its cursor time yet: no lag estimate, marked unknown', () => {
+    const a = assessIndexerHealth({ ...base, health: view({ lag_seconds: null, lag_daa: 13_000 }) });
+    expect(a.lagEstimate).toBeNull();
+    expect(a.lagUnknown).toBe(true);
+    const b = assessIndexerHealth({ ...base, health: older({ lag_daa: 13_000 }) });
+    expect(b.lagEstimate).toBe(1_300);
+    expect(b.lagUnknown).toBeUndefined();
+  });
+});
+
 describe('assessIndexerHealth', () => {
   it('reports an unconfigured indexer as unknown, not as a failure', () => {
     expect(assessIndexerHealth({ ...base, health: null, configured: false })).toMatchObject({ level: 'unknown', code: 'not-configured', fresh: false });
@@ -42,8 +60,9 @@ describe('assessIndexerHealth', () => {
     // DAA lag at ~10 DAA per second).
     expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: 5, lag_daa: 52 }) })).toMatchObject({ level: 'ok', code: 'ok' });
     expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: 36 }) }).level).toBe('ok');
-    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: null, lag_daa: 1199 }) }).level).toBe('ok');
-    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: null, lag_daa: 1201 }) })).toMatchObject({ level: 'warn', code: 'catching-up' });
+    // an older indexer that sends no lag_seconds at all is judged by its DAA lag
+    expect(assessIndexerHealth({ ...base, health: older({ state: 'catching_up', lag_daa: 1199 }) }).level).toBe('ok');
+    expect(assessIndexerHealth({ ...base, health: older({ state: 'catching_up', lag_daa: 1201 }) })).toMatchObject({ level: 'warn', code: 'catching-up' });
     expect(assessIndexerHealth({ ...base, health: view({ state: 'starting', lag_seconds: 12 }) }).level).toBe('ok');
     // a node outage or a gap is not a lag question: always announced
     expect(assessIndexerHealth({ ...base, health: view({ state: 'gap', lag_seconds: 1 }) }).level).toBe('bad');
