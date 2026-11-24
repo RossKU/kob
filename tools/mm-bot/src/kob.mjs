@@ -127,7 +127,9 @@ export class Kob {
   async balances(tokenId) {
     const r = await this.exec(['balances']);
     if (r.code !== 0 || !r.json?.kas) throw new Error(`kob balances: exit ${r.code}: ${r.stderr}`);
-    const rowOf = (row) => ({ free: Number(row?.free ?? 0), inOrders: Number(row?.in_orders ?? 0), freeUtxos: Number(row?.free_utxos ?? 0), decimals: row?.decimals ?? null, freeVerified: row?.free_verified ?? null });
+    const rowOf = (row) => ({ free: Number(row?.free ?? 0), inOrders: Number(row?.in_orders ?? 0), freeUtxos: Number(row?.free_utxos ?? 0), decimals: row?.decimals ?? null, freeVerified: row?.free_verified ?? null,
+      // A list an outsider lengthened is read in part: `free` is then at least that (R9T-1).
+      freeComplete: row?.free_complete !== false });
     const row = (r.json.tokens ?? []).find((t) => t.token === tokenId);
     return {
       tokens: Object.fromEntries((r.json.tokens ?? []).map((t) => [t.token, rowOf(t)])),
@@ -148,6 +150,9 @@ export class Kob {
     const dec = this.cfg.token?.decimals;
     return ['place', 'limit', '--token', tokenId, '--side', side, '--amount', `${amountBase}base`, '--price', `${priceSompi}sompi`,
       ...(dec != null ? ['--decimals', String(dec)] : []), ...(gtd ? ['--gtd', gtd] : []),
+      // A quote is a resting limit, never an auction: one that would cross the market is refused
+      // (MARKETABLE_REJECTED) and its level waits for the next cycle.
+      '--crossing', 'reject',
       // Whole-fill asks: the minimum fill is the whole amount, so only a full fill takes it.
       ...(side === 'sell' && this.cfg.quotes?.askPartialFills === false ? ['--min-fill', `${amountBase}base`] : [])];
   }
@@ -171,7 +176,8 @@ export class Kob {
 
   /** An amend in place to a new price and, with `gtd`, a new expiry. */
   amend(id, priceSompi, gtd = null) {
-    return this.sign(['replace', id, '--price', `${priceSompi}sompi`, ...(gtd ? ['--gtd', gtd] : [])]);
+    // An amended price is the trading price; one that would cross the market is refused (kob replace's default, named).
+    return this.sign(['replace', id, '--price', `${priceSompi}sompi`, '--crossing', 'reject', ...(gtd ? ['--gtd', gtd] : [])]);
   }
 
   cancel(id) {

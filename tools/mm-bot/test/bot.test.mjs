@@ -2080,3 +2080,63 @@ test('an exact amend not found at either state stays in flight (R8T-4)', () => {
   bot.resolveInflight(s, { status: 'live', txid: 'f1'.repeat(32) });
   assert.equal(s.inflight.length, 0, 'the node holds it at its own outpoint');
 });
+
+// Round 9: quotes never rest as auctions; the CLI's new refusals are ordinary outcomes.
+test('quotes are placed and amended with --crossing reject; a level through the market waits, not counted as a refusal', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, calls } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    bot.kob.env.FAKE_KOB_CROSS = '1';
+    for (let i = 0; i < 4; i++) await bot.cycle();
+    assert.equal(places(calls).length, 0, 'nothing placed through the market');
+    assert.equal(bot.state.placeFails ?? 0, 0, 'not counted toward IDLE/placement');
+    assert.notEqual(bot.state.mode.reason, 'placement');
+    delete bot.kob.env.FAKE_KOB_CROSS;
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const sent = places(calls);
+    assert.ok(sent.length > 0);
+    assert.ok(sent.every((a) => a[a.indexOf('--crossing') + 1] === 'reject'), 'every placement: --crossing reject');
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle();
+    const amends = calls().filter((a) => a[0] === 'replace');
+    assert.ok(amends.length > 0 && amends.every((a) => a[a.indexOf('--crossing') + 1] === 'reject'), 'every amend: --crossing reject');
+  } finally {
+    delete bot.kob.env.FAKE_KOB_CROSS;
+    reset();
+  }
+});
+
+test('a disputed chain time skips timed placements with one alert, not counted as a refusal', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, dir } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    bot.kob.env.FAKE_KOB_CLOCK = '1';
+    for (let i = 0; i < 4; i++) await bot.cycle();
+    assert.equal(bot.state.placeFails ?? 0, 0);
+    assert.equal(alertsOf(dir).filter((x) => x.reason === 'clock-disputed').length, 1, 'one alert');
+  } finally {
+    delete bot.kob.env.FAKE_KOB_CLOCK;
+    reset();
+  }
+});
+
+test('a token list read in part is a lower bound, with one alert (R9T-1 at the CLI)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, dir } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    bot.kob.env.FAKE_KOB_TOKEN_CUT = 'the list did not end after 20 pages';
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    assert.equal(alertsOf(dir).filter((x) => x.reason === 'token-list-incomplete').length, 1);
+    assert.equal(bot.state.tokenListCut, true);
+    delete bot.kob.env.FAKE_KOB_TOKEN_CUT;
+    await bot.cycle();
+    assert.equal(bot.state.tokenListCut, false);
+  } finally {
+    delete bot.kob.env.FAKE_KOB_TOKEN_CUT;
+    reset();
+  }
+});
+

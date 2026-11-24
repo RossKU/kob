@@ -155,6 +155,11 @@ On testnet-10 it is a warning. They also refuse until `quotes.askPartialFills` i
   The bot reads the maker list for its token only, newest first, at most 1,000 orders (10 pages of 100). When that cap
   is reached with more left (anyone can post orders under the bot's key), an order the list leaves out may only be
   older: it is not taken as hidden and not cancelled for it, and the bot goes on from its own record and the node.
+- **Quotes are resting limits.** Every placement and amend passes `--crossing reject`: a quote never rests as an
+  auction, and one that would cross the market is refused; its level waits for the next cycle (not counted as a refused
+  placement). While the node's and the indexer's chain time disagree (`CLOCK_DISPUTED`), no timed quote is placed, with one
+  alert an hour; cancels go through. A token list the CLI read only in part (`free_complete: false`) is a lower bound:
+  the ask side is sized on it, with one alert.
 - **A refused amend.** When the CLI refuses an order's amend twice in a row (for example: anyone can send a stray token
   UTXO to an order, and `kob replace` then refuses until it is swept), the bot cancels the order through the node
   (`kob recover --cancel`, which strays do not block), raises one `amend-refused` alert with the CLI's reason, and places

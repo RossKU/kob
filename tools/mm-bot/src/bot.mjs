@@ -231,6 +231,9 @@ export class Bot {
       await this.blindPull(stop, snap, now, e);
       throw e;
     }
+    // A token list read in part is a lower bound (R9T-1): sizing then quotes less, never more.
+    if (!bal.token.freeComplete && !this.state.tokenListCut) this.alert('warn', 'token-list-incomplete', `The token UTXOs of the bot's key were read only in part (someone may have sent it many small ones): its free tokens are at least what was read, and the ask side is sized on that. kob merge folds what it reads; the bot merges before its asks.`);
+    this.state.tokenListCut = !bal.token.freeComplete;
     if (bal.token.decimals != null && bal.token.decimals !== c.token.decimals) {
       throw new Error(`the CLI reports ${bal.token.decimals} decimals for the token, the config says ${c.token.decimals}: fix token.decimals`);
     }
@@ -1635,6 +1638,20 @@ export class Bot {
       // In flight (R7T-1): it ends as "never went out" only once its expiry has passed by 2 h.
       this.noteInflight(rec, { kind: 'place', txid, exact: false, expiresAt });
       this.alert('warn', 'place-unknown', `A placement (${a.side} L${a.level}) may have gone out (${r.error}); it counts toward the caps as order ${short(id)} until the node says.`);
+      return;
+    }
+    // A level through the market (--crossing reject) or a timed order while the node's and the
+    // indexer's time disagree: an ordinary outcome, the level waits for the next cycle (not a
+    // refusal toward IDLE/placement). The codes are the CLI's issue codes, printed in brackets.
+    if (/\[MARKETABLE_REJECTED\]/.test(r.error ?? '')) {
+      this.log.info(`place ${a.side} L${a.level}: the level is through the market; it waits for the next cycle`);
+      return;
+    }
+    if (/\[CLOCK_DISPUTED\]/.test(r.error ?? '')) {
+      if (Date.now() - (this.clockAlertAt ?? 0) > 3_600_000) {
+        this.clockAlertAt = Date.now();
+        this.alert('warn', 'clock-disputed', `The node's and the indexer's view of the chain's time disagree: no timed quote is placed until they agree (cancels go through). Check the indexer and the node.`);
+      }
       return;
     }
     this.state.placeFails = (this.state.placeFails ?? 0) + 1;

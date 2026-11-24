@@ -25,8 +25,8 @@ export function orderState({ side, price, amount, minFill = null, expiryDaa = '0
 }
 
 /**
- * The one --json document of a signing command (`finish`, crates/kob-cli/src/trade/flow.rs:85-93
- * and the result at :152-165): `transaction` is `show::json_of` (show.rs:219-236), `issues`
+ * The one --json document of a signing command (`finish`, crates/kob-cli/src/trade/flow.rs:119-127
+ * and the result at :187-194): `transaction` is `show::json_of` (show.rs:271-288), `issues`
  * `issues_json` (flow.rs:51-53). `result` is null for a dry run.
  */
 export function signDoc({ action, plan, txid, fee, ids = [], submitted = false, issues = [] }) {
@@ -38,13 +38,13 @@ export function signDoc({ action, plan, txid, fee, ids = [], submitted = false, 
   };
 }
 
-/** `kob place` plan (crates/kob-cli/src/trade/place.rs:1041-1044): the states, and the request (`CreateOrder`, kob-protocol build.rs:542-568). */
+/** `kob place` plan (crates/kob-cli/src/trade/place.rs:1044-1047): the states, and the request (`CreateOrder`, kob-protocol build.rs:542-568). */
 export function placePlan(state, value) {
   return { states: [state], request: { order: state, value: String(value), tokens: [], tokenCarrier: '100000000', funding: [], change: null, lockTime: '0', deadline: null, records: [], fee: {} } };
 }
 
 /**
- * `kob replace` plan of a plain ask or bid (crates/kob-cli/src/trade/actions.rs:746): no
+ * `kob replace` plan of a plain ask or bid (crates/kob-cli/src/trade/actions.rs:924): no
  * `states`, also for a cancel-replace; only `replan_replace` (cond, if-done, pair kinds, :894)
  * adds them.
  */
@@ -52,18 +52,23 @@ export function replacePlan(order, inPlace, current, replacement, value) {
   return { order, inPlace, current, replacement, value: String(value) };
 }
 
-/** `kob balances` (crates/kob-cli/src/trade/views.rs:776-795). */
-export function balancesDoc({ maker, kasFree, token, decimals = 6, free, freeUtxos }) {
+/**
+ * `kob balances` (crates/kob-cli/src/trade/views.rs:825-852): a row read only in part (R9T-1: a holdings list an
+ * outsider lengthened) says `free_complete: false` and why; the document says `incomplete`.
+ */
+export function balancesDoc({ maker, kasFree, token, decimals = 6, free, freeUtxos, cut = null }) {
   return {
     maker, kas: { free: String(kasFree), locked: '0', total: String(kasFree) },
-    tokens: [{ token, ticker: 'TUSDC6', declared_ticker: null, decimals, free: String(free), free_utxos: freeUtxos, free_verified: true, in_orders: '0', bought: '0', strays: '0',
+    tokens: [{ token, ticker: 'TUSDC6', declared_ticker: null, decimals, free: String(free), free_utxos: freeUtxos, free_verified: true, free_complete: cut == null, free_incomplete_reason: cut, in_orders: '0', bought: '0', strays: '0',
       kas_escrow: '0', kas_carriers: '0', kas_locked: '0', orders: 0, text: { name: 'TUSDC6', free: '0', in_orders: '0', bought: '0', strays: '0', kas_locked: '0' } }],
     skipped: [],
+    incomplete: cut != null,
+    incomplete_reason: null,
   };
 }
 
-/** One `kob recover` report entry (crates/kob-cli/src/recover.rs:849-884); `live` adds the node's fields. */
-export function recoverEntry({ id, kind, tpl, status, note = null, live = null, cancel = null }) {
+/** One `kob recover` report entry (crates/kob-cli/src/recover.rs:853-888); `live` adds the node's fields. */
+export function recoverEntry({ id, kind, tpl, status, note = '', live = null, cancel = null }) {
   const e = { covenant_id: id, kind, template: `${kind} (pinned)`, template_hash: tpl, maker: MAKER, status, note, source: 'own-orders.json', candidates: 1 };
   if (live) {
     Object.assign(e, { outpoint: `${live.txid}:0`, value: String(live.value), utxo_daa: '1000', state: 'ab', amount_left: live.amountLeft == null ? null : String(live.amountLeft),
@@ -73,21 +78,21 @@ export function recoverEntry({ id, kind, tpl, status, note = null, live = null, 
   return e;
 }
 
-/** A cancel of `kob recover --cancel` (crates/kob-cli/src/recover.rs:982-991). */
+/** A cancel of `kob recover --cancel` (crates/kob-cli/src/recover.rs:989-998). */
 export const recoverCancel = (txid, fee, submitted = true) => ({ status: submitted ? 'submitted' : 'signed', txid, fee: String(fee), funding: 'order', file: null, engine_validated: true });
 
-/** The `kob recover` report (crates/kob-cli/src/recover.rs:888-903). */
+/** The `kob recover` report (crates/kob-cli/src/recover.rs:891-906). */
 export function recoverReport(orders, rejected = []) {
   const n = (s) => orders.filter((o) => o.status === s).length;
   return { network: 'testnet-10', node: 'ws://127.0.0.1:18210', orders, rejected,
     summary: { live: n('live'), not_found: n('not_found'), unsupported: n('unsupported'), other_maker: n('other_maker'), rejected: rejected.length } };
 }
 
-/** `kob merge` (crates/kob-cli/src/trade/merge.rs:347-356 and the links at :427-430, :440). */
+/** `kob merge` (crates/kob-cli/src/trade/merge.rs:354-363 and the links at :434-437, :447). */
 export function mergeDoc({ token, before, txids, fee }) {
   return { action: 'merge TUSDC6', network: 'testnet-10', token, utxos_before: before, utxos_after: 1, transactions: txids.length, merged_amount: '0', fee: String(fee),
     links: txids.map((txid, i) => ({ link: i + 1, status: 'submitted', txid, fee: String(fee) })) };
 }
 
-/** `kob --version` (crates/kob-cli/src/main.rs:184-191). */
+/** `kob --version` (crates/kob-cli/src/main.rs:186-193). */
 export const VERSION_LINE = 'kob 0.1.0 (development build, no network, commit unknown)';
