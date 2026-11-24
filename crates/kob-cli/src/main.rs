@@ -265,6 +265,18 @@ fn dispatch(args: &[String]) -> i32 {
     }
 }
 
+/// Whatever kob creates (a key file, a plan, a log) is never writable by the group or others,
+/// whatever the umask it was started with (audit 2026-11-24 R6D-1). Before any file is created.
+#[cfg(unix)]
+fn no_group_write_umask() {
+    // SAFETY: umask has no preconditions and cannot fail; it is read and set again at once,
+    // before any other thread exists.
+    unsafe {
+        let old = libc::umask(0o022);
+        libc::umask(old | 0o022);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,17 +298,5 @@ mod tests {
         for c in COMMANDS {
             assert!(USAGE.contains(&format!("kob {c} ")) || USAGE.contains(&format!("kob {c}\n")), "{c}");
         }
-    }
-}
-
-/// Whatever kob creates (a key file, a plan, a log) is never writable by the group or others,
-/// whatever the umask it was started with (audit 2026-11-24 R6D-1). Before any file is created.
-#[cfg(unix)]
-fn no_group_write_umask() {
-    // SAFETY: umask has no preconditions and cannot fail; it is read and set again at once,
-    // before any other thread exists.
-    unsafe {
-        let old = libc::umask(0o022);
-        libc::umask(old | 0o022);
     }
 }
