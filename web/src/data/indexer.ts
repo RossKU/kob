@@ -355,6 +355,12 @@ export interface HttpIndexerOptions {
  * their priority (`RequestOptions.priority`).
  */
 export const INDEXER_MAX_IN_FLIGHT = 6;
+/**
+ * The same over `http:`, which a browser speaks only as HTTP/1.1, with about six sockets per host:
+ * one stays free for the health probe, which skips this queue but not the browser's (R6B-I3).
+ * Over `https:` the protocol is not known to the page; it is HTTP/2 behind the public CDN.
+ */
+export const INDEXER_MAX_IN_FLIGHT_HTTP1 = 5;
 /** Retries of a `503 overloaded`, apart from the other retries. */
 export const OVERLOADED_RETRIES = 3;
 
@@ -411,7 +417,7 @@ class InFlightLimit {
 const inFlightLimits = new Map<string, InFlightLimit>();
 function inFlightLimitOf(base: string): InFlightLimit {
   let l = inFlightLimits.get(base);
-  if (!l) inFlightLimits.set(base, (l = new InFlightLimit(INDEXER_MAX_IN_FLIGHT)));
+  if (!l) inFlightLimits.set(base, (l = new InFlightLimit(/^http:/i.test(base) ? INDEXER_MAX_IN_FLIGHT_HTTP1 : INDEXER_MAX_IN_FLIGHT)));
   return l;
 }
 

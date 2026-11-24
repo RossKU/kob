@@ -185,12 +185,27 @@ describe('HttpIndexer errors and backoff', () => {
       return json({ token: H1, price_basis: 'kas' });
     }) as typeof fetch;
     // two clients of one base URL, as the failover may build, share the limit
-    const a = new HttpIndexer({ baseUrl: 'http://limit-a', fetch: f });
-    const b = new HttpIndexer({ baseUrl: 'http://limit-a/', fetch: f });
+    const a = new HttpIndexer({ baseUrl: 'https://limit-a', fetch: f });
+    const b = new HttpIndexer({ baseUrl: 'https://limit-a/', fetch: f });
     const got = await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? a : b).stats(H1)));
     expect(got).toHaveLength(20);
     expect(got.every((g) => g !== null)).toBe(true);
     expect(peak).toBe(6);
+  });
+
+  it('over http: (HTTP/1.1 in a browser) it keeps 5, so one socket stays free for the health probe (R6B-I3)', async () => {
+    let open = 0;
+    let peak = 0;
+    const f = (async () => {
+      open++;
+      peak = Math.max(peak, open);
+      await new Promise((r) => setTimeout(r, 5));
+      open--;
+      return json({ token: H1, price_basis: 'kas' });
+    }) as typeof fetch;
+    const ix = new HttpIndexer({ baseUrl: 'http://localhost:8787', fetch: f });
+    await Promise.all(Array.from({ length: 12 }, () => ix.stats(H1)));
+    expect(peak).toBe(5);
   });
 
   it('a waiting high read gets the next free place, then the unmarked ones, then low; reads in flight are not interrupted (R6B-L1)', async () => {
@@ -203,7 +218,7 @@ describe('HttpIndexer errors and backoff', () => {
       init?.signal?.addEventListener('abort', () => aborted.push(tag));
       return new Promise<Response>((r) => pending.push(() => r(json({ token: H1, price_basis: 'kas', items: [] }))));
     }) as typeof fetch;
-    const ix = new HttpIndexer({ baseUrl: 'http://limit-prio', fetch: f, timeoutMs: 60_000 });
+    const ix = new HttpIndexer({ baseUrl: 'https://limit-prio', fetch: f, timeoutMs: 60_000 });
     // six background reads hold every place
     const held = Array.from({ length: 6 }, (_, i) => ix.trades(H1, { limit: 100 + i }, { priority: 'low' }));
     await new Promise((r) => setTimeout(r, 0));
@@ -229,7 +244,7 @@ describe('HttpIndexer errors and backoff', () => {
       urls.push(new URL(String(input)).searchParams.get('limit') ?? '?');
       return new Promise<Response>((_r, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
     }) as typeof fetch;
-    const ix = new HttpIndexer({ baseUrl: 'http://limit-giveup', fetch: f, timeoutMs: 60_000 });
+    const ix = new HttpIndexer({ baseUrl: 'https://limit-giveup', fetch: f, timeoutMs: 60_000 });
     const ctls = Array.from({ length: 6 }, () => new AbortController());
     const held = ctls.map((c, i) => ix.trades(H1, { limit: 100 + i }, { signal: c.signal }).catch((e) => e));
     const c2 = new AbortController();
@@ -252,7 +267,7 @@ describe('HttpIndexer errors and backoff', () => {
       if (new URL(String(input)).pathname === '/v1/health') return Promise.resolve(json({ ok: true }));
       return new Promise<Response>((r) => pending.push(() => r(json({ token: H1, price_basis: 'kas' }))));
     }) as typeof fetch;
-    const ix = new HttpIndexer({ baseUrl: 'http://limit-b', fetch: f, timeoutMs: 60_000 });
+    const ix = new HttpIndexer({ baseUrl: 'https://limit-b', fetch: f, timeoutMs: 60_000 });
     const held = Array.from({ length: 6 }, () => ix.stats(H1));
     const ctl = new AbortController();
     const queued = ix.stats(H1, { signal: ctl.signal });
@@ -277,7 +292,7 @@ describe('HttpIndexer errors and backoff', () => {
       await new Promise((r) => setTimeout(r, 30));
       return json({ token: H1, price_basis: 'kas' });
     }) as typeof fetch;
-    const ix = new HttpIndexer({ baseUrl: 'http://limit-c', fetch: f, timeoutMs: 50 });
+    const ix = new HttpIndexer({ baseUrl: 'https://limit-c', fetch: f, timeoutMs: 50 });
     // 18 reads of 30 ms each through 6 places take about 90 ms, longer than the 50 ms timeout
     const got = await Promise.all(Array.from({ length: 18 }, () => ix.stats(H1)));
     expect(got.every((g) => g !== null)).toBe(true);
