@@ -1090,11 +1090,10 @@ fn candidate_search() {
     assert!(decode_state(tpl, &[0u8; 3]).is_err());
     assert_eq!(decode_state(tpl, &placed.encode()).unwrap(), placed);
     assert!(encode_state(TemplateId::KobBid, &placed).is_err());
-    // The custody a state implies: KCC-20 needs the extension commitment, a bid none.
-    assert!(recover::custody_target(&placed, A1, None).is_err());
-    let (st, _) = recover::custody_target(&placed, A1, Some(EXT)).unwrap().unwrap();
-    assert_eq!((st.amount(), st.owner()), (10 * SCALE, A1));
-    assert!(recover::custody_target(&bid_state, A2, None).unwrap().is_none());
+    // The custody a state implies: the whole state its order pins, its class included (R8F3c-1); a bid holds none.
+    let (st, _) = recover::custody_target(&placed, A1).unwrap().unwrap();
+    assert_eq!((st.amount(), st.owner(), st.extension()), (10 * SCALE, A1, EXT));
+    assert!(recover::custody_target(&bid_state, A2).unwrap().is_none());
 }
 
 /// R2A-1: a Collected pair sell's fill moves both `amountLeft` (by the A sold) and `bought` (by the
@@ -1244,11 +1243,12 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     }
     let d = &c.disclosure;
     assert!(d.contains("the custody (10000 units of") && d.contains("the custody (2009 units of"), "{d}");
-    // A view without the prefund custody is refused (the cancel must return both).
+    // A view without the prefund custody: both are found from the state at their scripts, and both return (R8F3c-1).
     let mut no_b = bv.clone();
     no_b["pair"] = json!({"custodies": [{"token": to_hex(&TOKEN), "utxo": no_b["custody"]["utxo"].clone()}]});
-    assert_eq!(why(prep(&o_cancel, &no_b, 1)).0, "refused");
-    assert_eq!(run_op(order::Op::Cancel, &url, &write(&dir, "b1x.json", &no_b), "--yes"), 1);
+    let nb = prep(&o_cancel, &no_b, 1).ok().expect("built");
+    let spent: Vec<[u8; 32]> = nb.built.tx.inputs.iter().map(|i| i.transaction_id).collect();
+    assert!(spent.contains(&[0xd2; 32]) && spent.contains(&[0xd3; 32]), "both custodies");
 
     // A pair BID: its custody is the B escrow (token B's program).
     let mut cy = tview(P, TOKEN_B, 0xe2, y_escrow, B2, false, true);
@@ -1577,4 +1577,120 @@ fn recover_finds_an_unbound_curve_after_its_first_fill() {
     assert_eq!(o["custody"]["status"], "verified", "{o}");
     assert_eq!(o["cancel"]["status"], "signed", "{o}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The class of a decoy (R8F3c-1).
+const DECOY: [u8; 32] = [0x99; 32];
+
+/// A decoy of A1's custody: the same amount owned by A1, of another extension commitment.
+fn decoy_state() -> TokenState {
+    TokenState::custody(Family::Kcc20, 10 * SCALE, A1, DECOY)
+}
+
+fn decoy_view(tag: u8) -> Value {
+    let mut t = tview(P, TOKEN, tag, 10 * SCALE, A1, false, true);
+    t["state"] = serde_json::to_value(decoy_state()).unwrap();
+    t["role"] = json!("custody");
+    t
+}
+
+/// R8F3c-1, R8F3c-4: the custody a cancel spends is what the order's state pins, found at its script on the node, never
+/// what the view names. A view whose custody is a decoy of another class (and which leaves the real custody out) cancels
+/// with the real custody when the decoy does not exist, and is refused with "sweep first" when it does, since the decoy
+/// cannot leave in the same transaction and a cancel would lock it for ever. A recover file naming the decoy's class finds
+/// the real custody.
+#[test]
+fn a_cancel_takes_the_custody_its_order_pins_never_the_views_decoy() {
+    let f = fixture();
+    let o_cancel = opts(order::Op::Cancel, "");
+    let lying =
+        |f: &Fixture| view(A1, template(TemplateId::KobAsk).hash, any_json(&f.a1), (0x11, 0), CARRIER, Some(decoy_view(0x19)), vec![]);
+    // The decoy does not exist: the real custody (0x12) is found from the state and returned.
+    let (url, _node) = mock::start(f.utxos.clone());
+    let o = order::Opts { node: url.clone(), ..o_cancel.clone() };
+    let c = prep(&o, &lying(&f), 1).ok().expect("built");
+    let spent: Vec<[u8; 32]> = c.built.tx.inputs.iter().map(|i| i.transaction_id).collect();
+    assert!(spent.contains(&[0x12; 32]) && !spent.contains(&[0x19; 32]), "{spent:?}");
+    assert!(c.left.iter().any(|l| l["reason"] == "not on the node"), "{:?}", c.left);
+    // The decoy exists on the node: the cancel is refused and says to sweep first; nothing is built.
+    let mut utxos = f.utxos.clone();
+    utxos.push(node_utxo(&decoy_state().spk_with(token_template(P)), 0x19, 0, CARRIER, Some(TOKEN)));
+    let (url, node) = mock::start(utxos);
+    let o = order::Opts { node: url.clone(), ..o_cancel.clone() };
+    let (status, reason) = why(prep(&o, &lying(&f), 1));
+    assert_eq!(status, "refused");
+    assert!(reason.contains("kob sweep") && reason.contains("another extension commitment"), "{reason}");
+    let dir = tmp("decoy");
+    let file = write(&dir, "lying.json", &lying(&f));
+    assert_eq!(run_op(order::Op::Cancel, &url, &file, "--yes"), 1);
+    assert!(node.lock().unwrap().submitted.is_empty());
+    // The sweep returns the decoy and leaves the custody where it is.
+    let sw = prep(&order::Opts { op: order::Op::Sweep, ..o.clone() }, &lying(&f), 1).ok().expect("built");
+    let spent: Vec<[u8; 32]> = sw.built.tx.inputs.iter().map(|i| i.transaction_id).collect();
+    assert!(spent.contains(&[0x19; 32]) && !spent.contains(&[0x12; 32]), "{spent:?}");
+    // A view that names no custody at all still cancels with the one at the state's script.
+    let bare = view(A1, template(TemplateId::KobAsk).hash, any_json(&f.a1), (0x11, 0), CARRIER, None, vec![]);
+    let (url, _n) = mock::start(f.utxos.clone());
+    let c = prep(&order::Opts { node: url, ..o_cancel.clone() }, &bare, 1).ok().expect("built");
+    assert!(c.built.tx.inputs.iter().any(|i| i.transaction_id == [0x12; 32]));
+    // No UTXO of exactly the pinned state on the node: refused, never "the one with the right amount".
+    let only_decoy: Vec<NodeUtxo> = f
+        .utxos
+        .iter()
+        .filter(|u| u.txid != [0x12; 32])
+        .cloned()
+        .chain([node_utxo(&decoy_state().spk_with(token_template(P)), 0x19, 0, CARRIER, Some(TOKEN))])
+        .collect();
+    let (url, _n) = mock::start(only_decoy);
+    let (status, reason) = why(prep(&order::Opts { node: url, ..o_cancel.clone() }, &lying(&f), 1));
+    assert_eq!(status, "refused");
+    assert!(reason.contains("no custody of exactly the state the order pins"), "{reason}");
+    // `kob recover --cancel` from a file that names the decoy's class: the real custody is found and cancelled.
+    let mut utxos = f.utxos.clone();
+    utxos.push(node_utxo(&decoy_state().spk_with(token_template(P)), 0x19, 0, CARRIER, Some(TOKEN)));
+    let (url, _n) = mock::start(utxos);
+    let export = json!({"version": 2, "network": NET, "orders": [{"template_hash": to_hex(&template(TemplateId::KobAsk).hash),
+        "state": hex_state(&f.a1), "covenant_id": to_hex(&A1), "extension_commitment": to_hex(&DECOY)}]});
+    let ef = write(&dir, "export.json", &export);
+    let out = dir.join("out");
+    let a = recover::parse_args(&v(&format!(
+        "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key-file {} --out-dir {}",
+        ef.display(),
+        to_hex(&pk(1)),
+        keyf(1),
+        out.display()
+    )))
+    .unwrap();
+    let report = recover::execute(&a).unwrap().0;
+    assert_eq!(by_cov(&report, A1)["custody"]["outpoint"], outpoint_str_of([0x12; 32], 0), "{report}");
+    assert_eq!(by_cov(&report, A1)["cancel"]["status"], "signed", "{report}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn outpoint_str_of(txid: [u8; 32], index: u32) -> String {
+    crate::common::outpoint_str(&txid, index)
+}
+
+/// R8F3-1: a covenant-spent input's KAS is the node's word, which no signature covers. A node that reports less on the
+/// custody than the indexer's view would hide fee: the cancel is refused. The decoded transaction says how much KAS rests
+/// on the node's word.
+#[test]
+fn a_node_that_underreports_an_unsigned_input_is_refused() {
+    let f = fixture();
+    let mut utxos: Vec<NodeUtxo> = f.utxos.iter().filter(|u| u.txid != [0x12; 32]).cloned().collect();
+    let mut short = token_node_utxo(P, TOKEN, 0x12, 10 * SCALE, A1);
+    short.amount = CARRIER - 1;
+    utxos.push(short);
+    let (url, _n) = mock::start(utxos);
+    let o = opts(order::Op::Cancel, &url);
+    let (status, reason) = why(prep(&o, &a1_view(&f, (0x11, 0)), 1));
+    assert_eq!(status, "refused");
+    assert!(reason.contains("no signature covers that amount"), "{reason}");
+    // the honest node: built, and the screen names the unsigned inputs
+    let (url, _n) = mock::start(f.utxos.clone());
+    let c = prep(&opts(order::Op::Cancel, &url), &a1_view(&f, (0x11, 0)), 1).ok().expect("built");
+    let units = crate::trade::show::Units::new();
+    let d = crate::trade::show::decode(&c.built, &pk(1), &units);
+    assert_eq!(d.unsigned_inputs, c.built.tx.inputs.len() - c.built.sign.len());
+    assert!(crate::trade::show::lines(&d, &units, &c.built.tx.id).iter().any(|l| l.contains("no signature of yours covers")));
 }

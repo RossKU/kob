@@ -690,6 +690,8 @@ pub struct Disclosure {
     pub worst_price: Option<i64>,
     /// Tip.
     pub tip: i64,
+    /// The part of an if-done exit's tip that pays the merge of each repeat (0 without a repeat).
+    pub merge_tip: i64,
     /// Lines.
     pub carriers: Vec<CarrierLine>,
     /// KAS locked into covenants.
@@ -1703,6 +1705,7 @@ pub(crate) fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan 
         expected_price: d.expected_price,
         worst_price: d.worst_price,
         tip,
+        merge_tip: 0,
         carriers,
         kas_locked,
         tokens_escrowed: token_amount,
@@ -2628,6 +2631,7 @@ pub(crate) fn finish_cond(env: &Env, mut log: Vec<Issue>, spec: CondSpec) -> Pla
         expected_price: spec.expected_price,
         worst_price: Some(spec.worst_price),
         tip: spec.tip,
+        merge_tip: 0,
         carriers,
         kas_locked,
         tokens_escrowed: token_amount,
@@ -2826,9 +2830,10 @@ pub(crate) fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
     } else {
         limit_price
     };
+    // "you receive at least / pay at most" holds at the worst of the legs, the stop's band end included (R8F3c-3)
     let all_in_total = match &order {
-        AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => s.proceeds(i.amount, limit_price),
-        AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.spend(i.amount, limit_price),
+        AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => s.proceeds(i.amount, worst),
+        AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.spend(i.amount, worst),
         _ => None,
     };
     let mut notes = cond_notes(i.kind);
@@ -3320,7 +3325,11 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             notes,
         },
     );
-    Plan { new_threshold, ..plan }
+    let mut plan = Plan { new_threshold, ..plan };
+    if let Some(d) = plan.disclosure.as_mut() {
+        d.merge_tip = merge_tip;
+    }
+    plan
 }
 
 // -------------------------------------------------------------------------- pair limit (pair-*.ts)

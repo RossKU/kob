@@ -475,39 +475,39 @@ type CustodyPart = ([u8; 32], i64, [u8; 32], Option<[u8; 32]>);
 ///
 /// `Ok(None)` means that none is needed. A pair order gives its first custody.
 #[cfg(test)]
-pub fn custody_target(
-    state: &AnyState,
-    covenant_id: [u8; 32],
-    ext: Option<[u8; 32]>,
-) -> Result<Option<(TokenState, ScriptPublicKey)>, String> {
-    Ok(custody_targets(state, covenant_id, ext)?.into_iter().next().map(|(st, spk, _)| (st, spk)))
+pub fn custody_target(state: &AnyState, covenant_id: [u8; 32]) -> Result<Option<(TokenState, ScriptPublicKey)>, String> {
+    Ok(custody_targets(state, covenant_id)?.into_iter().next().map(|(st, spk, _)| (st, spk)))
 }
 
 /// Every custody that a live state holds, in record order, with its state, script and token id.
 ///
 /// A KAS kind has its one custody. A pair order has one custody for each of `AnyState::custodies`,
 /// under the program of that token. A sell-first `KobIfdPair` has its A custody, then its B
-/// prefund. `ext` is the extension commitment of the first custody, and the second one carries the
-/// `bExt` of the entry.
-pub fn custody_targets(state: &AnyState, covenant_id: [u8; 32], ext: Option<[u8; 32]>) -> Result<Vec<CustodyTarget>, String> {
+/// prefund. Each custody's whole state, its extension commitment included, is the one the order's
+/// own state pins (`AnyState::custody_ext`), never what an indexer view or a file names: a unit of
+/// another class owned by the order is a stray, and a cancel that spent it as the custody would
+/// strand the real one for ever (R8F3c-1).
+pub fn custody_targets(state: &AnyState, covenant_id: [u8; 32]) -> Result<Vec<CustodyTarget>, String> {
     let parts: Vec<CustodyPart> = match state {
         s if s.is_pair() => {
             let t = s.pair_tokens().ok_or("no pair tokens")?;
-            let b_ext = match s {
-                AnyState::KobIfdPair(i) => Some(i.b_ext),
-                _ => None,
-            };
             s.custodies()
                 .into_iter()
-                .enumerate()
-                .map(|(k, (tok, amount))| {
+                .map(|(tok, amount)| {
                     let tpl = if tok == t.a.cov_id { t.a.tpl_hash } else { t.b.tpl_hash };
-                    (tok, amount, tpl, if k == 0 { ext } else { b_ext })
+                    (tok, amount, tpl, s.custody_ext(tok))
                 })
                 .collect()
         }
         _ => match state.custody_amount() {
-            Some(a) if a > 0 => vec![(state.token_cov_id(), a, state.token_tpl_hash().ok_or("no token program")?, ext)],
+            Some(a) if a > 0 => {
+                vec![(
+                    state.token_cov_id(),
+                    a,
+                    state.token_tpl_hash().ok_or("no token program")?,
+                    state.custody_ext(state.token_cov_id()),
+                )]
+            }
             _ => vec![],
         },
     };
@@ -519,7 +519,7 @@ pub fn custody_targets(state: &AnyState, covenant_id: [u8; 32], ext: Option<[u8;
         let tt = token_template_by_hash(&hash).ok_or_else(|| format!("token program {} is not supported", to_hex(&hash)))?;
         let ext = match tt.family {
             Family::Kron => [0; 32],
-            Family::Kcc20 => ext.ok_or("unknown (no extension commitment)")?,
+            Family::Kcc20 => ext.ok_or("unknown (the order's state pins no extension commitment)")?,
         };
         let st = TokenState::custody(tt.family, amount, covenant_id, ext);
         let spk = st.spk_with(tt);
@@ -609,6 +609,9 @@ pub struct Found {
     /// A mode-1 order's bought-custody (`bought > 0`), looked up from its state. `Custody::None`
     /// for every other order.
     pub bought: Custody,
+    /// Further UTXOs of exactly a custody's (or the bought-custody's) state, owned by the order: twins that a
+    /// cancel takes along as strays, since nothing can spend them once the order's covenant id has ended.
+    pub twins: Vec<TokenUtxo>,
     /// The cancel outcome (`--cancel`).
     pub cancel: Option<Value>,
 }
@@ -643,6 +646,7 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
         custody: Custody::None,
         prefund: Custody::None,
         bought: Custody::None,
+        twins: vec![],
         cancel: None,
     };
     let (Some(tpl), Some(script)) = (f.tpl, f.script) else {
@@ -755,7 +759,7 @@ pub fn search(
     let mut targets: Vec<Vec<CustodyTarget>> = vec![];
     for f in found.iter_mut() {
         let t = match &f.live {
-            Some((_, st)) => match custody_targets(st, f.entry.covenant_id, f.entry.ext) {
+            Some((_, st)) => match custody_targets(st, f.entry.covenant_id) {
                 Ok(t) => t,
                 Err(e) => {
                     f.custody = Custody::Unknown(e);
@@ -785,7 +789,12 @@ pub fn search(
     let at = if spks.is_empty() { Default::default() } else { lookup(node, network, &spks)? };
     for (f, b) in found.iter_mut().zip(boughts) {
         if let Some((st, spk, token)) = b {
-            let hit = at.get(&spk_bytes(&spk)).and_then(|v| v.iter().find(|u| u.covenant_id == Some(token))).cloned();
+            let all: Vec<crate::wrpc::NodeUtxo> = at
+                .get(&spk_bytes(&spk))
+                .map(|v| v.iter().filter(|u| u.covenant_id == Some(token)).cloned().collect())
+                .unwrap_or_default();
+            f.twins.extend(all.iter().skip(1).map(|u| TokenUtxo { utxo: utxo_of(u), state: st.clone() }));
+            let hit = all.into_iter().next();
             f.bought = match hit {
                 Some(u) => Custody::Verified(u, st),
                 None => Custody::Missing(st),
@@ -804,7 +813,11 @@ pub fn search(
                 Some(txid) => u.txid == txid && u.covenant_id.is_some(),
                 None => u.covenant_id == Some(token),
             };
-            let hit = at.get(&spk_bytes(&spk)).and_then(|v| v.iter().find(mine)).cloned();
+            let all: Vec<crate::wrpc::NodeUtxo> =
+                at.get(&spk_bytes(&spk)).map(|v| v.iter().filter(mine).cloned().collect()).unwrap_or_default();
+            // any UTXO at the script is exactly the custody's state: the first is the custody, the rest leave with it
+            f.twins.extend(all.iter().skip(1).map(|u| TokenUtxo { utxo: utxo_of(u), state: st.clone() }));
+            let hit = all.into_iter().next();
             let c = match hit {
                 Some(u) => Custody::Verified(u, st),
                 None => Custody::Missing(st),
@@ -924,7 +937,8 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
             order: OrderUtxo { utxo: utxo.clone(), state: state.clone() },
             custody: custody.clone(),
             prefund: prefund.clone(),
-            strays: bought.clone(),
+            // every UTXO of exactly a custody's state goes back with it: nothing spends it once the id has ended
+            strays: bought.iter().chain(f.twins.iter()).cloned().collect(),
             foreign: vec![],
             tokens: vec![],
             funding,
@@ -945,6 +959,11 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         // The same rule as every other submitting command: `--yes`, or a terminal asks, else
         // nothing is signed.
         if crate::trade::opts::would_ask(a.yes) {
+            // what is signed, decoded as every other signing command shows it, with its fee (R8F3-2)
+            let units = crate::trade::show::Units::new();
+            for l in crate::trade::show::lines(&crate::trade::show::decode(&built, &signer.pubkey, &units), &units, &built.tx.id) {
+                eprintln!("  {l}");
+            }
             eprintln!(
                 "cancel {cov} ({}): ends the order; returns its custody and its KAS to the maker; fee paid by {}",
                 state.template_id().name(),

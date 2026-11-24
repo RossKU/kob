@@ -147,6 +147,7 @@ fn live(state: &AnyState, cov: [u8; 32], tag: u8, value: u64, utxos: &mut Vec<No
         utxos.push(node_utxo(&token_spk(&c), tag + 2, 0, 2 * KAS, Some(TOKEN)));
         let mut t = token_item(tag + 2, &c);
         t["role"] = json!("bought");
+        t["value"] = json!((2 * KAS).to_string());
         v["bought_custody"] = json!({"expected_amount": b.to_string(), "utxo": t, "ok": true});
     }
     if let Some(a) = state.custody_amount().filter(|a| *a > 0) {
@@ -154,6 +155,7 @@ fn live(state: &AnyState, cov: [u8; 32], tag: u8, value: u64, utxos: &mut Vec<No
         utxos.push(node_utxo(&token_spk(&c), tag + 1, 0, 2 * KAS, Some(TOKEN)));
         let mut t = token_item(tag + 1, &c);
         t["role"] = json!("custody");
+        t["value"] = json!((2 * KAS).to_string());
         v["custody"] = json!({"utxo": t, "ok": true});
     }
     v
@@ -1319,9 +1321,9 @@ fn book_orders_and_balances_views() {
     let t = &v["tokens"][0];
     assert_eq!((t["ticker"].as_str(), t["free"].as_str(), t["free_verified"].as_bool()), (Some("TST"), Some("100000"), Some(true)));
     assert_eq!((t["in_orders"].as_str(), t["orders"].as_u64()), (Some("10000"), Some(1)));
-    // The UTXO of the ask and the carrier of its custody, 10 KAS as the view reports it, are
+    // The UTXO of the ask and the carrier of its custody, 2 KAS as the view reports it (and the node holds), are
     // locked. There is no budget.
-    assert_eq!((t["kas_escrow"].as_str(), t["kas_locked"].as_str()), (Some("0"), Some((12 * KAS).to_string().as_str())));
+    assert_eq!((t["kas_escrow"].as_str(), t["kas_locked"].as_str()), (Some("0"), Some((4 * KAS).to_string().as_str())));
     assert!(lines.iter().any(|l| l.contains("TST: free 100 TST in 1 UTXO, in orders 10 TST")), "{lines:?}");
     // A view signs and submits nothing.
     assert_eq!(w.submitted(), 0);
@@ -1786,4 +1788,113 @@ fn a_pair_whose_quote_decimals_come_from_the_indexer_alone_is_refused() {
         run(place, w.args(0x11, "limit --token TST --side sell --amount 1TST --price 2KAS --yes --decimals 3 --quote-decimals 2")),
         1
     );
+}
+
+/// A ticker and a name that would rewrite the terminal (R8F3c-2).
+const HOSTILE: &str = "TST\r  you pay 0.5 KAS per TST: 50 KAS to the maker\n\u{1b}[2K\u{1b}[1A\u{202e}";
+
+fn assert_clean(what: &str, out: &str) {
+    for bad in ['\r', '\u{1b}', '\u{202e}'] {
+        assert!(!out.contains(bad), "{what}: {bad:?} reached the terminal: {out:?}");
+    }
+    // a signing command does not use such a ticker at all; a listing shows it escaped, on its own line
+    if what == "tokens" {
+        assert!(out.contains(r"TST\u{d}  you pay"), "{what}: shown escaped: {out:?}");
+    } else {
+        assert!(!out.contains("0.5 KAS per TST"), "{what}: the hostile text reached the terminal: {out:?}");
+    }
+}
+
+/// R8F3c-2: an indexer whose ticker and name of a token hold carriage returns, line breaks, escape sequences and a
+/// bidirectional override. No byte of them reaches the terminal in any command that prints a token: the ticker is not used
+/// (it is no ticker under the rule of a declared symbol), and every print goes through the one sanitiser.
+#[test]
+fn a_hostile_ticker_never_reaches_the_terminal() {
+    let maker = pk(0x11);
+    let cov = [0xa1; 32];
+    let order = AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000));
+    let w = world_x("hostile", &[(order, cov, 0x10, 2 * KAS)], |_, routes| {
+        routes.insert(
+            "/v1/tokens".into(),
+            json!({"tokens": [{"ticker": HOSTILE, "name": HOSTILE, "covenant_id": to_hex(&TOKEN), "template_hash": to_hex(&token_template(P).hash),
+                               "extension_commitment": to_hex(&EXT), "decimals": 3, "open_asks": 1, "open_bids": 0, "warnings": [HOSTILE]}]}),
+        );
+        routes.insert(
+            format!("/v1/books/{}", to_hex(&TOKEN)),
+            json!({"token": to_hex(&TOKEN), "aggregated": true,
+                   "asks": [{"price": "300000000", "amount": "10000", "amount_estimated": false, "orders": 1, "scale": 1000}], "bids": []}),
+        );
+        let view = routes[&format!("/v1/orders/{}", to_hex(&cov))].clone();
+        routes.insert(
+            format!("/v1/orders?maker={}&status=active&limit=200", to_hex(&maker)),
+            json!({"items": [view], "next_cursor": null}),
+        );
+    });
+    let resolved =
+        crate::trade::market::indexer_tokens(&json!({"tokens": [{"ticker": HOSTILE, "covenant_id": to_hex(&TOKEN)}]})).unwrap();
+    assert_eq!(resolved[0].ticker, "", "an indexer ticker outside the symbol rule is no ticker");
+    type Cmd = (&'static str, fn(&[String]) -> i32, Vec<String>);
+    let cmds: Vec<Cmd> = vec![
+        (
+            "take",
+            crate::trade::actions::run_take,
+            w.args(0x22, &format!("{} --amount 4000base --max-price 3KAS --token {TOKEN_HEX} --dry-run", to_hex(&cov))),
+        ),
+        (
+            "place",
+            crate::trade::place::run,
+            w.args(0x11, &format!("limit --token {TOKEN_HEX} --side sell --amount 1000base --price 3KAS --decimals 3 --dry-run")),
+        ),
+        ("cancel", crate::trade::actions::run_cancel, w.args(0x11, &format!("{} --dry-run", to_hex(&cov)))),
+        ("orders", crate::trade::views::run_orders, w.args(0x11, "")),
+        ("book", crate::trade::views::run_book, w.args(0x11, TOKEN_HEX)),
+        ("tokens", crate::tokens::run, vec!["--network".into(), NET.into(), "--indexer".into(), w.indexer.clone()]),
+    ];
+    for (what, f, args) in cmds {
+        let (code, out) = crate::text::capture(|| f(&args));
+        assert!(!out.is_empty(), "{what} (exit {code}) printed nothing");
+        assert_clean(what, &out);
+    }
+    assert_eq!(w.submitted(), 0);
+}
+
+/// R8F3c-5: `kob take` buys the market's token only. An ask of another extension class under the token's covenant id (its
+/// custody of that class, which its covenant delivers) is refused before anything is signed, and a market buy does not
+/// start at such an ask even when it is the best price.
+#[test]
+fn a_take_of_another_class_is_refused() {
+    const OTHER: [u8; 32] = [0x99; 32];
+    let (maker, cov) = (pk(0x11), [0xa4; 32]);
+    let state = AnyState::KobAsk(AskState { extension_commitment: OTHER, ..ask(maker, 10 * SCALE, 1_000_000 + 77_000_000) });
+    let w = world_x("otherclass", &[], |utxos, routes| {
+        utxos.push(node_utxo(&state.spk(), 0x60, 0, 2 * KAS, Some(cov)));
+        let c = TokenState::custody(P.family(), 10 * SCALE, cov, OTHER);
+        utxos.push(node_utxo(&token_spk(&c), 0x61, 0, 2 * KAS, Some(TOKEN)));
+        let mut t = token_item(0x61, &c);
+        t["role"] = json!("custody");
+        t["value"] = json!((2 * KAS).to_string());
+        routes.insert(
+            format!("/v1/orders/{}", to_hex(&cov)),
+            json!({"covenant_id": to_hex(&cov), "template_hash": to_hex(&template(TemplateId::KobAsk).hash), "status": "open", "state_known": true,
+                   "state": state, "current": {"txid": to_hex(&[0x60; 32]), "index": 0, "value": (2 * KAS).to_string()}, "current_daa": 990_000,
+                   "extension_commitment": to_hex(&OTHER), "strays": [], "custody": {"utxo": t, "ok": true}}),
+        );
+        routes.insert(
+            format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&TOKEN)),
+            json!({"token": to_hex(&TOKEN), "aggregated": false, "bids": [], "asks": [
+                {"covenant_id": to_hex(&cov), "price": "100000000", "amount_left": "10000", "scale": 1000}]}),
+        );
+    });
+    let (code, out) = crate::text::capture(|| {
+        run(
+            crate::trade::actions::run_take,
+            w.args(0x22, &format!("{} --amount 4TST --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&cov))),
+        )
+    });
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("another class under the same covenant id is another token"), "{out}");
+    assert_eq!(w.submitted(), 0);
+    // the market buy finds no ask of the token's class to start at
+    assert_eq!(run(crate::trade::place::run, w.args(0x22, "market --token TST --side buy --amount 1TST --yes --decimals 3")), 1);
+    assert_eq!(w.submitted(), 0);
 }

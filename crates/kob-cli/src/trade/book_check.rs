@@ -162,9 +162,9 @@ fn claim_from(v: &Value, network: &str, m: &TokenMarket, cov: &[u8; 32]) -> Resu
     }
     let tpl = order_template(&view.template_hash).ok_or("unproven")?;
     let ospk = order_spk(tpl, &state).map_err(|_| "unproven")?;
-    // The custody holds the market's commitment. An unbound curve names no token until its first
+    // The custody holds the commitment the state pins (judge checks it is the market's). An unbound curve names no token until its first
     // fill: its custody's token is the market's, or the node does not find it.
-    let targets = crate::recover::custody_targets(&state, *cov, Some(m.ext)).map_err(|_| "unproven")?;
+    let targets = crate::recover::custody_targets(&state, *cov).map_err(|_| "unproven")?;
     let unbound = matches!(&state, AnyState::KobCurveAsk(c) if c.is_unbound());
     let custody = match (targets.first(), &view.custody) {
         (None, _) => None,
