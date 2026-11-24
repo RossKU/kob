@@ -152,7 +152,106 @@ fn hidden_code_in_an_evidence_state_span() {
     }
     let s = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
     let v = validate_signed(&s);
-    // TODAY'S TEMPLATES: accepted. The stop armed on a one-token print it read as 1000 tokens. The fix (TPLGEN
-    // R10CC-1) must turn this into a refusal; the assertion flips with it.
-    assert!(v.is_ok(), "the engine refuses the hidden-code evidence: {:?}", v.err());
+    // The templates before TPLGEN accepted it: the stop armed on a one-token print it read as 1000 tokens (run on
+    // 2c8cf8468). With the state-span check every entry but the cancel refuses a span that is not data only.
+    let e = v.expect_err("the hidden-code evidence must be refused").to_string();
+    assert!(e.contains("input 0"), "the evidence input fails: {e}");
+}
+
+/// The canonical pushes of a state span: (offset, header length, data length) per field.
+fn pushes(span: &[u8]) -> Vec<(usize, usize, usize)> {
+    let (mut i, mut out) = (0, vec![]);
+    while i < span.len() {
+        let (h, n) = match span[i] {
+            b @ 1..=75 => (1, b as usize),
+            0x4c => (2, span[i + 1] as usize),
+            0x4d => (3, span[i + 1] as usize | (span[i + 2] as usize) << 8),
+            b => panic!("byte {i} is 0x{b:02x}, not a push"),
+        };
+        out.push((i, h, n));
+        i += h + n;
+    }
+    assert_eq!(i, span.len());
+    out
+}
+
+/// R10CC-1 on every order template the scenarios spend: the order's state span with its LAST 8-byte field
+/// replaced by code (`OP_1 OP_SHA256`, a 32-byte value, then `OP_NOP` padding: same length, the template hash
+/// unchanged). Every entry but the maker's cancel refuses it; the maker's cancel (which reads only the maker) still
+/// ends it, so a rigged order never locks its funds.
+#[test]
+fn a_rigged_state_span_is_refused_by_every_entry_but_the_cancel() {
+    use kob_protocol::build::build;
+    use kob_protocol::tx::{finalize, sighash, sign_locally, spk_to_string, FinalizeOptions, SigPlan};
+    use kob_protocol::verify::validate_signed;
+    let mut seen: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    let mut all: Vec<(String, kob_protocol::build::Action)> = vec![];
+    for t in [TemplateId::Kcc20Ref, TemplateId::KronToken2433] {
+        all.extend(scenarios_on(t));
+        all.extend(delivery_scenarios(t));
+        all.extend(common::pair::pair_scenarios(t, t));
+        all.extend(common::curve::curve_scenarios(t, 4));
+    }
+    all.extend(scenarios_kron());
+    {
+        for (name, a) in all {
+            let Ok(built) = build(&a) else { continue };
+            for k in 0..built.plans.len() {
+                let SigPlan::Entry { template, state, entry, args } = built.plans[k].clone() else { continue };
+                if template.kind_code().is_none() {
+                    continue;
+                }
+                let mut b = built.clone();
+                let ps = pushes(&state);
+                let Some(&(o, 1, 8)) = ps.iter().rev().find(|p| p.1 == 1 && p.2 == 8) else { continue };
+                let mut rigged = state.clone();
+                rigged[o..o + 9].copy_from_slice(&[0x51, 0xa8, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61]);
+                b.plans[k] = SigPlan::Entry { template, state: rigged, entry: entry.clone(), args };
+                b.tx.inputs[k].utxo.script_public_key = spk_to_string(&b.plans[k].spk());
+                let (tx, entries) = b.tx.to_tx().unwrap();
+                for r in b.sign.iter_mut() {
+                    r.sighash = sighash(&tx, &entries, r.input_index);
+                }
+                let s = finalize(&b, &sign_locally(&b, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+                let v = validate_signed(&s);
+                let label = format!("{name}: input {k} {} {entry}", template.name());
+                let e = seen.entry(format!("{} {entry}", template.name())).or_default();
+                if entry == "cancel" {
+                    v.unwrap_or_else(|e| panic!("{label}: the maker's cancel must end a rigged order: {e}"));
+                    e.0 += 1;
+                } else {
+                    let err = v.expect_err(&label).to_string();
+                    assert!(err.contains(&format!("input {k}")), "{label}: {err}");
+                    e.1 += 1;
+                }
+            }
+        }
+    }
+    // every order kind and its every entry was tried
+    let kinds: std::collections::BTreeSet<String> = seen.keys().map(|k| k.split(' ').next().unwrap().to_string()).collect();
+    assert!(kinds.len() >= 16, "kinds tried: {kinds:?}");
+    for (k, (c, o)) in &seen {
+        assert!(c + o > 0, "{k}");
+    }
+    println!("{seen:#?}");
+}
+
+/// The check reads only the push headers: a field whose VALUE is made of bytes that look like opcodes (`OP_RETURN`,
+/// `OP_TOALTSTACK`, `OP_FROMALTSTACK`, `OP_PUSHDATA1`) sits inside its push and is accepted.
+#[test]
+fn field_values_that_look_like_opcodes_pass() {
+    use kob_protocol::build::{build, Action, Leg};
+    use kob_protocol::tx::{finalize, sign_locally, FinalizeOptions};
+    use kob_protocol::verify::validate_signed;
+    for t in [TemplateId::Kcc20Ref, TemplateId::KronToken2433] {
+        let Action::Batch(mut b) = scenarios_on(t).into_iter().find(|(n, _)| n == "take.ask.partial").unwrap().1 else { panic!() };
+        let Leg::Ask { order, .. } = &mut b.legs[0] else { panic!() };
+        // price and tip of bytes 0x6a 0x6b 0x6c 0x4c (little-endian), minFill 0x4c
+        order.state.price = i64::from_le_bytes([0x6a, 0x6b, 0x6c, 0x4c, 0, 0, 0, 0]);
+        order.state.tip = 0x6a;
+        order.state.min_fill = 0x4c;
+        let built = build(&Action::Batch(b)).unwrap_or_else(|e| panic!("{}: {e}", t.name()));
+        let s = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+        validate_signed(&s).unwrap_or_else(|e| panic!("{}: {e}", t.name()));
+    }
 }

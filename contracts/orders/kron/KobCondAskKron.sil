@@ -277,7 +277,32 @@ contract KobCondAskKron(
     // index. leg is 0 for take-profit and 1 for the stop. ev and tk are the
     // evidence ask and its custody, read only when the stop leg fills unarmed.
     // t is the auction time, read only by an armed stop leg with bandDaa > 0.
+    // BEGIN GENERATED span check (scripts/gen-span-check.mjs): do not edit
+    // R10CC-1: the state span runs as script and is read at fixed offsets, by this order and by other scripts.
+    // It must be data only: each of its 26 fields a direct push of its fixed length (330 bytes in all),
+    // as the compiler encodes the state. The values are free. Every entry but the maker's cancel calls it first.
+    function spanIsData() {
+        int me = this.activeInputIndex;
+        int base = OpTxInputScriptSigLen(me) - this.bytecodeSize + 1;
+        byte[] h = OpTxInputScriptSigSubstr(me, base + 0, base + 1) + OpTxInputScriptSigSubstr(me, base + 33, base + 34)
+            + OpTxInputScriptSigSubstr(me, base + 66, base + 67) + OpTxInputScriptSigSubstr(me, base + 99, base + 100)
+            + OpTxInputScriptSigSubstr(me, base + 108, base + 109) + OpTxInputScriptSigSubstr(me, base + 117, base + 118)
+            + OpTxInputScriptSigSubstr(me, base + 126, base + 127) + OpTxInputScriptSigSubstr(me, base + 135, base + 136)
+            + OpTxInputScriptSigSubstr(me, base + 144, base + 145) + OpTxInputScriptSigSubstr(me, base + 153, base + 154)
+            + OpTxInputScriptSigSubstr(me, base + 162, base + 163) + OpTxInputScriptSigSubstr(me, base + 171, base + 172)
+            + OpTxInputScriptSigSubstr(me, base + 180, base + 181) + OpTxInputScriptSigSubstr(me, base + 189, base + 190)
+            + OpTxInputScriptSigSubstr(me, base + 198, base + 199) + OpTxInputScriptSigSubstr(me, base + 207, base + 208)
+            + OpTxInputScriptSigSubstr(me, base + 216, base + 217) + OpTxInputScriptSigSubstr(me, base + 225, base + 226)
+            + OpTxInputScriptSigSubstr(me, base + 234, base + 235) + OpTxInputScriptSigSubstr(me, base + 243, base + 244)
+            + OpTxInputScriptSigSubstr(me, base + 252, base + 253) + OpTxInputScriptSigSubstr(me, base + 261, base + 262)
+            + OpTxInputScriptSigSubstr(me, base + 270, base + 271) + OpTxInputScriptSigSubstr(me, base + 279, base + 280)
+            + OpTxInputScriptSigSubstr(me, base + 312, base + 313) + OpTxInputScriptSigSubstr(me, base + 321, base + 322);
+        require(h == byte[](0x2020200808080808080808080808080808080808080808200808));
+    }
+    // END GENERATED span check
+
     entry settle(byte[8] nb, int tokenIn, int tokOut, int leg, int ev, int tk, int t) {
+        spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -488,6 +513,7 @@ contract KobCondAskKron(
     //            by every step the evidence justifies, below tpPrice.
     // The keeper may take up to keeperTip from this UTXO's value.
     entry update(int ev, int tk) {
+        spanIsData();
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
