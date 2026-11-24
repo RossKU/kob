@@ -1,0 +1,594 @@
+{
+  "balances": {
+    "incomplete": "bool",
+    "incomplete_reason": "null",
+    "kas": {
+      "free": "string",
+      "locked": "string",
+      "total": "string"
+    },
+    "maker": "string",
+    "skipped": [],
+    "tokens": [
+      {
+        "bought": "string",
+        "decimals": "number",
+        "declared_ticker": "null",
+        "free": "string",
+        "free_complete": "bool",
+        "free_incomplete_reason": "null",
+        "free_utxos": "number",
+        "free_verified": "bool",
+        "in_orders": "string",
+        "kas_carriers": "string",
+        "kas_escrow": "string",
+        "kas_locked": "string",
+        "orders": "number",
+        "strays": "string",
+        "text": {
+          "bought": "string",
+          "free": "string",
+          "in_orders": "string",
+          "kas_locked": "string",
+          "name": "string",
+          "strays": "string"
+        },
+        "ticker": "string",
+        "token": "string"
+      }
+    ]
+  },
+  "balances_partial": {
+    "incomplete": "bool",
+    "incomplete_reason": "null",
+    "kas": {
+      "free": "string",
+      "locked": "string",
+      "total": "string"
+    },
+    "maker": "string",
+    "skipped": [],
+    "tokens": [
+      {
+        "bought": "string",
+        "decimals": "number",
+        "declared_ticker": "null",
+        "free": "string",
+        "free_complete": "bool",
+        "free_incomplete_reason": "string",
+        "free_utxos": "number",
+        "free_verified": "bool",
+        "in_orders": "string",
+        "kas_carriers": "string",
+        "kas_escrow": "string",
+        "kas_locked": "string",
+        "orders": "number",
+        "strays": "string",
+        "text": {
+          "bought": "string",
+          "free": "string",
+          "in_orders": "string",
+          "kas_locked": "string",
+          "name": "string",
+          "strays": "string"
+        },
+        "ticker": "string",
+        "token": "string"
+      }
+    ]
+  },
+  "issues": [
+    {
+      "code": "TOKEN_EXTENSION_CHECKED",
+      "message": "string",
+      "severity": "info"
+    }
+  ],
+  "orders": {
+    "incomplete": "bool",
+    "incomplete_reason": "null",
+    "maker": "string",
+    "network": "testnet-10",
+    "orders": [
+      {
+        "bought": "null",
+        "contract": "string",
+        "covenant_id": "string",
+        "delivery": "null",
+        "expiry_daa": "number",
+        "flags": [],
+        "market": "string",
+        "status": "open",
+        "value": "string",
+        "what": "string"
+      }
+    ]
+  },
+  "place_plan": {
+    "action": "place limit sell TST (7070707070707070707070707070707070707070707070707070707070707070)",
+    "issues": [
+      {
+        "code": "TOKEN_EXTENSION_CHECKED",
+        "message": "string",
+        "severity": "info"
+      }
+    ],
+    "network": "testnet-10",
+    "new_covenant_ids": [
+      "string"
+    ],
+    "plan": {
+      "request": {
+        "change": "null",
+        "deadline": "null",
+        "fee": {
+          "feeMode": "string",
+          "feeRate": "null"
+        },
+        "funding": [
+          {
+            "amount": "string",
+            "blockDaaScore": "string",
+            "covenantId": "null",
+            "index": "number",
+            "pubkey": "string",
+            "transactionId": "string"
+          }
+        ],
+        "lockTime": "string",
+        "order": {
+          "kind": "KobAsk",
+          "state": {
+            "activeFrom": "string",
+            "amountLeft": "string",
+            "decayStep": "string",
+            "expiryDaa": "string",
+            "extensionCommitment": "string",
+            "interval": "string",
+            "maker": "string",
+            "maxFill": "string",
+            "minFill": "string",
+            "price": "string",
+            "priceEnd": "string",
+            "refundTip": "string",
+            "scale": "string",
+            "slope": "string",
+            "tif": "string",
+            "tip": "string",
+            "tokenCovId": "string",
+            "tokenTplHash": "string",
+            "tplPrefixLen": "string",
+            "tplSuffixLen": "string"
+          }
+        },
+        "records": [],
+        "tokenCarrier": "string",
+        "tokens": [
+          {
+            "amount": "string",
+            "blockDaaScore": "string",
+            "covenantId": "string",
+            "index": "number",
+            "state": {
+              "amount": "string",
+              "borrow_guard": "string",
+              "borrow_scheme": "number",
+              "extension_commitment": "string",
+              "owner": "string",
+              "owner_scheme": "number"
+            },
+            "transactionId": "string"
+          }
+        ],
+        "value": "string"
+      },
+      "states": [
+        {
+          "kind": "KobAsk",
+          "state": {
+            "activeFrom": "string",
+            "amountLeft": "string",
+            "decayStep": "string",
+            "expiryDaa": "string",
+            "extensionCommitment": "string",
+            "interval": "string",
+            "maker": "string",
+            "maxFill": "string",
+            "minFill": "string",
+            "price": "string",
+            "priceEnd": "string",
+            "refundTip": "string",
+            "scale": "string",
+            "slope": "string",
+            "tif": "string",
+            "tip": "string",
+            "tokenCovId": "string",
+            "tokenTplHash": "string",
+            "tplPrefixLen": "string",
+            "tplSuffixLen": "string"
+          }
+        }
+      ]
+    },
+    "result": "null",
+    "transaction": {
+      "fee": "string",
+      "inputs": [
+        "string"
+      ],
+      "net": {
+        "kas": "string",
+        "tokens": {
+          "7070707070707070707070707070707070707070707070707070707070707070": "string"
+        }
+      },
+      "outputs": [
+        "string"
+      ],
+      "signatures": "number",
+      "txid": "string"
+    }
+  },
+  "recover_cancel": {
+    "engine_validated": "bool",
+    "fee": "string",
+    "file": "string",
+    "funding": "string",
+    "status": "signed",
+    "twins_left": "number",
+    "txid": "string"
+  },
+  "recover_entry": {
+    "amount_left": "string",
+    "cancel": {
+      "engine_validated": "bool",
+      "fee": "string",
+      "file": "string",
+      "funding": "string",
+      "status": "signed",
+      "twins_left": "number",
+      "txid": "string"
+    },
+    "candidates": "number",
+    "covenant_id": "string",
+    "custody": {
+      "amount": "string",
+      "outpoint": "string",
+      "status": "verified",
+      "value": "string"
+    },
+    "found_by": "string",
+    "kind": "KobAsk",
+    "maker": "string",
+    "min_fill": "string",
+    "note": "string",
+    "outpoint": "string",
+    "scale": "string",
+    "source": "string",
+    "state": "string",
+    "status": "live",
+    "template": "string",
+    "template_hash": "string",
+    "utxo_daa": "string",
+    "value": "string"
+  },
+  "recover_report": {
+    "network": "testnet-10",
+    "node": "string",
+    "orders": [
+      {
+        "amount_left": "string",
+        "cancel": {
+          "engine_validated": "bool",
+          "fee": "string",
+          "file": "string",
+          "funding": "string",
+          "status": "signed",
+          "twins_left": "number",
+          "txid": "string"
+        },
+        "candidates": "number",
+        "covenant_id": "string",
+        "custody": {
+          "amount": "string",
+          "outpoint": "string",
+          "status": "verified",
+          "value": "string"
+        },
+        "found_by": "string",
+        "kind": "KobAsk",
+        "maker": "string",
+        "min_fill": "string",
+        "note": "string",
+        "outpoint": "string",
+        "scale": "string",
+        "source": "string",
+        "state": "string",
+        "status": "live",
+        "template": "string",
+        "template_hash": "string",
+        "utxo_daa": "string",
+        "value": "string"
+      }
+    ],
+    "rejected": [
+      {
+        "reason": "string",
+        "source": "string"
+      }
+    ],
+    "summary": {
+      "live": "number",
+      "not_found": "number",
+      "other_maker": "number",
+      "rejected": "number",
+      "unsupported": "number"
+    }
+  },
+  "replace_plan": {
+    "action": "amend in place a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "issues": [
+      {
+        "code": "REPLACE_NOTE",
+        "message": "string",
+        "severity": "info"
+      }
+    ],
+    "network": "testnet-10",
+    "new_covenant_ids": [],
+    "plan": {
+      "current": {
+        "kind": "KobAsk",
+        "state": {
+          "activeFrom": "string",
+          "amountLeft": "string",
+          "decayStep": "string",
+          "expiryDaa": "string",
+          "extensionCommitment": "string",
+          "interval": "string",
+          "maker": "string",
+          "maxFill": "string",
+          "minFill": "string",
+          "price": "string",
+          "priceEnd": "string",
+          "refundTip": "string",
+          "scale": "string",
+          "slope": "string",
+          "tif": "string",
+          "tip": "string",
+          "tokenCovId": "string",
+          "tokenTplHash": "string",
+          "tplPrefixLen": "string",
+          "tplSuffixLen": "string"
+        }
+      },
+      "inPlace": "bool",
+      "order": "string",
+      "replacement": {
+        "kind": "KobAsk",
+        "state": {
+          "activeFrom": "string",
+          "amountLeft": "string",
+          "decayStep": "string",
+          "expiryDaa": "string",
+          "extensionCommitment": "string",
+          "interval": "string",
+          "maker": "string",
+          "maxFill": "string",
+          "minFill": "string",
+          "price": "string",
+          "priceEnd": "string",
+          "refundTip": "string",
+          "scale": "string",
+          "slope": "string",
+          "tif": "string",
+          "tip": "string",
+          "tokenCovId": "string",
+          "tokenTplHash": "string",
+          "tplPrefixLen": "string",
+          "tplSuffixLen": "string"
+        }
+      },
+      "value": "string"
+    },
+    "result": "null",
+    "transaction": {
+      "fee": "string",
+      "inputs": [
+        "string"
+      ],
+      "net": {
+        "kas": "string",
+        "tokens": {}
+      },
+      "outputs": [
+        "string"
+      ],
+      "signatures": "number",
+      "txid": "string"
+    }
+  },
+  "signing_document": {
+    "fee": "string",
+    "info": {
+      "action": "amend in place a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "issues": [
+        {
+          "code": "REPLACE_NOTE",
+          "message": "string",
+          "severity": "info"
+        }
+      ],
+      "network": "testnet-10",
+      "new_covenant_ids": [],
+      "plan": {
+        "current": {
+          "kind": "KobAsk",
+          "state": {
+            "activeFrom": "string",
+            "amountLeft": "string",
+            "decayStep": "string",
+            "expiryDaa": "string",
+            "extensionCommitment": "string",
+            "interval": "string",
+            "maker": "string",
+            "maxFill": "string",
+            "minFill": "string",
+            "price": "string",
+            "priceEnd": "string",
+            "refundTip": "string",
+            "scale": "string",
+            "slope": "string",
+            "tif": "string",
+            "tip": "string",
+            "tokenCovId": "string",
+            "tokenTplHash": "string",
+            "tplPrefixLen": "string",
+            "tplSuffixLen": "string"
+          }
+        },
+        "inPlace": "bool",
+        "order": "string",
+        "replacement": {
+          "kind": "KobAsk",
+          "state": {
+            "activeFrom": "string",
+            "amountLeft": "string",
+            "decayStep": "string",
+            "expiryDaa": "string",
+            "extensionCommitment": "string",
+            "interval": "string",
+            "maker": "string",
+            "maxFill": "string",
+            "minFill": "string",
+            "price": "string",
+            "priceEnd": "string",
+            "refundTip": "string",
+            "scale": "string",
+            "slope": "string",
+            "tif": "string",
+            "tip": "string",
+            "tokenCovId": "string",
+            "tokenTplHash": "string",
+            "tplPrefixLen": "string",
+            "tplSuffixLen": "string"
+          }
+        },
+        "value": "string"
+      },
+      "result": "null",
+      "transaction": {
+        "fee": "string",
+        "inputs": [
+          "string"
+        ],
+        "net": {
+          "kas": "string",
+          "tokens": {}
+        },
+        "outputs": [
+          "string"
+        ],
+        "signatures": "number",
+        "txid": "string"
+      }
+    },
+    "signed": {
+      "fee": {
+        "changeOutput": "null",
+        "fee": "string",
+        "feeMode": "string",
+        "feeRate": "string",
+        "mass": {
+          "compute": "number",
+          "feeMass": "number",
+          "priorityMass": "number",
+          "size": "number",
+          "storage": "number",
+          "transient": "number",
+          "transientNormalized": "number"
+        },
+        "minFee": "string"
+      },
+      "tx": {
+        "gas": "string",
+        "id": "string",
+        "inputs": [
+          {
+            "computeBudget": "number",
+            "index": "number",
+            "sequence": "string",
+            "sigOpCount": "number",
+            "signatureScript": "string",
+            "transactionId": "string",
+            "utxo": {
+              "address": "null",
+              "amount": "string",
+              "blockDaaScore": "string",
+              "covenantId": "string",
+              "isCoinbase": "bool",
+              "scriptPublicKey": "string"
+            }
+          }
+        ],
+        "lockTime": "string",
+        "outputs": [
+          {
+            "covenant": {
+              "authorizingInput": "number",
+              "covenantId": "string"
+            },
+            "scriptPublicKey": "string",
+            "value": "string"
+          }
+        ],
+        "payload": "string",
+        "storageMass": "string",
+        "subnetworkId": "string",
+        "version": "number"
+      }
+    },
+    "submit_request": {
+      "id": "number",
+      "method": "string",
+      "params": {
+        "allowOrphan": "bool",
+        "transaction": {
+          "gas": "number",
+          "inputs": [
+            {
+              "computeBudget": "number",
+              "previousOutpoint": {
+                "index": "number",
+                "transactionId": "string"
+              },
+              "sequence": "number",
+              "sigOpCount": "number",
+              "signatureScript": "string",
+              "verboseData": "null"
+            }
+          ],
+          "lockTime": "number",
+          "mass": "number",
+          "outputs": [
+            {
+              "covenant": {
+                "authorizingInput": "number",
+                "covenantId": "string"
+              },
+              "scriptPublicKey": "string",
+              "value": "number",
+              "verboseData": "null"
+            }
+          ],
+          "payload": "string",
+          "storageMass": "number",
+          "subnetworkId": "string",
+          "verboseData": "null",
+          "version": "number"
+        }
+      }
+    },
+    "txid": "string"
+  }
+}

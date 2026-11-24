@@ -1780,6 +1780,33 @@ impl Draft {
                 }
                 c = next;
             }
+            if !ok {
+                // R9FA-I5: near the double root of c = slack − fee(c) the iteration above converges too slowly to finish
+                // in 32 steps (with fee ~ b / c it needs about c / n steps at the double root), and the whole slack would
+                // go to the fee although a change fits. The changes that fit (c + fee(c) <= slack) form an interval
+                // around half of `slack − fee_without` (the roots' midpoint), so when that midpoint fits, the largest
+                // change that fits is found by bisection; when it does not, no change fits.
+                let fits = |c: u64| {
+                    let mut outs = outputs.clone();
+                    with_change(&mut outs, TransactionOutput { value: c, script_public_key: spk.clone(), covenant: None });
+                    c.checked_add(fee_of(&build_tx(outs))).is_some_and(|t| t <= slack)
+                };
+                let top = slack.saturating_sub(fee_without);
+                let mid = top / 2;
+                if mid > 0 && fits(mid) {
+                    let (mut lo, mut hi) = (mid, top + 1);
+                    while hi - lo > 1 {
+                        let m = lo + (hi - lo) / 2;
+                        if fits(m) {
+                            lo = m;
+                        } else {
+                            hi = m;
+                        }
+                    }
+                    c = lo;
+                    ok = true;
+                }
+            }
             if ok && c > 0 {
                 // The relay floor does not price storage mass, so nothing else keeps a small change
                 // output (storage mass ~ 10^12 / value) from pushing the transaction over the block
@@ -1910,6 +1937,32 @@ fn witness_tag(w: &Witness) -> &'static str {
 mod tests {
     use super::*;
     use crate::state::TokenState;
+
+    /// R9FA-I5: in priority mode at the floor rate the change fixed point c = slack − fee(c), fee ~ 100 x 10^12 / c,
+    /// has a double root at a slack of 0.2 KAS. Just above it the 32 iterations did not converge and the whole slack went
+    /// to the fee (a slack of 0.20 to 0.2025 KAS lost about 0.1 KAS). Now a change is kept from the first slack where one
+    /// fits, the fee is the change's own fee to within a sompi or so, and below it no change fits.
+    #[test]
+    fn the_priority_fixed_point_keeps_a_change_near_its_double_root() {
+        let fee = FeeOptions { fee_rate: Some(100), fee_mode: FeeMode::Priority };
+        let pk = pubkey_of(&[0x11; 32]).unwrap();
+        for s in (19_950_000u64..20_300_000).step_by(25_000) {
+            let mut d = Draft::new(0, &fee, Some(pk)).unwrap();
+            let u = Utxo { transaction_id: [7; 32], index: 0, amount: 100 * 100_000_000, block_daa_score: 0, covenant_id: None };
+            d.add_input(&u, SigPlan::P2pk { pubkey: pk }, "in", 0);
+            d.add_output(100 * 100_000_000 - s, crate::script::p2pk_spk(&pk), None);
+            let b = d.seal(&|_| Ok(0)).unwrap();
+            if s < 20_000_000 {
+                assert_eq!((b.fee.change_output, b.fee.fee), (None, s), "{s}: no change fits");
+                continue;
+            }
+            let c = b.tx.outputs[b.fee.change_output.expect("a change fits") as usize].value;
+            assert_eq!(c + b.fee.fee, s, "{s}");
+            // the fee is what that change costs (100 sompi per gram on its storage mass, 10^12 / c), to within a few sompi
+            let own = 100 * (1_000_000_000_000 / c);
+            assert!(b.fee.fee >= own && b.fee.fee <= own + 2_000, "{s}: fee {} for a change of {c}", b.fee.fee);
+        }
+    }
 
     /// A token UTXO owned by the token's own covenant id is unlocked by any input of the token.
     ///
