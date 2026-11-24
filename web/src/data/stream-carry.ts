@@ -130,15 +130,20 @@ export class IndexerCarry {
    * Records the resting orders of a market the indexer gave (`/v1/orders?token=&status=active`).
    * They replace what was kept of it. The list does not carry an ask's custody, which only
    * `/v1/orders/{id}` does. So a kept view of the same order at the same outpoint that has it
-   * stays, and `needsCustody` names the others.
+   * stays, and `needsCustody` names the others. A list cut at its page bound (`complete` false)
+   * only adds to what was kept, which it never shortens (R7C2b-2).
    */
-  recordOrders(token: Hex, views: readonly OrderView[]): void {
+  recordOrders(token: Hex, views: readonly OrderView[], complete = true): void {
     const id = token.toLowerCase() as Hex;
     const old = this.orderViews.get(id)?.views;
-    const m = new Map<Hex, OrderView>();
+    const m = new Map<Hex, OrderView>(complete ? [] : old ?? []);
     for (const v of views) {
-      if (!isResting(v, id) || m.size >= MAX_ORDERS) continue;
       const key = v.covenant_id.toLowerCase() as Hex;
+      if (!isResting(v, id)) {
+        m.delete(key);
+        continue;
+      }
+      if (m.size >= MAX_ORDERS && !m.has(key)) continue;
       const kept = old?.get(key);
       m.set(key, kept && hasCustody(kept) && !hasCustody(v) && sameOutpoint(kept, v) ? kept : v);
     }

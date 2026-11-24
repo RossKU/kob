@@ -148,6 +148,19 @@ describe('verifyPairBook: the orders of the pair book must exist on the node as 
     expect(w.chain.calls.length).toBe(0);
   });
 
+  it('an order read that fails or times out ahead of the confirmed touch marks the side unread, and is cancelled (R7B-L2)', async () => {
+    const w = world();
+    const asked: { signal?: AbortSignal; priority?: string }[] = [];
+    const slow = w.deps({ orderTimeoutMs: 10, indexer: { order: (id: string, o?: { signal?: AbortSignal; priority?: string }) => (id === w.askView.covenant_id ? (asked.push(o ?? {}), new Promise(() => undefined)) : Promise.resolve(w.bidView)) } as never });
+    const out = await verifyPairBook(slow, [w.askView, w.bidView]);
+    expect(out.unread).toEqual(['sell']);
+    expect(out.book.asks).toEqual([]);
+    expect(asked[0]!.signal?.aborted).toBe(true);
+    expect(asked[0]!.priority).toBe('high');
+    // all read: nothing unread
+    expect((await verifyPairBook(w.deps(), [w.askView, w.bidView])).unread).toEqual([]);
+  });
+
   it('the route levels are merged with the direct ones at an equal price', async () => {
     const w = world();
     const price = describeOrder(w.askSnap.order.state, kob).pair!.price;
@@ -210,6 +223,28 @@ describe('buildPairPlanEnv hands the planners the node-confirmed pair book (audi
     const plan = planOrder({ ...real, book: env.book } as never, { type: 'market', side: 'buy', amount: 5n * real.token.scale });
     expect(plan.ok).toBe(false);
     expect(plan.issues.map((i) => i.code)).toContain('NO_LIQUIDITY');
+  });
+
+  it('a pair ask whose order read failed, or a listing cut at its page bound, makes the book unavailable: a crossing pair limit is refused, not planned as resting (R7B-L2, R7B-L3)', async () => {
+    const w = world();
+    const ask = clone(w.askView) as OrderView & { pair: { base: string; quote: string } };
+    ask.pair.base = a.covenantId;
+    ask.pair.quote = b.covenantId;
+    const chain = (x: string[]) => new FakeChain().getUtxosByAddresses(x);
+    const failing = services(chain, [ask]);
+    (failing.indexer as unknown as { order: () => Promise<never> }).order = async () => { throw new Error('The indexer did not answer within 10s.'); };
+    const env1 = await buildPairPlanEnv(failing, { pubkey: MAKER.pk }, a, b);
+    expect(env1.guardsUnavailable).toContain('book');
+    const cut = services(chain, Object.assign([ask], { truncated: true }) as OrderView[]);
+    const env2 = await buildPairPlanEnv(cut, { pubkey: MAKER.pk }, a, b);
+    expect(env2.guardsUnavailable).toContain('book');
+    // the plan at the click carries the existing "could not read" error
+    const real = makePairEnv({ independentReference: false });
+    const plan = planOrder({ ...real, book: env1.book, guardsUnavailable: env1.guardsUnavailable } as never, { type: 'limit', side: 'buy', amount: 5n * real.token.scale, price: 1_000_000n });
+    expect(plan.issues.filter((i) => i.severity === 'error').map((i) => i.code)).toContain('GUARDS_UNAVAILABLE');
+    // read in full, nothing is unavailable for the book (the phantom is only left out)
+    const env3 = await buildPairPlanEnv(services(chain, [ask]), { pubkey: MAKER.pk }, a, b);
+    expect(env3.guardsUnavailable ?? []).not.toContain('book');
   });
 
   it('a node that cannot be asked for the order check fails the build (the node banner), it is not skipped', async () => {

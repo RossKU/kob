@@ -12,6 +12,8 @@
 // a card of the notifications at the top right.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { DUST_LINE_SOMPI, NO_FLASH, nextDustFlash, wouldBeDust, type DustFlash } from './dust-hint';
+import { HelpToggle } from './HelpToggle';
 import { useServices, useWallet } from '../../app/context';
 import { kasTitleOf, sompiToUsd, usdTextFit } from '../../app/fiat';
 import { useFiat } from '../../app/use-fiat';
@@ -297,6 +299,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // best bid). It is filled in and kept on the quote until the user types a price of their own.
   const streamQuote = form.type === 'streaming' ? streamingQuoteText(form.side, { ask: bestAsk, bid: bestBid }, ctx) : null;
   const autoQuote = useRef<string | null>(null);
+  const dustRef = useRef<DustFlash>(NO_FLASH);
   useEffect(() => {
     const r = followQuote(form, streamQuote, autoQuote.current);
     autoQuote.current = r.auto;
@@ -674,7 +677,12 @@ export function OrderTicket(props: OrderTicketProps) {
   // token.
   const typeKey = (id: OrderTypeId, part: 'name' | 'help'): string => (inverted && has(`ticket.type.${id}.${part}Inv`) ? `ticket.type.${id}.${part}Inv` : `ticket.type.${id}.${part}`);
   const typeName = t(typeKey(form.type, 'name'), { name });
-  const typeHelp = t(typeKey(form.type, 'help'), { name });
+  // An order or a slice worth less than DUST_LINE_SOMPI to a taker is not shown in the public KAS
+  // book (dust-hint.ts). The help of what sets its size says so, and the "?" flashes once when the
+  // order entered turns dust. Pair books have no dust range.
+  const dustHelp = quote ? null : t('ticket.help.dust', { min: formatKas(DUST_LINE_SOMPI) });
+  const dustFlash = (dustRef.current = nextDustFlash(dustRef.current, !quote && wouldBeDust(built.intent, ctx.scale)));
+  const typeHelp = `${t(typeKey(form.type, 'help'), { name })}${dustHelp && form.type === 'limit' ? ` ${dustHelp}` : ''}`;
   // The side as the shown pair names it. Buying KAS in KAS/TOKEN is selling the token.
   const shownSide: Side = inverted ? oppositeSide(form.side) : form.side;
   const sideName = t(shownSide === 'buy' ? 'common.side.buy' : 'common.side.sell');
@@ -1202,17 +1210,7 @@ export function OrderTicket(props: OrderTicketProps) {
               'data-testid': s === 'buy' ? 'order-side-buy' : 'order-side-sell',
             }))}
           />
-          <button
-            type="button"
-            class="tk-help-toggle"
-            aria-pressed={helpOn ? 'true' : 'false'}
-            title={t(helpOn ? 'ticket.helpToggle.hide' : 'ticket.helpToggle.show')}
-            aria-label={t('ticket.helpToggle.label')}
-            data-testid="order-help-toggle"
-            onClick={toggleHelp}
-          >
-            ?
-          </button>
+          <HelpToggle helpOn={helpOn} onClick={toggleHelp} flash={dustFlash} />
         </div>
 
         <div class="field tk-typefield" title={typeHelp}>
@@ -1237,7 +1235,7 @@ export function OrderTicket(props: OrderTicketProps) {
 
         <TicketFields
           form={form} ctx={ctx} ticker={ticker} ids={asCurve ? layout.main.filter((id) => id !== 'lifetime' && id !== 'lifetimeAt') : layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} {...(available && form.side === 'sell' && unusable ? { unusable: { text: t('ticket.unusable', { amount: formatUnits(unusable.amount, token.decimals, { group: ',' }), ticker }), reason: t(`ticket.unusable.${unusable.reason}`) } } : {})} slider={slider}
-          {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
+          {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})} {...(dustHelp && (form.type === 'twap' || form.type === 'dca') ? { helpExtra: { sliceAmount: dustHelp } } : {})}
         />
 
         <details class="tk-advanced" data-testid="order-advanced">

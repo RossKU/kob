@@ -152,6 +152,17 @@ describe('the resting orders of a market', () => {
     expect(c.orders().map((o) => o.covenant_id)).toEqual(['b0'.repeat(32)]);
   });
 
+  it('a list cut at its page bound adds to what was kept and never shortens it; a complete one replaces it (R7C2b-2)', () => {
+    const c = new IndexerCarry(() => NOW);
+    c.recordOrders(TOKEN, [order('aa'.repeat(32)), order('ab'.repeat(32))]);
+    c.recordOrders(TOKEN, [order('b0'.repeat(32)), order('ab'.repeat(32), { status: 'filled' })], false);
+    expect(c.orders().map((o) => o.covenant_id).sort()).toEqual(['aa'.repeat(32), 'b0'.repeat(32)]);
+    c.recordOrders(TOKEN, [], false);
+    expect(c.orders()).toHaveLength(2);
+    c.recordOrders(TOKEN, [order('b1'.repeat(32))]);
+    expect(c.orders().map((o) => o.covenant_id)).toEqual(['b1'.repeat(32)]);
+  });
+
   it('is read at most once a minute per market, sooner again after a failed read', () => {
     let now = NOW;
     const c = new IndexerCarry(() => now);

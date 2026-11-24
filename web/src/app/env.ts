@@ -2,6 +2,7 @@
 // clock and UTXOs, the indexer book and own orders, and the token tracker. Every dependency comes
 // through `Services` and nothing touches the DOM, so tests can use fakes.
 import type { BookOrderView, LevelView, OrderView } from '../data/indexer-types';
+import { incompleteAsNull } from '../data/indexer';
 import { declaredToken } from '../data/token-declarations';
 import type { CancelEnv } from '../kob/cancel';
 import { normalizePolicy, readFeeContext, type FeeContext } from '../kob/fee-policy';
@@ -256,7 +257,8 @@ export async function readHoldingsPart(
   const mine = c?.state.active
     ? Promise.resolve(own())
     : s.indexer && !o.offline
-      ? s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }, { priority: 'high' }).catch(async (e: unknown) => {
+      ? // A list cut at its page bound is not read: self-trade prevention needs every own order.
+        s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }, { priority: 'high' }).then(incompleteAsNull, async (e: unknown) => {
           // The indexer is down. Once standalone mode is on, its book lists the wallet's orders,
           // and the failed read starts its check.
           return c && typeof c.readFailed === 'function' && (await c.readFailed(e)) ? own() : null;
@@ -435,7 +437,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
     indexer && !o.offline
       ? Promise.all([
           indexer.pairBook(a.covenantId, b.covenantId, { depth: 100 }, { priority: 'high' }).catch(() => null),
-          indexer.allOrders({ maker: wallet.pubkey, token: a.covenantId, status: 'active' }, { priority: 'high' }).catch(() => null),
+          indexer.allOrders({ maker: wallet.pubkey, token: a.covenantId, status: 'active' }, { priority: 'high' }).then(incompleteAsNull, () => null),
           kasReferenceOf(indexer, a),
           kasReferenceOf(indexer, b),
         ])
@@ -471,7 +473,8 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
       // The planners get what the node confirms (app/pair-book.ts). That is the resting pair
       // orders one by one, and the route from the two KAS books.
       const hasOrders = [...pv.asks, ...pv.bids].some((l) => l.source !== 'route');
-      const listed = hasOrders && indexer ? await indexer.allOrders({ token: a.covenantId, status: 'active' }, { priority: 'high' }).catch(() => null) : [];
+      // Cut at its page bound, the list may miss pair orders, so it is not read (R7B-L3).
+      const listed = hasOrders && indexer ? await indexer.allOrders({ token: a.covenantId, status: 'active', limit: 200 }, { priority: 'high' }).then(incompleteAsNull, () => null) : [];
       if (listed === null) guardsUnavailable.push('book');
       else {
         const checked = await verifyPairBook(
@@ -484,6 +487,8 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
           routeLevels(ma.book, mb.book, a.scale, b.scale),
         );
         book = checked.book;
+        // A side of direct orders that could not be read is unknown, not empty (R7B-L2).
+        if (checked.unread.length) guardsUnavailable.push('book');
         if (checked.dropped.length) console.info(`pair book check: ${checked.dropped.length} order(s) of the indexer's pair book left out (${[...new Set(checked.dropped.map((d) => d.reason))].join(', ')})`);
         if (checked.beyond) console.info(`pair book check: ${checked.beyond} order(s) behind the verified depth are not part of the book`);
       }

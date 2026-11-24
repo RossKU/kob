@@ -48,7 +48,7 @@
 // token list and the market data from here. What needs the indexer's records fails as it does
 // with the indexer down. That covers pair books, holders and token UTXOs, the order lists of My
 // orders, and the notifications.
-import type { IndexerApi } from './indexer';
+import type { IndexerApi, OrderList } from './indexer';
 import { IndexerError } from './indexer';
 import type { BookView, CandleInterval, CandlesView, EventView, HealthView, IndexerTokenView, OrderView, StatsView, TradesView } from './indexer-types';
 import type { BlockSubscription, NodeApi } from './node';
@@ -93,9 +93,12 @@ export const RETURN_CHECK_MS = 5_000;
  */
 export const MIN_AUTO_MS = 30_000;
 /**
- * Back-off of a flapping indexer (R4B-I2). An automatic mode that starts within CALM_MS of the
- * last automatic exit stays twice as long as that one had to, up to MAX_AUTO_MS. CALM_MS without
- * a re-entry starts again from MIN_AUTO_MS.
+ * Back-off of a flapping indexer (R4B-I2). An automatic mode started because the indexer was down
+ * (unreachable, erroring, stale, without its node), within CALM_MS of the last such exit, stays
+ * twice as long as that one had to, up to MAX_AUTO_MS. CALM_MS without one starts again from
+ * MIN_AUTO_MS. An indexer that answers and says it is behind is not backed off (R7B-L1): kobd
+ * bounds how long a node may hold the lag above 90 s (300 s an hour), and such a mode ends at
+ * MIN_AUTO_MS, the fixed shortest stay, once the lag is within LAG_RETURN_SECONDS on two looks.
  */
 export const MAX_AUTO_MS = 300_000;
 export const CALM_MS = 600_000;
@@ -295,9 +298,13 @@ export class StandaloneController {
   private returnSeq = 0;
   /** The mode's own look at the indexer's health is under way. */
   private watching = false;
-  /** How long the automatic mode on now stays at least, and when the last one ended. */
+  /** How long the automatic mode on now stays at least. */
   private minAuto = MIN_AUTO_MS;
-  private lastAutoExitMs: number | null = null;
+  /** The back-off of the modes started for a down indexer, and when the last of them ended. */
+  private downStay = MIN_AUTO_MS;
+  private lastDownExitMs: number | null = null;
+  /** The automatic mode on now started because the indexer answered behind the chain. */
+  private enteredBehind = false;
   /** Entries started from the kept resting orders, not asked on the node yet. */
   private readonly carried = new Set<Hex>();
   private verifyTimer: unknown = null;
@@ -666,10 +673,12 @@ export class StandaloneController {
   }
 
   private enter(reason: 'manual' | 'auto', behind = false): void {
-    if (reason === 'auto') {
-      const soon = this.lastAutoExitMs !== null && this.now() - this.lastAutoExitMs < CALM_MS;
-      this.minAuto = soon ? Math.min(MAX_AUTO_MS, this.minAuto * 2) : MIN_AUTO_MS;
+    if (reason === 'auto' && !behind) {
+      const soon = this.lastDownExitMs !== null && this.now() - this.lastDownExitMs < CALM_MS;
+      this.downStay = soon ? Math.min(MAX_AUTO_MS, this.downStay * 2) : MIN_AUTO_MS;
     }
+    this.minAuto = reason === 'auto' && !behind ? this.downStay : MIN_AUTO_MS;
+    this.enteredBehind = reason === 'auto' && behind;
     this.gen++;
     this.reset();
     this.subscribeFails = 0;
@@ -714,7 +723,7 @@ export class StandaloneController {
 
   private exit(): void {
     const wasActive = this.snap.active;
-    if (wasActive && this.snap.reason === 'auto') this.lastAutoExitMs = this.now();
+    if (wasActive && this.snap.reason === 'auto' && !this.enteredBehind) this.lastDownExitMs = this.now();
     this.gen++;
     for (const k of ['verifyTimer', 'tickTimer', 'retryTimer'] as const) this.cancel(k);
     this.disarmReturn();
@@ -1185,7 +1194,7 @@ function recording(carry: IndexerCarry, prop: string | symbol, call: (...x: unkn
       return (...a) =>
         noted((r: OrderView[]) => {
           const q = (a[0] ?? {}) as { token?: Hex; maker?: Hex; status?: string };
-          if (q.token && !q.maker && q.status === 'active') carry.recordOrders(q.token, r);
+          if (q.token && !q.maker && q.status === 'active') carry.recordOrders(q.token, r, !(r as OrderList).truncated);
           else for (const v of r) carry.recordOrder(v);
         })(...a);
     case 'book':
@@ -1197,7 +1206,7 @@ function recording(carry: IndexerCarry, prop: string | symbol, call: (...x: unkn
           if (!real || !carry.ordersDue(token)) return;
           void real.allOrders({ token, status: 'active', limit: 200 }, { maxPages: 3, priority: 'low' }).then(
             async (r) => {
-              carry.recordOrders(token, r);
+              carry.recordOrders(token, r, !r.truncated);
               // The list has no custody of an ask, so the best asks are read one by one. Only new
               // or moved ones are read, and a kept view at the same outpoint stays.
               const ids = carry.needsCustody(token, CUSTODY_READS);

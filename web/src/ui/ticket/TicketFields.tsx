@@ -15,6 +15,8 @@ import {
 } from './form-state';
 
 export interface TicketFieldsProps {
+  /** A sentence added to a field's help, by field id (the dust line of a TWAP / DCA slice). */
+  helpExtra?: Partial<Record<string, string>>;
   form: TicketForm;
   ctx: TicketCtx;
   ticker: string;
@@ -159,6 +161,11 @@ export function TicketFields(props: TicketFieldsProps) {
    * not shown.
    */
   const helpOf0 = (id: string): string | undefined => {
+    const base = helpOf1(id);
+    const extra = props.helpExtra?.[id];
+    return extra ? (base ? `${base} ${extra}` : extra) : base;
+  };
+  const helpOf1 = (id: string): string | undefined => {
     const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : (id === 'maxFills' || id === 'direct') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
     return helpKey !== 'ticket.help.amount' && has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS', local: formatLocalTime(nextUtcMidnight(Date.now())) }) : undefined;
   };
