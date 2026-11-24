@@ -98,6 +98,9 @@ export function checkConfig(c, baseDir, env = process.env) {
   const abs = (p) => (p == null ? null : isAbsolute(p) ? p : resolve(baseDir, p));
   if (!NETWORKS.includes(c.network)) errs.push(`network: ${c.network} (testnet-10 or mainnet)`);
   if (c.network === 'mainnet' && c.allowMainnet !== true) errs.push('network is mainnet but allowMainnet is not true');
+  // The band follows the indexer's book: on mainnet it is read over TLS only (R7T-I7).
+  if (c.indexer != null && !/^https?:\/\//.test(String(c.indexer))) errs.push('indexer must be an http:// or https:// URL, or null');
+  else if (c.network === 'mainnet' && c.indexer != null && !/^https:\/\//.test(String(c.indexer))) errs.push('indexer must be an https:// URL on mainnet');
   if (!['confirm', 'auto'].includes(c.mode)) errs.push(`mode: ${c.mode} (confirm or auto)`);
   if (!c.keyFile && !env.KOB_KEY) errs.push('keyFile is not set and KOB_KEY is empty');
   c = { ...c, limits: { ...DEFAULTS.limits, ...c.limits } };

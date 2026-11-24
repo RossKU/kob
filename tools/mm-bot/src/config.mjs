@@ -188,6 +188,19 @@ export function validate(cfg) {
   if (s.cancelReserveKas >= s.maxFeesKasPerDay) p.push('safety.cancelReserveKas must be below safety.maxFeesKasPerDay');
   num(s.placeGapSec, 'safety.placeGapSec', { min: 0, max: 600 });
   num(s.maxActionsPerCycle, 'safety.maxActionsPerCycle', { min: 1, max: 200, int: true });
+  // Checked like the rest (R7T-I2). The visible timeout only schedules checks, retries and alerts;
+  // no order ends because it passed (R7T-1).
+  num(s.orderVisibleTimeoutSec, 'safety.orderVisibleTimeoutSec', { min: 30, max: 3600 });
+  num(s.backoffBaseSec, 'safety.backoffBaseSec', { min: 1, max: 3600 });
+  num(s.backoffMaxSec, 'safety.backoffMaxSec', { min: s.backoffBaseSec > 0 ? s.backoffBaseSec : 1, max: 86_400 });
+  num(r.stableMaxAgeSec, 'reference.stableMaxAgeSec', { min: 30, max: 3600 });
+  num(r.fallbackBelow, 'reference.fallbackBelow', { min: 0, max: 10, int: true });
+  if (r.crossCheck != null) {
+    if (typeof r.crossCheck.enabled !== 'boolean') p.push('reference.crossCheck.enabled must be true or false');
+    num(r.crossCheck.everySec, 'reference.crossCheck.everySec', { min: 30, max: 86_400 });
+    num(r.crossCheck.warnDeviation, 'reference.crossCheck.warnDeviation', { min: 0, max: 0.5 });
+  }
+  for (const k of ['preflight', 'priorityFee']) if (typeof cfg.cli[k] !== 'boolean') p.push(`cli.${k} must be true or false`);
   num(cfg.alerts.warnBelowPct, 'alerts.warnBelowPct', { min: 0, max: 100 });
   num(cfg.alerts.remindMin, 'alerts.remindMin', { min: 1 });
   if (cfg.alerts.webhookUrl != null && !/^https?:\/\//.test(cfg.alerts.webhookUrl)) p.push('alerts.webhookUrl must be an http(s) URL or null');

@@ -200,12 +200,13 @@ function fraction(x) {
 export const DEFAULT_REF_DEPTH_KAS = 1000;
 
 /**
- * A book row worth less than this (1 KAS, the listing minimum) at its quote adds no depth (R6T-4): it is
- * dust (an order filled down to a rest, or posted below the minimum), and up to 200 of them sit in the
- * indexer's book read of an older kobd, which a newer one leaves out by default. Near-free, they must not
- * count toward the 1,000 KAS the reference needs.
+ * kobd's own dust line (docs/api-reference.md, section 3.6): half the listing minimum, 0.5 KAS by
+ * default. A kobd that applies it leaves dust out of its book and says so with `dust_orders`;
+ * every row it returns then counts (R7T-3). Only against an indexer that does not say so does
+ * kob-mcp leave out the rows worth less than this at their quote itself (R6T-4): no stricter line
+ * of its own, so honest rows the indexer counts are never thrown away here.
  */
-export const DUST_BELOW_SOMPI = 100_000_000n;
+export const DUST_BELOW_SOMPI = 50_000_000n;
 
 /**
  * The rows of a side kob-mcp reads for the reference (R6T-4): the 200 dust rows an older kobd may
@@ -262,6 +263,9 @@ export function bookReference({ side, rows, fills, scale, depth, maker = null })
   let rest = null;
   let unsized = 0;
   let dust = 0;
+  // An indexer that applies the dust rule says so (`dust_orders`, omitted when it left none out
+  // on a newer kobd: the guard below then changes nothing, its line being kobd's).
+  const kobdDust = rows?.dust_orders != null;
   for (const r of (side === 'buy' ? rows?.bids : rows?.asks) ?? []) {
     if (own && String(r.maker ?? '').toLowerCase() === own) continue;
     if (r.fillable_now == null) unsized++;
@@ -278,7 +282,7 @@ export function bookReference({ side, rows, fills, scale, depth, maker = null })
     if ((minFill * high) / sc > MAX_MIN_FILL_SOMPI) continue;
     let worth = (fillable * now) / sc;
     if (side === 'buy' && r.cur_value != null && big(r.cur_value) < worth) worth = big(r.cur_value);
-    if (worth < DUST_BELOW_SOMPI) {
+    if (!kobdDust && worth < DUST_BELOW_SOMPI) {
       dust++;
       continue;
     }
@@ -289,7 +293,7 @@ export function bookReference({ side, rows, fills, scale, depth, maker = null })
     }
   }
   if (!rest) {
-    const crowd = dust ? `; ${dust} row(s) worth under 1 KAS (dust) count as nothing${(rows?.[side === 'buy' ? 'bids' : 'asks']?.length ?? 0) >= 200 ? ': they may crowd the real orders out of the read (a newer kobd leaves dust out of its books); set refPrice for this token' : ''}` : '';
+    const crowd = dust ? `; ${dust} row(s) worth under 0.5 KAS (dust) count as nothing${(rows?.[side === 'buy' ? 'bids' : 'asks']?.length ?? 0) >= 200 ? ': they may crowd the real orders out of the read (a newer kobd leaves dust out of its books); set refPrice for this token' : ''}` : '';
     const old = unsized ? `; the indexer names no fillable_now for ${unsized} order(s) (an older kobd), and they count as nothing` : '';
     return { ref: null, why: `under ${kas(depth)} KAS of ${side === 'buy' ? 'bids' : 'asks'} fillable now rest on the book (the wallet's own and large-minimum orders left out${crowd}${old})` };
   }

@@ -91,6 +91,11 @@ const withdrawn = (fs.existsSync(recordFile) ? JSON.parse(readLf(recordFile)).wi
   }
   return { name: w.name, hash: w.hash, why: w.why };
 });
+// An entry rests on the operator's word alone: every build says each one aloud, so a review of the
+// build log sees it (R7T-4).
+for (const w of withdrawn) {
+  console.error(`build-deploy: WITHDRAWN lock template ${w.name} ${w.hash} (${recordFile} withdrawn_locks, on the operator's word that no build issued it): ${w.why}`);
+}
 // A hand edit that deletes an entry would pass the checks above: every lock template any committed
 // record of this network listed must still be listed (audit 2026-11-23 R2A-3). The check needs the
 // whole history of the record: a shallow clone (actions/checkout's default, depth 1) holds only the

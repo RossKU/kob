@@ -58,9 +58,7 @@ if (cfg.network === 'mainnet' && ['run', 'once', 'check'].includes(cmd) && !isJs
 }
 // Partial or whole fills of the asks is the operator's informed choice on mainnet (README, tracking).
 if (cfg.network === 'mainnet' && ['run', 'once', 'check'].includes(cmd) && cfg.quotes.askPartialFills == null) {
-  console.error(`config ${configPath}: mainnet needs "quotes": { "askPartialFills": true | false }, set by you. `
-    + 'true: smaller takers can trade, but an indexer that is hostile and also trades can keep one ask level at a stale price for up to quotes.lifeMin. '
-    + 'false: every ask is all-or-nothing (a taker takes a whole level), and the node alone tells the bot which asks are live.');
+  console.error(`config ${configPath}: mainnet needs quotes.askPartialFills set: true (smaller takers trade, trusts the indexer) or false (whole levels only, node alone decides).`);
   process.exit(2);
 }
 mkdirSync(cfg.dataDir, { recursive: true });

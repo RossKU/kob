@@ -83,7 +83,10 @@ branch listed (a re-pin committed with its regenerated record) and dropped again
 build. Such a template was never issued, and the record says so in `withdrawn_locks`: entries `{ "name", "hash", "why" }`,
 entered by hand in the committed `contracts/deploy/<network>/deployment.json` and carried over by every build like `locks`. The
 history check takes a hash listed there as accounted for. An entry may not name a template that is in `locks`, the current one
-included, and a later record that deletes the entry refuses again. `DEPLOYMENT.md` lists the entries with their reason.
+included, and a later record that deletes the entry refuses again. `DEPLOYMENT.md` lists the entries with their reason,
+and every build prints each one with its reason (`build-deploy: WITHDRAWN lock template ...` on stderr). An entry rests on
+the operator's word alone: nothing checks that no deployed build issued the template, so a wrong entry silently takes the
+readers away from the locks made under it.
 
 The rule stays "no lock template ever issued may disappear", so before listing a template as withdrawn the operator must be sure
 that no lock was ever made under it, on any network the record covers: no release, tag or deployed binary (`deploy-<network>`

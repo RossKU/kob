@@ -22,6 +22,9 @@ const kasOf = (sompi) => sompi / 1e8;
 const SPENT = /\bspent: no unspent output at the order's script\b/;
 const ENDED = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
 const short = (id) => `${id.slice(0, 8)}..${id.slice(-4)}`;
+/** Two order states (the CLI's JSON) are the same script's when their documents are equal. */
+const sameState = (a, b) => !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
+const INFLIGHT_KEEP = 8; // in-flight transactions kept per order (R7T-1): amends are frozen while one is pending, so few
 const ERROR_ALERT_AFTER = 3; // consecutive failed cycles before an error alert
 const PLACE_FAILS_IDLE = 3; // placements refused in a row before IDLE/placement (R2-T3)
 const BLIND_KEEP_MS = 86_400_000; // how long a placement of no known id counts toward the caps
@@ -116,6 +119,13 @@ export class Bot {
     this.p = paths(cfg.dataDir);
     this.log = new Logger(cfg.dataDir);
     this.kob = new Kob(cfg, { dryRun });
+    // The CLI's congestion note goes to the log, at most once in 10 minutes (R7T-1).
+    let noted = 0;
+    this.kob.onNote = (n) => {
+      if (Date.now() - noted < 600_000) return;
+      noted = Date.now();
+      this.log.info(`CLI: ${n}${cfg.cli.priorityFee ? '' : ' (the bot sends at the relay fee: cli.priorityFee true pays the priority fee)'}`);
+    };
     this.idx = new Indexer(indexerUrl(cfg));
     this.state = loadState(cfg.dataDir);
     // A stop is final for the run that was stopped, not for the next start.
@@ -131,6 +141,18 @@ export class Bot {
     // The bot key's plain outputs on the node, the proof that a fill paid it (R3T-3). Only a JSON
     // wRPC node can be asked; with the CLI's default or a Borsh node a full fill is never proven.
     this.nodeOutputs = isJsonWrpc(cfg.node) ? (address, key) => keyOutputs(cfg.node, address, key) : null;
+  }
+
+  /**
+   * The CLI build (`kob --version`), read again each cycle and before a drop (R7T-5). A new build
+   * starts its own template proofs; the whole-fill end applies only to orders placed by the build
+   * that answers now. A CLI that does not answer leaves it null: no whole-fill end, the proofs kept.
+   */
+  async readCliVersion() {
+    const v = await this.kob.version();
+    if (v && this.cliVersion && v !== this.cliVersion) this.log.info(`the kob CLI changed: ${this.cliVersion} -> ${v}; its order templates are proven again, and the orders placed by the earlier build are no longer ended on a whole-fill lookup`);
+    if (v && this.state.templates.cli !== v) this.state.templates = { cli: v, kinds: {} };
+    this.cliVersion = v || null;
   }
 
   stopRequested() {
@@ -182,11 +204,9 @@ export class Bot {
     if (!stop) this.logReference(snap);
 
     // A template hash is proven for one CLI build: another build may place under another one.
-    if (this.cliVersion === undefined) {
-      this.cliVersion = await this.kob.version();
-      const t = this.state.templates;
-      if (!this.cliVersion || t.cli !== this.cliVersion) this.state.templates = { cli: this.cliVersion, kinds: {} };
-    }
+    // Read every cycle, before any end decision relies on it (R7T-5): a `kob` binary swapped
+    // under the running bot places under its own templates.
+    await this.readCliVersion();
     this.state.blind = (this.state.blind ?? []).filter((b) => now - b.at < BLIND_KEEP_MS);
     // An order an older version adopted from the indexer is not the bot's (R3T-2).
     for (const [id, s] of Object.entries(this.state.orders)) {
@@ -412,7 +432,8 @@ export class Bot {
    */
   async nodeCheck(ids, hints = {}) {
     const out = new Map(ids.map((id) => [id, { status: 'unknown', why: 'no record or template to look it up by' }]));
-    const pass = async (list, pick, prev) => {
+    const pass = async (list, pick, k) => {
+      const prev = k > 0;
       const sent = this.writeRecords(list, pick);
       if (!sent) return;
       const r = await this.kob.recover(this.p.check, { maker: this.maker, hints: Object.fromEntries(sent.filter((id) => hints[id]).map((id) => [id, hints[id]])) });
@@ -425,18 +446,22 @@ export class Bot {
         const id = e.covenant_id;
         if (!sent.includes(id)) continue;
         const t = this.tplOf(this.state.orders[id]);
-        if (e.status === 'live') out.set(id, { status: 'live', txid: String(e.outpoint ?? '').split(':')[0], amountLeft: e.amount_left ?? null, value: Number(e.value ?? 0), prev });
+        if (e.status === 'live') out.set(id, { status: 'live', txid: String(e.outpoint ?? '').split(':')[0], amountLeft: e.amount_left ?? null, value: Number(e.value ?? 0), prev, state: pick(this.state.orders[id]) });
         else if (e.status === 'not_found') out.set(id, { status: 'gone', verified: t.verified && t.hash === e.template_hash, spent: SPENT.test(e.note ?? '') });
         else if (e.status === 'other_maker') out.set(id, { status: 'foreign' });
         else out.set(id, { status: 'unknown', why: `${e.status}: ${e.note ?? ''}` });
       }
     };
-    await pass(ids, (s) => s.own?.state, false);
-    const back = ids.filter((id) => out.get(id).status === 'gone' && this.state.orders[id]?.own?.prev);
-    if (back.length) {
-      const first = new Map(back.map((id) => [id, out.get(id)]));
-      await pass(back, (s) => s.own.prev, true);
-      for (const id of back) if (out.get(id).status !== 'live') out.set(id, first.get(id));
+    // Every state the order can be in (statesOf): its own, the one before an amend not yet seen,
+    // and those of the bot's transactions on it still in flight (R7T-1), one call each.
+    await pass(ids, (s) => s.own?.state, 0);
+    for (let k = 1; ; k++) {
+      const more = ids.filter((id) => out.get(id).status === 'gone' && this.statesOf(this.state.orders[id]).length > k);
+      if (!more.length) break;
+      const first = new Map(more.map((id) => [id, out.get(id)]));
+      await pass(more, (s) => this.statesOf(s)[k], k);
+      // A state the node could not be asked about leaves the answer unknown, never "gone".
+      for (const id of more) if (out.get(id).status !== 'live' && out.get(id).status !== 'unknown') out.set(id, first.get(id));
     }
     return out;
   }
@@ -448,7 +473,6 @@ export class Bot {
   async cancelMany(ids) {
     const out = new Map(ids.map((id) => [id, { ok: false, live: null, error: 'no record or template to cancel it by' }]));
     const s0 = (id) => this.state.orders[id];
-    const withPrev = ids.flatMap((id) => (s0(id)?.own?.prev ? [id] : []));
     const run = async (list, pick) => {
       const sent = this.writeRecords(list, pick);
       if (!sent) return;
@@ -468,8 +492,12 @@ export class Bot {
       }
     };
     await run(ids, (s) => s.own?.state);
-    const again = withPrev.filter((id) => !out.get(id).ok && out.get(id).live === false);
-    if (again.length) await run(again, (s) => s.own.prev);
+    // Then every other state it can be in (statesOf), as for a lookup (R7T-1).
+    for (let k = 1; ; k++) {
+      const again = ids.filter((id) => !out.get(id).ok && out.get(id).live === false && this.statesOf(s0(id)).length > k);
+      if (!again.length) break;
+      await run(again, (s) => this.statesOf(s)[k]);
+    }
     return out;
   }
 
@@ -633,15 +661,61 @@ export class Bot {
 
   /**
    * Whether a verified "not found" of whole-fill ask `s` is the node's word that it ended: the
-   * lookup covered every state it can be in (its own, and the one before an amend not yet seen),
-   * under the template it was placed with, and no action of unknown outcome (a failed send that
-   * may have gone out with a state the bot did not record) or cancel-replace is open on it.
+   * lookup covered every state it can be in, under the template it was placed with by this very
+   * CLI build, and no transaction of the bot's own on it is in flight (R7T-1: a placement or an
+   * amend the node has not shown, whose state the node cannot hold yet). An open cancel-replace
+   * is no obstacle: not finding the replaced order proves it was spent, by the replace or not.
    */
   wholeGone(s) {
-    if (!this.isWhole(s) || s.stateUnknown || s.fate || s.pending?.kind === 'reread') return false;
+    if (!this.isWhole(s) || s.inflight?.length || s.stateUnknown || s.fate || s.pending?.kind === 'reread') return false;
     if (s.own.prev && !this.isWhole({ own: { state: s.own.prev } })) return false;
     const t = this.tplOf(s);
     return t.verified && s.own.cli != null && s.own.cli === this.cliVersion && (s.own.tpl == null || s.own.tpl === t.hash);
+  }
+
+  /**
+   * Every state order `s` can be in, its own first: the one before an amend not yet seen, and
+   * the planned and earlier states of the bot's transactions on it still in flight (R7T-1).
+   */
+  statesOf(s) {
+    const all = [s?.own?.state, s?.own?.prev, ...(s?.inflight ?? []).flatMap((e) => [e.state, e.from])].filter((x) => x?.kind);
+    return all.filter((x, i) => all.findIndex((y) => sameState(x, y)) === i);
+  }
+
+  /**
+   * A transaction of the bot's own on `s` (a placement or an amend) is in flight from its send
+   * until the node shows it (R7T-1): `exact` when the CLI's result named the state it sent.
+   */
+  noteInflight(s, e) {
+    s.inflight = [...(s.inflight ?? []), { since: Date.now(), ...e }].slice(-INFLIGHT_KEEP);
+  }
+
+  /**
+   * Settles the in-flight transactions of `s` by the node's answer `r` (R7T-1). One leaves the
+   * list when the node shows it (an output of it to the bot's address; the order live at its
+   * outpoint; for a placement, the order live at all: its covenant id comes from that very
+   * transaction) or shows it can never confirm (the order live at an outpoint that is neither
+   * the amend's input nor its own: the input was spent by another transaction), or, for an amend
+   * whose sent state is known, when neither that state nor the one it spent is on the node (its
+   * input is spent, by it or by another). A timeout settles nothing.
+   */
+  resolveInflight(s, r) {
+    if (!s.inflight?.length) return;
+    const shown = new Set(Object.values(this.state.payments).map((p) => p.txid));
+    s.inflight = s.inflight.filter((e) => {
+      if (e.txid && shown.has(e.txid)) return false;
+      if (r.status === 'live') return !(e.kind === 'place' || r.txid === e.txid || (e.input && r.txid !== e.input));
+      if (r.status === 'gone' && r.verified && e.kind === 'amend' && e.exact && e.state && e.from) return false;
+      return true;
+    });
+  }
+
+  /** One alert per transaction of the bot's own still in flight past orderVisibleTimeoutSec (a hint, R7T-1). */
+  inflightAlert(s, tag, now) {
+    const old = (s.inflight ?? []).find((e) => now - e.since > this.cfg.safety.orderVisibleTimeoutSec * 1000 && !e.alerted);
+    if (!old) return;
+    old.alerted = true;
+    this.alert('warn', 'own-tx-unconfirmed', `Order ${tag}: the bot's ${old.kind} ${old.txid ?? '(no txid)'} is not on the node after ${this.cfg.safety.orderVisibleTimeoutSec} s; the order is kept, and looked up at every state it can be in, until the node settles it (blocks may be contended: see cli.priorityFee).`);
   }
 
   /** Whether the node showed an output of a placement of unknown outcome: it went out (R6T-2). */
@@ -825,7 +899,8 @@ export class Bot {
       const o = byId.get(id);
       this.learn(s, raw.get(id));
       if (!o) {
-        if (s.pending?.kind === 'place' && !due(s.pending)) continue;
+        // A transaction of the bot's own in flight is looked up every cycle: the node settles it (R7T-1).
+        if (s.pending?.kind === 'place' && !due(s.pending) && !s.inflight?.length) continue;
         check.push(id);
         // An ask the list leaves out: the indexer's own view of it may still name its amount, which
         // the node then checks (R3T-3).
@@ -846,7 +921,7 @@ export class Bot {
           continue;
         }
       } else if (s.pending?.kind === 'cancel' && !due(s.pending)) continue;
-      if (!atOwn || s.pending || s.idxBad || s.fate || s.unconfirmed) check.push(id);
+      if (!atOwn || s.pending || s.idxBad || s.fate || s.unconfirmed || s.inflight?.length) check.push(id);
     }
     // A template the indexer named is proven once on the node, on an order it shows where the bot
     // put it, so that a filled or cancelled order can end later.
@@ -855,9 +930,9 @@ export class Bot {
       const one = Object.entries(this.state.orders).find(([id, s]) => s.own?.state?.kind === kind && !s.proven && !check.includes(id));
       if (one) check.push(one[0]);
     }
-    // A cancel-replaced record due for its check: its replacement is looked up too, and live on
-    // the node it proves that the replace confirmed (R6T-2).
-    const replaced = check.filter((id) => this.state.orders[this.state.orders[id]?.replacedBy]);
+    // A cancel-replaced record: its replacement is looked up every cycle until the node has held
+    // it, and live on the node it proves that the replace confirmed (R6T-2, R7T-2).
+    const replaced = Object.keys(this.state.orders).filter((id) => !this.state.orders[id].replaceSeen && this.state.orders[this.state.orders[id].replacedBy]);
     for (const id of replaced) if (!check.includes(this.state.orders[id].replacedBy)) check.push(this.state.orders[id].replacedBy);
     if (check.length) {
       const res = await this.nodeCheck(check, hints);
@@ -912,14 +987,29 @@ export class Bot {
     const timeout = this.cfg.safety.orderVisibleTimeoutSec * 1000;
     const tag = `${short(id)} (${s.side} L${s.level})`;
     if (r.status === 'live') {
-      if (r.prev) {
-        // The amend never landed: the order sits under its state before it.
-        this.log.info(`${tag}: the amend ${s.pending?.txid ?? ''} did not land; the order is at its earlier terms`);
-        s.own.state = s.own.prev;
+      // Which state the node holds it at, and what that says of the bot's own transactions on it (R7T-1).
+      const amend = (s.inflight ?? []).find((e) => e.kind === 'amend' && e.state && sameState(e.state, r.state));
+      const back = r.state && !sameState(r.state, s.own?.state) && !amend;
+      this.resolveInflight(s, r);
+      if (back) {
+        // The amend has not landed (yet): the order sits under its state before it. The amend
+        // stays in flight, and its state is still looked up, until the node settles it (R7T-1).
+        const from = (s.inflight ?? []).find((e) => e.kind === 'amend' && sameState(e.from, r.state));
+        this.log.info(`${tag}: the amend ${s.pending?.txid ?? from?.txid ?? ''} has not landed; the order is at its earlier terms${from ? ' (the amend is still looked up)' : ''}`);
+        s.own.state = r.state;
         s.price = Number(s.own.state.state?.price ?? s.price);
         if (/^\d+$/.test(String(s.own.state.state?.amountLeft ?? ''))) s.ownAmount = Number(s.own.state.state.amountLeft);
         s.quotedFair = 0; // unknown quote: the next cycle amends it to the target
-        s.expiresAt = null; // and renews its expiry
+        s.expiresAt = from?.fromExpiresAt ?? null; // the earlier expiry (unknown: renewed)
+        if (s.pending?.kind === 'amend') s.pending = null;
+      } else if (amend && r.state && !sameState(r.state, s.own?.state)) {
+        // An amend the bot had taken for not landed did land (R7T-1): the order is at its terms.
+        this.log.info(`${tag}: the amend ${amend.txid ?? ''} landed after all; the order is at its terms`);
+        s.own.state = r.state;
+        s.price = Number(s.own.state.state?.price ?? s.price);
+        if (/^\d+$/.test(String(s.own.state.state?.amountLeft ?? ''))) s.ownAmount = Number(s.own.state.state.amountLeft);
+        s.quotedFair = 0;
+        s.expiresAt = amend.expiresAt ?? null;
       }
       if (s.own) Object.assign(s.own, { prev: null, txid: r.txid });
       s.value = r.value;
@@ -934,12 +1024,19 @@ export class Bot {
       s.cancelUnseen = false;
       s.stateUnknown = false;
       if (s.replacedBy) {
-        // Its cancel-replace never landed (it spends this very output): the replacement record is
-        // a placement that may not have gone out, and this order is tracked again (R6T-2).
+        // Live at the outpoint its cancel-replace spends: the replace may still confirm, and both
+        // records stay as they are (R7T-1). Live anywhere else: the replace can never land, so the
+        // replacement record is a placement that did not go out, and this order is tracked again (R6T-2).
         const n = this.state.orders[s.replacedBy];
-        this.log.info(`${tag}: its cancel-replace ${s.pending?.txid ?? ''} did not land: the order is live at ${r.txid}`);
-        if (n) n.fate = 'unknown';
-        s.replacedBy = null;
+        const e = (n?.inflight ?? []).find((x) => x.kind === 'place' && x.input);
+        if (!e || r.txid !== e.input) {
+          this.log.info(`${tag}: its cancel-replace ${s.pending?.txid ?? ''} can no longer land: the order is live at ${r.txid}`);
+          if (n) {
+            n.fate = 'unknown';
+            if (e) n.inflight = n.inflight.filter((x) => x !== e);
+          }
+          s.replacedBy = null;
+        }
       }
       s.unconfirmed = false;
       if (s.pending?.kind === 'cancel' ? now - s.pending.since > timeout : s.pending) s.pending = null; // an unseen cancel is sent again
@@ -972,6 +1069,27 @@ export class Bot {
       if (!cancelled && sent && r.status === 'gone' && r.verified && !r.spent && this.nodeOutputs && this.paymentsReread !== now) {
         this.paymentsReread = now;
         if (await this.seePayments(now)) cancelled = this.cancelConfirmed(s);
+      }
+      // The bot's own transactions on it still in flight (R7T-1): while one is, "not found" says
+      // nothing (the node cannot hold a state before its transaction confirms), so nothing ends.
+      // A confirmed cancel ends it whatever was in flight: it spent the order.
+      if (cancelled) s.inflight = [];
+      this.resolveInflight(s, r);
+      if (s.inflight?.length) {
+        const exp = Math.max(s.expiresAt ?? 0, ...s.inflight.map((e) => e.expiresAt ?? 0)) || null;
+        if (exp != null && now >= exp + PROVEN_KEEP_AFTER_EXPIRY_MS) {
+          // Past the expiry of every state it can be in, plus the 2 h of the proven rule: no
+          // conforming matcher fills it and keepers refund it, so the normal rules decide.
+          this.log.info(`${tag}: ${s.inflight.length} transaction(s) of the bot's own on it never showed on the node; ${PROVEN_KEEP_AFTER_EXPIRY_MS / 3_600_000} h past its expiry the normal rules decide`);
+          s.inflight = [];
+        } else {
+          if (exp != null && now >= exp && !s.parked) {
+            s.parked = true; // its level is free, it still counts toward the caps, STOP does not wait for it
+            this.log.info(`${tag}: past its expiry with a transaction of the bot's own still in flight: parked`);
+          }
+          this.inflightAlert(s, tag, now);
+          return;
+        }
       }
       // A placement of unknown fate whose transaction shows an output on the node went out: from
       // now on it is an order like any other (R6T-2).
@@ -1049,6 +1167,7 @@ export class Bot {
       return;
     }
     this.log.info(`${tag}: the node could not be asked (${r.why}): kept until it shows the order ended`);
+    this.inflightAlert(s, tag, now);
     if (!this.tplOf(s).hash && !s.unconfirmed) {
       this.alert('error', 'node-unconfirmed', `Order ${tag} cannot be looked up on the node (no order template known yet: the indexer has listed none of the bot's orders): it is kept (it counts toward the capital cap and its level is not quoted again) until the node shows it ended; check the indexer.`);
       s.unconfirmed = true;
@@ -1218,6 +1337,8 @@ export class Bot {
     if (!s.unconfirmed && !s.parked && !s.proven) return { ok: false, node: null, message: `${short(id)} is not unresolved: the bot tracks it and ends it by itself` };
     const bal = await this.kob.balances(this.cfg.token.covenantId);
     this.maker = bal.maker;
+    // The build that answers now decides whether the whole-fill end applies (R7T-I1, R7T-5).
+    await this.readCliVersion();
     const v = await this.idx.order(id).catch(() => null);
     if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
     const hints = isAsk(s) ? [...new Set([...this.hintsOf(id), ...(Number.isSafeInteger(amountLeft) && amountLeft > 0 ? [amountLeft] : [])])] : [];
@@ -1383,22 +1504,21 @@ export class Bot {
       this.log.info(`${desc} (${a.reason}): FAILED ${r.error}`);
       // The order's state is unknown now: leave it alone until the next cycle has re-read it.
       if (a.id && this.state.orders[a.id]) this.state.orders[a.id].pending = { kind: 'reread', since: Date.now() };
-      if (a.kind === 'place' && !this.dryRun) this.placeFailed(a, r);
+      if (a.kind === 'place' && !this.dryRun) this.placeFailed(a, r, expiresAt);
       // A send that may have gone out counts its planned fee toward the daily cap (L25).
       if (r.sentFee && !this.dryRun) {
         addFee(this.state, `${a.kind}-unknown`, r.sentFee);
         this.ownTx(r.doc?.result?.txid ?? r.doc?.transaction?.txid);
-        // An amend that may have gone out leaves the order at one of two states: the one it
-        // planned is recorded as an amend not yet seen, so that both are looked up. One whose plan
-        // names no in-place state may sit anywhere: no whole-fill end for it until the node finds
-        // it (wholeGone).
+        // An amend that may have gone out is in flight (R7T-1): the state its plan names is
+        // looked up beside the order's own until the node settles it. The plan may be the dry
+        // run's, not what was sent, so it is not `exact`: only the node finding the order settles
+        // it. One whose plan names no in-place state is in flight with no state to look up.
         const s = this.state.orders[a.id];
         const rep = r.doc?.plan?.replacement;
         if (a.kind === 'amend' && s) {
-          if (rep?.kind && r.doc?.plan?.inPlace !== false && s.own?.state) {
-            s.own = { ...s.own, prev: s.own.state, state: rep };
-            s.pending = { kind: 'amend', since: Date.now(), txid: r.doc?.result?.txid ?? r.doc?.transaction?.txid ?? null };
-          } else s.stateUnknown = true;
+          const inPlace = r.doc?.plan?.inPlace !== false;
+          this.noteInflight(s, { kind: 'amend', txid: r.doc?.result?.txid ?? r.doc?.transaction?.txid ?? null, state: inPlace && rep?.kind ? rep : null,
+            from: s.own?.state ?? null, input: s.own?.txid ?? null, exact: false, expiresAt, fromExpiresAt: s.expiresAt ?? null });
         }
       }
       this.save();
@@ -1413,7 +1533,10 @@ export class Bot {
     if (a.kind === 'place') {
       const id = r.newIds[0];
       // The order is tracked from the CLI's own result: its state and outpoint (R2-T1).
-      if (id) this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
+      if (id) {
+        this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
+        this.noteInflight(this.state.orders[id], { kind: 'place', txid: r.txid, exact: true, expiresAt });
+      }
       // The CLI's own plan says whether the ask is whole-fill: one that is not follows the partial-fill rules.
       if (id && a.side === 'sell' && c.quotes.askPartialFills === false && !this.isWhole(this.state.orders[id])) {
         this.log.info(`WARNING: ${short(id)}: placed with --min-fill ${a.amount}base, but the CLI's plan names minFill ${this.state.orders[id].own?.state?.state?.minFill ?? '?'}: it is tracked as a partial-fill ask`);
@@ -1426,6 +1549,8 @@ export class Bot {
       if (inPlace) {
         // Until the amend is seen, the order may still sit under its earlier state (own.prev).
         const rep = r.doc?.plan?.replacement;
+        // In flight until the node shows it (R7T-1): its state and the one it spends stay looked up.
+        this.noteInflight(s, { kind: 'amend', txid: r.txid, state: rep?.kind ? rep : null, from: s.own?.state ?? null, input: s.own?.txid ?? null, exact: !!rep?.kind, expiresAt, fromExpiresAt: s.expiresAt ?? null });
         s.own = { ...(s.own ?? { tpl: null }), prev: s.own?.state ?? null, state: rep?.kind ? rep : s.own?.state ?? null, txid: r.txid };
         if (/^\d+$/.test(String(r.doc?.plan?.value ?? ''))) s.value = Number(r.doc.plan.value);
         // What the new outpoint holds: the fills before it are in it already.
@@ -1439,7 +1564,11 @@ export class Bot {
         // node shows the replace (an output of it, or the replacement live): a fill that lands
         // first leaves the old order live (R6T-2).
         const id = r.newIds[0];
-        if (id) this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
+        if (id) {
+          this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
+          // `input`: the old order's outpoint, which the replace spends (R7T-1).
+          this.noteInflight(this.state.orders[id], { kind: 'place', txid: r.txid, exact: true, expiresAt, input: s.own?.txid ?? null });
+        }
         s.replacedBy = id ?? null;
         this.noteCancel(s, r.txid, now);
         this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}; the old record is kept until the node shows the replace`);
@@ -1466,13 +1595,15 @@ export class Bot {
    * names, its outcome unknown until the node says (or, with no id known, counted toward the caps for
    * a day). A refusal counts toward IDLE/placement (R2-T3).
    */
-  placeFailed(a, r) {
+  placeFailed(a, r, expiresAt = null) {
     const now = Date.now();
     if (r.sentFee) {
       const id = r.doc?.new_covenant_ids?.[0];
       const txid = r.doc?.result?.txid ?? r.doc?.transaction?.txid ?? null;
       if (id && /^[0-9a-f]{64}$/.test(id)) {
         this.state.orders[id] = { ...this.placed(a, r.doc, txid, now, null), fate: 'unknown', pending: { kind: 'place', since: now, txid } };
+        // In flight (R7T-1): it ends as "never went out" only once its expiry has passed by 2 h.
+        this.noteInflight(this.state.orders[id], { kind: 'place', txid, exact: false, expiresAt });
       } else this.state.blind.push({ side: a.side, cost: a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0, tokens: a.side === 'sell' ? a.amount : 0, at: now });
       this.alert('warn', 'place-unknown', `A placement (${a.side} L${a.level}) may have gone out (${r.error}); it counts toward the caps ${id ? `as order ${short(id)} until the node says` : 'for a day (no covenant id known)'}.`);
       return;

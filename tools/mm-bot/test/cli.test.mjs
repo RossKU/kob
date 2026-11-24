@@ -176,11 +176,38 @@ test('mainnet without quotes.askPartialFills: check, run and once refuse, naming
   for (const cmd of ['check', 'run', 'once']) {
     const r = run(cmd, cfgFile({ network: 'mainnet' }));
     assert.equal(r.status, 2, `${cmd}: ${r.stdout}${r.stderr}`);
-    assert.match(r.stderr, /mainnet needs "quotes": \{ "askPartialFills": true \| false \}, set by you/);
-    assert.match(r.stderr, /true: smaller takers can trade, but an indexer that is hostile and also trades can keep one ask level at a stale price for up to quotes.lifeMin/);
-    assert.match(r.stderr, /false: every ask is all-or-nothing .* the node alone tells the bot which asks are live/);
+    assert.match(r.stderr, /mainnet needs quotes\.askPartialFills set: true \(smaller takers trade, trusts the indexer\) or false \(whole levels only, node alone decides\)\./);
   }
   for (const v of [true, false]) assert.equal(run('check', cfgFile({ network: 'mainnet', quotes: { askPartialFills: v } })).status, 0);
   assert.equal(run('check', cfgFile({ network: 'mainnet', quotes: { askPartialFills: 'no' } })).status, 2, 'a boolean or null');
   assert.equal(run('check', cfgFile({ network: 'testnet-10' })).status, 0, 'testnet-10: partial fills by default');
+});
+
+// R7T-I2: the timers and switches the config left unchecked are checked like the rest.
+test('config: orderVisibleTimeoutSec, backoff, stable age, cross-check and the CLI switches are validated (R7T-I2)', async () => {
+  const { DEFAULTS, validate } = await import('../src/config.mjs');
+  const ok = { ...JSON.parse(JSON.stringify(DEFAULTS)), network: 'testnet-10', token: { ...DEFAULTS.token, covenantId: TOKEN, decimals: 6 } };
+  assert.deepEqual(validate(ok), []);
+  const bad = (f) => { const c = JSON.parse(JSON.stringify(ok)); f(c); return validate(c).join('; '); };
+  assert.match(bad((c) => { c.safety.orderVisibleTimeoutSec = 0; }), /safety.orderVisibleTimeoutSec/);
+  assert.match(bad((c) => { c.safety.orderVisibleTimeoutSec = 'x'; }), /safety.orderVisibleTimeoutSec/);
+  assert.match(bad((c) => { c.safety.backoffMaxSec = 1; }), /safety.backoffMaxSec/);
+  assert.match(bad((c) => { c.reference.stableMaxAgeSec = 1; }), /reference.stableMaxAgeSec/);
+  assert.match(bad((c) => { c.reference.crossCheck.enabled = 'yes'; }), /crossCheck.enabled/);
+  assert.match(bad((c) => { c.cli.preflight = 1; }), /cli.preflight/);
+});
+
+// R7T-1 (d): the CLI's congestion note is not dropped as noise; it reaches the bot's log.
+test('the CLI note that blocks are contended reaches onNote, and is not taken for an error', async () => {
+  const { kob } = fake('ok');
+  const notes = [];
+  kob.onNote = (n) => notes.push(n);
+  kob.env.FAKE_KOB_NOTE = '1';
+  try {
+    const r = await kob.cancel('cd'.repeat(32));
+    assert.equal(r.ok, true);
+    assert.ok(notes.length >= 1 && /blocks are contended/.test(notes[0]), JSON.stringify(notes));
+  } finally {
+    delete kob.env.FAKE_KOB_NOTE;
+  }
 });

@@ -248,6 +248,10 @@ test('config: testnet by default, mainnet only with allowMainnet, the allow-list
   assert.throws(() => checkConfig({ ...base, network: 'mainnet', allowMainnet: true }, '.', {}), /withdrawTo/, 'a testnet address on mainnet');
   assert.throws(() => checkConfig({ ...base, withdrawTo: ['kaspatest:nothex'] }, '.', {}), /withdrawTo/);
   assert.throws(() => checkConfig({ ...base, keyFile: null }, '.', {}), /KOB_KEY/);
+  // R7T-I7: an indexer URL is checked; on mainnet it is https only.
+  assert.throws(() => checkConfig({ ...base, indexer: 'ftp://x' }, '.', {}), /indexer must be an http/);
+  assert.throws(() => checkConfig({ ...base, network: 'mainnet', allowMainnet: true, withdrawTo: [], indexer: 'http://idx.example' }, '.', {}), /https:\/\/ URL on mainnet/);
+  assert.doesNotThrow(() => checkConfig({ ...base, indexer: 'http://127.0.0.1:8080' }, '.', {}));
   assert.doesNotThrow(() => checkConfig({ ...base, keyFile: null }, '.', { KOB_KEY: 'x' }));
   assert.equal(JSON.stringify(publicConfig(c)).includes('k.key'), false, 'the key path is not shown');
   assert.equal(publicConfig({ ...c, indexer: 'https://u:secret@idx.example/api?key=secret' }).indexer, 'https://idx.example/api', 'no indexer credentials (R3T-I3)');
@@ -269,8 +273,8 @@ test('book reference: 200 dust rows above one real level neither count nor hide 
   const depth = 1000n * 100_000_000n;
   const row = (price, amount, maker = 'aa'.repeat(32)) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '1', scale, maker, ...live(price) });
   const fills = [{ price: String(25e6), amount: String(6000e8) }];
-  // 200 bids just above the real one, each 3 tokens at 0.3 KAS (0.9 KAS, under the 1 KAS minimum).
-  const dust = Array.from({ length: 200 }, (_, i) => row(30e6 + i, 3e8, (i % 256).toString(16).padStart(2, '0').repeat(32)));
+  // 200 bids just above the real one, each 1.5 tokens at 0.3 KAS (0.45 KAS, under kobd's 0.5 KAS dust line).
+  const dust = Array.from({ length: 200 }, (_, i) => row(30e6 + i, 1.5e8, (i % 256).toString(16).padStart(2, '0').repeat(32)));
   const bids = [...dust.reverse(), row(24e6, 5000e8)];
   const r = bookReference({ side: 'buy', rows: { bids }, fills, scale, depth });
   assert.ok(r.ref, r.why);
@@ -278,8 +282,26 @@ test('book reference: 200 dust rows above one real level neither count nor hide 
   // Dust alone is no reference, and the reason says why.
   const only = bookReference({ side: 'buy', rows: { bids: dust }, fills, scale, depth });
   assert.equal(only.ref, null);
-  assert.match(only.why, /200 row\(s\) worth under 1 KAS \(dust\) count as nothing: they may crowd the real orders out/);
-  // One row of exactly 1 KAS counts.
-  assert.equal(DUST_BELOW_SOMPI, 100_000_000n);
+  assert.match(only.why, /200 row\(s\) worth under 0.5 KAS \(dust\) count as nothing: they may crowd the real orders out/);
+  assert.equal(DUST_BELOW_SOMPI, 50_000_000n, 'half the listing minimum, as kobd');
   assert.ok(REF_BOOK_ROWS >= 400, 'the read leaves room for the 200 dust rows of an older kobd');
+});
+
+test('book reference: rows of 0.5 to 1 KAS count, whether or not the indexer says it applies the dust rule (R7T-3)', () => {
+  const scale = 100_000_000;
+  const depth = 1000n * 100_000_000n;
+  const row = (price, amount) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '1', scale, maker: 'aa'.repeat(32), ...live(price) });
+  const fills = [{ price: String(25e6), amount: String(6000e8) }];
+  // 200 bids of 0.75 KAS (2.5 tokens at 0.3) above 900 KAS at 0.24: 1,050 KAS in all.
+  const small = Array.from({ length: 200 }, (_, i) => row(30e6 - i, 2.5e8));
+  const bids = [...small, row(24e6, 3750e8)];
+  for (const extra of [{}, { dust_orders: 12 }]) {
+    const r = bookReference({ side: 'buy', rows: { bids, ...extra }, fills, scale, depth });
+    assert.ok(r.ref, r.why);
+    assert.equal(r.ref.num, 24_000_000n);
+  }
+  // An indexer that applies kobd's rule: every row it returned counts, also one under 0.5 KAS.
+  const tiny = [row(30e6, 1e8), row(24e6, 4166e8)];
+  assert.ok(bookReference({ side: 'buy', rows: { bids: tiny, dust_orders: 3 }, fills, scale, depth }).ref);
+  assert.equal(bookReference({ side: 'buy', rows: { bids: tiny }, fills, scale, depth }).ref, null, 'without it, the 0.3 KAS row is dust here');
 });

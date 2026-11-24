@@ -644,14 +644,14 @@ test('200 dust bids above one real level do not empty the book reference (R6T-4)
     asked.push(depth);
     return rows(svc.book$.rows.bids.slice(0, depth));
   };
-  // 200 bids of 0.9 KAS each just above the real 1,200 KAS at 0.24.
-  const dust = Array.from({ length: 200 }, (_, i) => row(30000000 - i, 3e8, { min_fill: '1' }));
+  // 200 bids of 0.45 KAS each just above the real 1,200 KAS at 0.24.
+  const dust = Array.from({ length: 200 }, (_, i) => row(30000000 - i, 1.5e8, { min_fill: '1' }));
   svc.book$ = { rows: rows([...dust, row(24000000, 5000e8)]), fills: fills(25000000, 1000e8, 5) };
   assert.equal((await svc.write('kob_place_limit', { ...place, price: '0.3KAS' })).status, 'submitted', 'judged against the real 0.24');
   assert.match((await svc.write('kob_place_limit', { ...place, price: '0.31KAS' })).reason, /^PRICE_BAND: a buy at 0\.31 KAS .*0\.24 KAS per whole token/);
   assert.ok(asked.every((d) => d >= 400));
   // At an indexer's default cap of 200 the dust fills the read: refused, and the reason says why.
   cap = 200;
-  assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: no usable reference .*200 row\(s\) worth under 1 KAS \(dust\).*refPrice/);
+  assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: no usable reference .*200 row\(s\) worth under 0.5 KAS \(dust\).*refPrice/);
   assert.equal(t.yesCalls().length, 1);
 });

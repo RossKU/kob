@@ -5,13 +5,16 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 appendFileSync(process.env.FAKE_KOB_LOG, JSON.stringify(args) + '\n');
 const mode = process.env.FAKE_KOB_MODE ?? 'ok';
+// FAKE_KOB_NOTE: the CLI's congestion note on stderr (R7T-1).
+if (process.env.FAKE_KOB_NOTE) process.stderr.write('note: blocks are contended (the node estimates 3 sompi per gram for the next minute). KOB transactions are ranked by their storage mass, which the normal fee does not cover, so they may wait.\n');
 const dry = args.includes('--dry-run');
 const tx = 'ab'.repeat(32);
 // The template hash of each order kind in this build (the indexer names it in its views).
 export const TPL = { KobAsk: 'a5'.repeat(32), KobBid: 'b5'.repeat(32) };
 const doc = (extra) => JSON.stringify({ action: 'place limit sell', network: 'testnet-10', plan: {}, issues: [], transaction: { txid: tx, fee: '427000' }, new_covenant_ids: ['cd'.repeat(32)], result: null, ...extra }, null, 2);
 
-if (args[0] === '--version') { process.stdout.write('kob 0.0.0 (fake build)\n'); process.exit(0); }
+// FAKE_KOB_VERSION: another build swapped in under the running bot (R7T-5).
+if (args[0] === '--version') { process.stdout.write(`${process.env.FAKE_KOB_VERSION ?? 'kob 0.0.0 (fake build)'}\n`); process.exit(0); }
 if (mode === 'usage') {
   process.stderr.write('error: the amount needs a unit\n');
   process.exit(2);
@@ -99,10 +102,12 @@ function chain() {
     if (side === 'sell' && c.tokenUtxos > 3) { process.stderr.write('error: TOKEN_UTXOS_FRAGMENTED'); process.exit(1); }
     // --min-fill: kept in the order's state (a whole-fill ask has it equal to its amount).
     const minFill = args.includes('--min-fill') ? Number(val('--min-fill').replace('base', '')) : null;
-    const st = stateOf(side === 'sell' ? 1 : 2, price, amount, minFill);
+    const st = stateOf(side === 'sell' ? 1 : 2, price, amount, minFill, txid);
     submit({ ids: [id], plan: { states: [st], request: { value: String(side === 'sell' ? 1e8 : escrow + 1e8) } }, apply: () => {
-      if (side === 'sell') { c.tokenFree -= amount; c.kasFree -= 1e8; c.orders[id] = { side: 1, price, amount, value: 1e8, txid, expiresAt: gtd(), ...(minFill != null ? { minFill } : {}) }; }
-      else { c.kasFree -= escrow + 1e8; c.orders[id] = { side: 2, price, amount, value: escrow + 1e8, txid, expiresAt: gtd() }; }
+      // FAKE_KOB_PENDING: submitted, but it waits in the mempool until the test mines it (R7T-1).
+      const book = process.env.FAKE_KOB_PENDING ? ((c.mempool ??= {}).place ??= {}) : c.orders;
+      if (side === 'sell') { c.tokenFree -= amount; c.kasFree -= 1e8; book[id] = { side: 1, price, amount, value: 1e8, txid, expiryDaa: txid, expiresAt: gtd(), ...(minFill != null ? { minFill } : {}) }; }
+      else { c.kasFree -= escrow + 1e8; book[id] = { side: 2, price, amount, value: escrow + 1e8, txid, expiryDaa: txid, expiresAt: gtd() }; }
     } });
   }
   if (args[0] === 'replace') {
@@ -116,15 +121,19 @@ function chain() {
     const how = process.env.FAKE_KOB_REPLACE_NEW;
     if (how) {
       const nid = ('d' + (c.n + 1).toString(16)).padStart(64, '0');
-      submit({ ids: [nid], plan: { inPlace: false, current: stateOf(o.side, o.price, o.amount, o.minFill), states: [stateOf(o.side, np, o.amount, o.minFill)], value: String(o.value - fee) }, apply: () => {
-        if (how === 'lost') { o.amount -= 1_500_007; return; }
-        c.orders[nid] = { ...o, price: np, txid, expiresAt: gtd(), value: o.value - fee };
+      submit({ ids: [nid], plan: { inPlace: false, current: stateOf(o.side, o.price, o.amount, o.minFill, o.expiryDaa), states: [stateOf(o.side, np, o.amount, o.minFill, txid)], value: String(o.value - fee) }, apply: () => {
+        // The fill moves the order to a new outpoint, which the replace does not spend.
+        if (how === 'lost') { o.amount -= 1_500_007; o.txid = `f${txid.slice(1)}`; return; }
+        c.orders[nid] = { ...o, price: np, txid, expiryDaa: txid, expiresAt: gtd(), value: o.value - fee };
         c.ended[id] = 'cancelled';
         delete c.orders[id];
         c.kasFree += fee;
       } });
     }
-    submit({ plan: { inPlace: true, current: stateOf(o.side, o.price, o.amount, o.minFill), replacement: stateOf(o.side, np, o.amount, o.minFill), value: String(o.value - fee) }, apply:() => { if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
+    submit({ plan: { inPlace: true, current: stateOf(o.side, o.price, o.amount, o.minFill, o.expiryDaa), replacement: stateOf(o.side, np, o.amount, o.minFill, txid), value: String(o.value - fee) }, apply:() => {
+      // FAKE_KOB_PENDING: the amend waits in the mempool, spending the order's outpoint (R7T-1).
+      if (process.env.FAKE_KOB_PENDING) { ((c.mempool ??= {}).amend ??= []).push({ id, input: o.txid, txid, expiryDaa: txid, price: np, expiresAt: args.includes('--gtd') ? gtd() : o.expiresAt }); return; }
+      if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.expiryDaa = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
   }
   if (args[0] === 'cancel') {
     const id = args[1];
@@ -143,9 +152,11 @@ function chain() {
 }
 
 /** The order state as the CLI prints it (serde AnyState), with the fields the bot reads. */
-// An amend keeps the minimum fill, at most the amount left (kob replace).
-function stateOf(side, price, amount, minFill = null) {
-  const st = { maker: 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb', tokenCovId: '01'.repeat(32), scale: '1000000', price: String(price), extensionCommitment: '00'.repeat(32) };
+// An amend keeps the minimum fill, at most the amount left (kob replace). `expiryDaa` stands for
+// the expiry each send computes from --gtd (R7T-I6): here the sending transaction's id, so that
+// two amends to one price are two scripts, as on chain.
+function stateOf(side, price, amount, minFill = null, expiryDaa = null) {
+  const st = { maker: 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb', tokenCovId: '01'.repeat(32), scale: '1000000', price: String(price), extensionCommitment: '00'.repeat(32), ...(expiryDaa ? { expiryDaa } : {}) };
   const mf = minFill == null ? {} : { minFill: String(Math.min(minFill, amount)) };
   return side === 1 ? { kind: 'KobAsk', state: { ...st, ...mf, amountLeft: String(amount) } } : { kind: 'KobBid', state: st };
 }
@@ -174,6 +185,7 @@ function recover(c, fee) {
     const e = { covenant_id: id, kind, template_hash: it.template_hash, status: 'not_found', note };
     const st = it.state.state;
     if (it.template_hash === TPL[kind] && o && (o.side === 1) === (kind === 'KobAsk') && o.price === Number(st.price)
+      && (st.expiryDaa == null || o.expiryDaa == null || st.expiryDaa === o.expiryDaa)
       && (o.side === 2 || o.amount === Number(st.amountLeft) || (hints[id] ?? []).includes(o.amount))) {
       const left = o.side === 1 ? o.amount : Math.floor(((o.value - 1e8) * 1e6) / o.price);
       Object.assign(e, { status: 'live', note: '', outpoint: `${o.txid}:0`, value: String(o.value), amount_left: String(left) });

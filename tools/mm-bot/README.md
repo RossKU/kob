@@ -57,6 +57,16 @@ On testnet-10 it is a warning. They also refuse until `quotes.askPartialFills` i
   does not find is not proof (it may sit at an amount the search did not reach): it is kept as unresolved, with one
   error alert. Until an order leaves, it counts toward the side caps, its level is not quoted again, it is never
   amended, every pull and STOP try to cancel it, and each cycle it is looked up again.
+- **The bot's own transactions in flight.** A placement or an amend the bot sent is in flight until the node shows
+  it: an output of that transaction, the order live at its outpoint (for a placement, live at all), or the order live
+  at an outpoint that shows it can never confirm (one that is neither the amend's nor the one it spent). Until then
+  "not found" proves nothing, so no order ends, and every state the order can be in (its own, the one an amend spent,
+  and each one an amend planned, also after an amend was taken for not landed) is looked up each cycle. One in flight
+  longer than `safety.orderVisibleTimeoutSec` raises one `own-tx-unconfirmed` alert; the timeout only schedules
+  checks, resends and alerts, it never ends an order. An order still in flight past its own expiry is parked (STOP no
+  longer waits for it), and 2 h past it the normal rules decide, as for a proven ask. The CLI's note that blocks are
+  contended goes to the log: under contention relay-fee KOB transactions may wait, and `cli.priorityFee: true`
+  pays for their storage mass (at most about 0.31 KAS more a transaction).
 - **A fully filled ask** leaves no output on the node either. It is *proven* when the fills the indexer reports for it add up
   to what its last own outpoint held (the amount at its last placement or amend) and each is paid: for each fill, one
   output to the bot's own address in that fill's transaction, worth at least what the covenant pays the maker,
@@ -89,7 +99,7 @@ On testnet-10 it is a warning. They also refuse until `quotes.askPartialFills` i
   ask side until older records end, within 3.5 h; the operator should check `mm-bot unresolved` and, if fills that
   fast are expected, lower the fill rate (fewer or larger levels) or drop records already seen ended (`mm-bot drop
   --id <id> --force`, bot stopped). A forged proof thus never makes the bot forget an order; what it can still cost is
-  below (**What the lookup cannot find**). To see the payments the
+  below (**Partial or whole fills**). To see the payments the
   bot reads its own address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle, before each
   placement or amend, and after a cycle that sent. An output keeps the time the node first showed it for as long as the
   node shows it; once the node stops showing it, its record is kept for a week (at most 2,000 that proved nothing and
@@ -133,36 +143,10 @@ On testnet-10 it is a warning. They also refuse until `quotes.askPartialFills` i
   already searched per order, so the node calls do not grow. A payment that could pay for more than 200 fill amounts
   (a base unit worth under 1/200 sompi) is skipped, with a log line. An ask found that way marks those payments as its
   fills (the log names them); they then prove nothing else.
-- **Partial or whole fills (`quotes.askPartialFills`).** With `false` every ask is placed with its minimum fill equal
-  to its amount (`kob place ... --min-fill <amount>base`; an amend in place keeps it, since it changes only price and
-  expiry). The contract takes a fill of at least `minFill` or of all that is left, never more than is left, so such an
-  ask is filled in full, cancelled, amended by the bot or refunded: its amount never changes without the bot. The bot
-  then looks it up at its own state only (one candidate, no hints), and "not found at its state under the template it
-  was placed with" is the node's word that it ended: its level and cap share are free in the same cycle, with no
-  payment proof, no proven or parked state, and nothing the indexer says involved. The exceptions stay under the rules
-  above until the node finds the ask: an amend whose outcome is unknown and whose plan names no state, a placement by
-  another CLI build (another template), a template the indexer names differently. The cost: a taker must take a whole
-  level, so use more and smaller levels (`levels`, `levelSizePct`) if takers are small. On mainnet `check`, `run` and
-  `once` refuse until the key is set, `true` or `false`; on testnet-10 it defaults to `true` (partial fills) and the
-  start log says so. The amounts from the payments (above) and the residue (next) concern `true` only.
-- **What the lookup cannot find (`askPartialFills: true`).** The node can only be asked for an ask at an amount, and with a hostile indexer
-  the only amounts the bot has are its own and the payments'. An ask stays unfindable when the filler paid the maker
-  more than `allIn` (the payout then names a larger fill than was made: escaping costs him the value of one base unit,
-  4,000 sompi at the TUSDC6 defaults), when more than 3 fills (or more than 12 payments) landed since the bot last
-  knew its amount, when a payment could pay for more than 200 fill amounts, when the bot's own send spent the payment
-  before it read it (the bot reads its outputs at the start of each cycle, before each placement, amend and merge,
-  and after a cycle that sent; cancels pay their fee from the order's own carrier; so only a payment that confirms in
-  the second or two between that read and the CLI's own, at a send that picks that output, is missed), or without a
-  JSON wRPC node. Such an ask stays live at its old price until its expiry: **one level at a stale price for at most
-  `lifeMin`**, while its level is quoted again (when the ask was taken as paid in full, proven) or stays blocked
-  (unresolved). With the defaults a level is 15 % of `capitalUsd` (150 USD at 1,000 USD) and `lifeMin` is 90 min: the
-  loss is that level times the move against the bot within 90 min, about 3 to 8 USD per attack at 1,000 USD for a 2
-  to 5 % move. The attacker needs the indexer the bot reads (or a man in the middle of an `http://` one) and pays the
-  spread of two trades at the bot's own prices. The remedy is the operator's: whole fills (`askPartialFills: false`, above) remove it; with partial fills, point the bot at an indexer you run
-  yourself (`indexer`); keep `lifeMin` short (the exposure lasts at most `lifeMin`; its floor, 30 min, is a third of the
-  default); and watch `<dataDir>/proven-not-found.json` (written by each STOP and
-  IDLE pass) and `mm-bot unresolved`, with its `node-unconfirmed` and `proven-live` alerts: an ask there you cannot
-  account for is checked by hand (`kob recover --from <file> --amount-left <id>=<n> --cancel`).
+- **Partial or whole fills (`quotes.askPartialFills`).** `false` places every ask with its minimum fill at its whole
+  amount, so a taker takes a whole level and the node alone tells the bot which asks are live. `true` lets takers fill
+  an ask in part, and when the indexer the bot reads cannot be trusted, an ask filled to an amount the bot does not know
+  can stay at its old price until its expiry (at most `lifeMin`). The remedy is your own node and indexer, or whole fills.
 - **An indexer that hides a quote or shows it at an old outpoint.** The node still holds it: it is cancelled through the
   node, with an error alert, and its level is quoted again once the node shows it ended. An order the node cannot find
   while the indexer still lists it, or that cannot be looked up yet (no order template proven: the indexer never listed
@@ -301,7 +285,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `safety.maxFeesKasPerDay` | `50` | fee cap per UTC day |
 | `safety.cancelReserveKas` | `5` | part of the cap kept for cancels |
 | `safety.placeGapSec` | `8` | gap between placements |
-| `safety.orderVisibleTimeoutSec` | `180` | re-read an action not seen by then |
+| `safety.orderVisibleTimeoutSec` | `180` | re-read an action not seen by then, resend an unseen cancel, alert on a transaction in flight (30 to 3600; never ends an order) |
 | `safety.maxActionsPerCycle` | `12` | per cycle |
 | `safety.backoffBaseSec`, `backoffMaxSec` | `15`, `300` | retry backoff |
 | `alerts.warnBelowPct` | `12.5` | WARN below this side holding, % of capital |
