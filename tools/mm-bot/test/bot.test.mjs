@@ -1824,14 +1824,112 @@ test('whole fills: an amend of unknown outcome or a new CLI build keeps the ask 
     // A template the indexer names differently from the proven one.
     s.own.tpl = 'ee'.repeat(32);
     assert.equal(bot.wholeGone(s), false);
-    // A failed amend that may have gone out records the planned state beside the old one.
+    // A failed amend that may have gone out is in flight (R7T-1): its planned state is looked up
+    // beside the order's own, and there is no whole-fill end until the node settles it.
     s.own.tpl = null;
     bot.kob.amend = async () => ({ ok: false, error: 'exit 1: socket closed', sentFee: 500000, doc: { plan: { inPlace: true, replacement: { ...s.own.state, state: { ...s.own.state.state, price: '4100000000' } } }, transaction: { txid: 'fe'.repeat(32) } } });
     await bot.run1({ kind: 'amend', id: a, side: 'sell', level: s.level, from: s.price, price: 4100000000, quotedFair: 40, reason: 'test' });
-    assert.equal(s.pending.kind, 'amend');
-    assert.equal(s.own.prev.state.price, String(chain().orders[a].price), 'the old state is still looked up');
-    assert.equal(s.own.state.state.price, '4100000000');
-    assert.ok(bot.wholeGone(s), 'both states it can be in are known');
+    assert.equal(s.own.state.state.price, String(chain().orders[a].price), 'its own state stays the one the node held');
+    assert.deepEqual(bot.statesOf(s).map((x) => x.state.price), [String(chain().orders[a].price), '4100000000'], 'both are looked up');
+    assert.equal(s.inflight.at(-1).exact, false, 'the plan may be the dry run\'s');
+    assert.equal(bot.wholeGone(s), false);
+  } finally {
+    reset();
+  }
+});
+
+// R7T-1: a transaction of the bot's own is in flight until the node shows it. A timeout proves
+// nothing, so an order whose placement or amend confirms late is never ended for it.
+/** Mines what the fake's mempool holds: placements, then amends whose input is still unspent. */
+function mine(file) {
+  const c = JSON.parse(readFileSync(file, 'utf8'));
+  for (const [id, o] of Object.entries(c.mempool?.place ?? {})) c.orders[id] = o;
+  for (const a of c.mempool?.amend ?? []) {
+    const o = c.orders[a.id];
+    if (!o || o.txid !== a.input) continue; // its input is spent: it can never confirm
+    Object.assign(o, { price: a.price, expiresAt: a.expiresAt, txid: a.txid, expiryDaa: a.expiryDaa, value: o.value - 500000 });
+  }
+  c.mempool = {};
+  writeFileSync(file, JSON.stringify(c));
+}
+
+test('a_placement_that_confirms_after_the_timeout_stays_tracked_and_is_found (R7T-1)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup({}, WHOLE);
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 4; i++) await bot.cycle();
+    assert.ok(bot.state.templates.kinds.KobAsk?.verified, 'the ask template is proven on the node');
+    // One ask is bought in full: its level is free at once (whole fills).
+    const c = chain();
+    const gone = askIds(bot).sort()[0];
+    delete c.orders[gone];
+    c.ended[gone] = 'filled';
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([gone]);
+    // Its level is placed again in the same cycle; that ask waits in the mempool past
+    // orderVisibleTimeoutSec.
+    const before = new Set(askIds(bot));
+    bot.kob.env.FAKE_KOB_PENDING = '1';
+    await bot.cycle();
+    delete bot.kob.env.FAKE_KOB_PENDING;
+    assert.equal(bot.state.orders[gone], undefined);
+    const asks = askIds(bot).filter((k) => !before.has(k));
+    assert.equal(asks.length, 1, 'one new ask');
+    assert.equal(asks.filter((k) => chain().orders[k]).length, 0, 'not on chain yet');
+    for (let i = 0; i < 3; i++) {
+      age(bot);
+      for (const k of asks) for (const e of bot.state.orders[k]?.inflight ?? []) e.since -= 200_000;
+      await bot.cycle();
+    }
+    for (const k of asks) assert.ok(bot.state.orders[k], `${k.slice(0, 8)} still tracked`);
+    assert.ok(alertsOf(dir).some((x) => x.reason === 'own-tx-unconfirmed'), 'one alert says why');
+    const sells = () => calls().filter((a) => a[0] === 'place' && a[a.indexOf('--side') + 1] === 'sell').length;
+    assert.equal(sells(), 4, 'its level is not placed twice');
+    mine(file);
+    await bot.cycle();
+    for (const k of asks) {
+      assert.ok(chain().orders[k], 'live on chain');
+      assert.ok(bot.state.orders[k], 'and tracked');
+      assert.deepEqual(bot.state.orders[k].inflight, [], 'the node settled its placement');
+    }
+  } finally {
+    reset();
+  }
+});
+
+test('an_amend_rolled_back_then_confirmed_leaves_the_ask_tracked_at_its_new_state (R7T-1)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain } = setup({}, WHOLE);
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const asks = askIds(bot);
+    const old = Object.fromEntries(asks.map((k) => [k, chain().orders[k].price]));
+    // A move amends every quote; the amends wait in the mempool past the timeout. The bot finds
+    // the asks at their earlier terms ("not landed") and amends again; those wait too.
+    bot.kob.env.FAKE_KOB_PENDING = '1';
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle();
+    for (let i = 0; i < 2; i++) {
+      age(bot);
+      await bot.cycle();
+    }
+    delete bot.kob.env.FAKE_KOB_PENDING;
+    for (const k of asks) assert.equal(chain().orders[k].price, old[k], 'nothing landed yet');
+    // The first amend of each confirms; the later ones spend the same input and never can.
+    mine(file);
+    for (let i = 0; i < 2; i++) {
+      age(bot);
+      await bot.cycle();
+    }
+    for (const k of asks) {
+      assert.ok(chain().orders[k], 'live on chain');
+      assert.ok(bot.state.orders[k], 'and tracked');
+      assert.notEqual(chain().orders[k].price, old[k], 'at the amended price');
+    }
   } finally {
     reset();
   }

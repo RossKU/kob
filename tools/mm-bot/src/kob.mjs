@@ -33,7 +33,10 @@ export function parseJsonStream(text) {
 export const gtdArg = (ms) => `${new Date(Math.floor(ms / 1000) * 1000).toISOString().slice(0, 19)}Z`;
 
 // Stderr lines that are progress notes, not errors.
-const NOISE = /blocks are contended|^dry run: nothing signed/;
+const NOISE = /^dry run: nothing signed/;
+// The CLI's congestion note (relay-fee KOB transactions may wait): not an error, but it goes to
+// the log (R7T-1), through `onNote`.
+const NOTE = /blocks are contended/;
 
 /** A long stderr cut in the middle: the last line, where the CLI says what failed, stays (T-13). */
 export const cutMiddle = (s, n) => (s.length <= n ? s : `${s.slice(0, Math.floor(n / 4))} .. ${s.slice(s.length - (n - Math.floor(n / 4) - 4))}`);
@@ -70,7 +73,9 @@ export class Kob {
         clearTimeout(timer);
         let docs = [];
         try { docs = parseJsonStream(out); } catch { /* not JSON */ }
-        const stderr = cutMiddle(err.split(/\r?\n/).filter((l) => l.trim() && !NOISE.test(l)).join(' | '), 600);
+        const lines = err.split(/\r?\n/).filter((l) => l.trim() && !NOISE.test(l));
+        for (const l of lines.filter((x) => NOTE.test(x))) this.onNote?.(l.trim());
+        const stderr = cutMiddle(lines.filter((l) => !NOTE.test(l)).join(' | '), 600);
         resolve({ code: code ?? -1, docs, json: docs[0] ?? null, stdout: out, stderr });
       });
     });

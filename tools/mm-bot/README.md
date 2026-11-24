@@ -57,6 +57,16 @@ On testnet-10 it is a warning. They also refuse until `quotes.askPartialFills` i
   does not find is not proof (it may sit at an amount the search did not reach): it is kept as unresolved, with one
   error alert. Until an order leaves, it counts toward the side caps, its level is not quoted again, it is never
   amended, every pull and STOP try to cancel it, and each cycle it is looked up again.
+- **The bot's own transactions in flight.** A placement or an amend the bot sent is in flight until the node shows
+  it: an output of that transaction, the order live at its outpoint (for a placement, live at all), or the order live
+  at an outpoint that shows it can never confirm (one that is neither the amend's nor the one it spent). Until then
+  "not found" proves nothing, so no order ends, and every state the order can be in (its own, the one an amend spent,
+  and each one an amend planned, also after an amend was taken for not landed) is looked up each cycle. One in flight
+  longer than `safety.orderVisibleTimeoutSec` raises one `own-tx-unconfirmed` alert; the timeout only schedules
+  checks, resends and alerts, it never ends an order. An order still in flight past its own expiry is parked (STOP no
+  longer waits for it), and 2 h past it the normal rules decide, as for a proven ask. The CLI's note that blocks are
+  contended goes to the log: under contention relay-fee KOB transactions may wait, and `cli.priorityFee: true`
+  pays for their storage mass (at most about 0.31 KAS more a transaction).
 - **A fully filled ask** leaves no output on the node either. It is *proven* when the fills the indexer reports for it add up
   to what its last own outpoint held (the amount at its last placement or amend) and each is paid: for each fill, one
   output to the bot's own address in that fill's transaction, worth at least what the covenant pays the maker,
@@ -301,7 +311,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `safety.maxFeesKasPerDay` | `50` | fee cap per UTC day |
 | `safety.cancelReserveKas` | `5` | part of the cap kept for cancels |
 | `safety.placeGapSec` | `8` | gap between placements |
-| `safety.orderVisibleTimeoutSec` | `180` | re-read an action not seen by then |
+| `safety.orderVisibleTimeoutSec` | `180` | re-read an action not seen by then, resend an unseen cancel, alert on a transaction in flight (30 to 3600; never ends an order) |
 | `safety.maxActionsPerCycle` | `12` | per cycle |
 | `safety.backoffBaseSec`, `backoffMaxSec` | `15`, `300` | retry backoff |
 | `alerts.warnBelowPct` | `12.5` | WARN below this side holding, % of capital |

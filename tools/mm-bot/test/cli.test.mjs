@@ -184,3 +184,17 @@ test('mainnet without quotes.askPartialFills: check, run and once refuse, naming
   assert.equal(run('check', cfgFile({ network: 'mainnet', quotes: { askPartialFills: 'no' } })).status, 2, 'a boolean or null');
   assert.equal(run('check', cfgFile({ network: 'testnet-10' })).status, 0, 'testnet-10: partial fills by default');
 });
+// R7T-1 (d): the CLI's congestion note is not dropped as noise; it reaches the bot's log.
+test('the CLI note that blocks are contended reaches onNote, and is not taken for an error', async () => {
+  const { kob } = fake('ok');
+  const notes = [];
+  kob.onNote = (n) => notes.push(n);
+  kob.env.FAKE_KOB_NOTE = '1';
+  try {
+    const r = await kob.cancel('cd'.repeat(32));
+    assert.equal(r.ok, true);
+    assert.ok(notes.length >= 1 && /blocks are contended/.test(notes[0]), JSON.stringify(notes));
+  } finally {
+    delete kob.env.FAKE_KOB_NOTE;
+  }
+});

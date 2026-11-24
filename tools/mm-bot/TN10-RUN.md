@@ -119,3 +119,10 @@ With the defaults that is 15 % of `capitalUsd` (150 USD at 1,000 USD) for at mos
 1,000 USD for a 2 to 5 % move. The attacker needs the indexer the bot reads and pays the spread of two trades. The
 operator's remedy: an indexer you run yourself, a short `lifeMin` (floor 30 min), and a watch on
 `<dataDir>/proven-not-found.json`, `mm-bot unresolved` and the `node-unconfirmed` and `proven-live` alerts.
+
+## To check on the next live run (round-7 fixes, not testable offline)
+
+- R7T-1: under contention (the log shows "CLI: note: blocks are contended"), a placement or amend that stays in the
+  mempool past `orderVisibleTimeoutSec` raises one `own-tx-unconfirmed` alert, and the order stays in `state.json`
+  (`inflight`) until the node shows it; when it confirms, the order is found at its new state and the entry clears.
+- R7T-5: replacing the `kob` binary under a running bot logs "the kob CLI changed" in the next cycle.
