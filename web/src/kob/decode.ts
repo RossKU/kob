@@ -2031,7 +2031,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const bind = tx.outputs[o.output]?.covenant;
     const group = tx.outputs.filter((x) => x.covenant && bind && x.covenant.authorizingInput === bind.authorizingInput && x.covenant.covenantId === bind.covenantId).length;
     if (!bind || bind.authorizingInput !== from) add('order-spk-mismatch', `output ${o.output}: the continued order is not authorised by the order input ${from}`, { output: o.output, input: from });
-    else if (isGenesisBinding(tx, from, bind.covenantId)) add('order-spk-mismatch', `output ${o.output}: it starts a new covenant from input ${from}'s outpoint: it does not continue the order, which would end with everything it holds locked`, { output: o.output, input: from });
+    else if (isGenesisBinding(kob, tx, from, bind.covenantId)) add('order-spk-mismatch', `output ${o.output}: it starts a new covenant from input ${from}'s outpoint: it does not continue the order, which would end with everything it holds locked`, { output: o.output, input: from });
     else if (group !== 1) add('order-spk-mismatch', `output ${o.output}: ${group} outputs continue the order; an order continues as one output`, { output: o.output, input: from });
   }
   presentTimes();
@@ -2065,7 +2065,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
    * id of its outpoint (such a binding is, on chain, the input's real covenant id, or the tx is invalid).
    */
   function trulyContinues(i: number): boolean {
-    return tx.outputs.some((x) => x.covenant?.authorizingInput === i && !isGenesisBinding(tx, i, x.covenant.covenantId));
+    return tx.outputs.some((x) => x.covenant?.authorizingInput === i && !isGenesisBinding(kob, tx, i, x.covenant.covenantId));
   }
   /**
    * What the wallet's signature binds, judged without trusting the app (R9FB-1). It holds in the

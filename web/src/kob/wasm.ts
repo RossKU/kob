@@ -39,6 +39,7 @@ export interface RawKobWasm {
   encodePayload(records: string): string;
   decodePayload(hex: string): string;
   recoverOrders(tx: string): string;
+  genesisCovenantId(txid: string, index: number, outputs: string): string;
   recoverAmends(tx: string, plans: string): string;
   budgetTable(): string;
   budgetFor(role: string): number;
@@ -195,6 +196,11 @@ export interface KobWasm {
    * record does not verify).
    */
   recoverOrders(tx: TxJson): RecoveredOrder[];
+  /**
+   * The consensus genesis covenant id of a group of outputs (index, value, script) authorised by the
+   * outpoint (txid, index): rusty-kaspa covenant_id.
+   */
+  genesisCovenantId(txid: Hex, index: number, outputs: { index: number; value: string; scriptPublicKey: string }[]): Hex;
   /**
    * Re-derives the in-place amends (AMEND records) of a transaction, trusting nothing but the
    * previous state: of a SIGNED tx from its order inputs' signature scripts (`plans` omitted), of a
@@ -476,6 +482,7 @@ export function createKob(raw: RawKobWasm): KobWasm {
     encodePayload: (r) => wrap('encodePayload', () => raw.encodePayload(JSON.stringify(r))),
     decodePayload: (h) => wrap('decodePayload', () => j(raw.decodePayload(h))),
     recoverOrders: (t) => wrap('recoverOrders', () => j(raw.recoverOrders(JSON.stringify(t)))),
+    genesisCovenantId: (txid, index, outs) => wrap('genesisCovenantId', () => raw.genesisCovenantId(txid, index, JSON.stringify(outs))),
     recoverAmends: (t, p) => wrap('recoverAmends', () => j(raw.recoverAmends(JSON.stringify(t), p ? JSON.stringify(p) : ''))),
     budgetTable: () => wrap('budgetTable', () => j(raw.budgetTable())),
     budgetFor: (r) => wrap('budgetFor', () => raw.budgetFor(r)),

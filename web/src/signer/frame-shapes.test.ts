@@ -51,7 +51,7 @@ describe('R9FB2-1: a continuation bound to the genesis id of its order input is 
     it(name, () => {
       const honest = make();
       expect(frame(honest).problems).toBe(0);
-      const b = continuationAsGenesis(honest, orderInput(honest), genesisCovenantId);
+      const b = continuationAsGenesis(honest, orderInput(honest), (op, outs) => genesisCovenantId(kob, op, outs));
       const s = frame(b);
       expect(s.problems).toBeGreaterThan(0);
       // the wasm's amend and sweep recovery refuses it by itself now (recover-failed / sweep-invalid);
