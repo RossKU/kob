@@ -538,6 +538,8 @@ export default {
   'orders.amend.curve-custody-unknown': "The curve's tokens are not found yet: refresh and try again.",
   'orders.amend.amount-not-positive': "The amount must be more than zero.",
   'orders.amend.bid-amount-fixed': 'A buy order keeps its KAS budget: the amount is not edited.',
+  'orders.amend.renew-chain-time': 'The node and the indexer disagree about the chain\'s time: the order cannot be renewed until they agree.',
+  'orders.amend.schedule-ends': 'The price schedule ends: the order trades at exactly this price from now on.',
   'orders.amend.bid-budget-kept': 'The KAS budget of the buy order stays the same.',
   'orders.amend.not-amendable': 'This order type cannot be amended in place: cancel it and place a new one.',
   'orders.amend.trailing-not-amendable': 'A trailing stop cannot be amended: cancel it and place a new one.',

@@ -59,9 +59,26 @@ export function orderUrgency(env: Pick<PlanEnv, 'book'> & { pair?: unknown }, in
 export function planOrder(env0: PlanEnv, intent: Intent): OrderPlan {
   const env = withUrgency(env0, orderUrgency(env0, intent));
   const plan = isPairEnv(env) ? planPair(env, intent) : isCondIntent(intent) ? planCond(env, intent) : planSimple(env, intent);
-  const extra = [...envIssues(env), ...marketStartIssues(env, intent, plan), ...stopEvidenceIssues(env, plan)];
+  const extra = [...envIssues(env), ...chainTimeIssues(env, intent, plan), ...marketStartIssues(env, intent, plan), ...stopEvidenceIssues(env, plan)];
   if (!extra.length) return plan;
   return { ...plan, issues: [...plan.issues, ...extra], ok: plan.ok && !extra.some((i) => i.severity === 'error') };
+}
+
+/**
+ * Whether the present this plan signs times from is witnessed (R9FB3-1, kob/chain-present.ts).
+ * Every order has an expiry, so a present the node and the indexer disagree on builds nothing. With
+ * no second witness, an order that trades now or follows a schedule is refused (a lie of the node
+ * moves its start or its worst price), and a resting order is built with its dates marked
+ * unverified. A clock that was not judged (`witness` absent) adds nothing.
+ */
+export function chainTimeIssues(env: PlanEnv, intent: Intent, plan: Pick<OrderPlan, 'take'>): PlanIssue[] {
+  const w = env.clock.witness;
+  if (!w || w === 'agreed') return [];
+  const reason = env.clock.witnessReason ?? '';
+  if (w === 'disagree') return [issue('CHAIN_TIME_DISAGREE', { reason })];
+  const scheduled = intent.type === 'twap' || intent.type === 'dca' || intent.type === 'dutch';
+  if (scheduled || orderUrgency(env, intent) === 'high' || plan.take) return [issue('CHAIN_TIME_UNVERIFIED_SHORT', { reason })];
+  return [issue('CHAIN_TIME_UNVERIFIED', { reason })];
 }
 
 /**

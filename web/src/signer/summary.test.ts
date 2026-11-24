@@ -29,7 +29,8 @@ describe('signer summary: audit round 2 (S1, S7)', () => {
     const cancel = summarize(kob, build('cancel.ask'), MAKER_PK, HINTS);
     const closes = cancel.lines.filter((l) => l.label === 'Closes order');
     expect(closes).toHaveLength(1);
-    expect(closes[0]!.value).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8}$/);
+    // the id (the app's word) and the order's terms from its bound state (R9FB2-4)
+    expect(closes[0]!.value).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(the id is the app.s word\): KobAsk, sell$/);
     expect(summarize(kob, build('create.ask'), MAKER_PK, HINTS).lines.some((l) => l.label === 'Closes order')).toBe(false);
   });
   it('S1: a cancel spends inputs the wallet does not sign and says their KAS is the word of the node; a plain create does not', () => {

@@ -65,7 +65,9 @@ export function AmendDialog(props: AmendDialogProps) {
   const priceText = (price: bigint | null): string => (price === null ? '' : perToken ? pricePerTokenText(price, token!.decimals, scale) : kasText(price));
   const initial: Record<FieldKey, string> = useMemo(
     () => ({
-      price: priceText(kind === 'limit' ? BigInt(s.price) : BigInt(s.tpPrice)),
+      // an order stored as an auction keeps its start in `price` and its limit in `priceEnd`: the
+      // limit is what it trades at once the schedule has run (R9FC2-1)
+      price: priceText(kind === 'limit' ? (BigInt(s.slope ?? 0) !== 0n && BigInt(s.priceEnd ?? 0) > 0n ? BigInt(s.priceEnd) : BigInt(s.price)) : BigInt(s.tpPrice)),
       stop: hasStop ? priceText(BigInt(s.stopPrice)) : '',
       // The stop leg's worst price, which is the limit of a stop-limit. It is kept fixed when
       // typed. Otherwise the band keeps its percent and moves with the stop.

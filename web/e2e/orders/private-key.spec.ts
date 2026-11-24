@@ -232,7 +232,7 @@ test('the frame has the palette and theme of the app; a change reaches it withou
   await sellTicket(page);
   await clickPlace(page);
   // the frame names the network on each request (the fragment it is framed with), the theme kept
-  await expect(signer(page).getByTestId('signer-network')).toHaveText('Network: testnet-10. Test funds.');
+  await expect(signer(page).getByTestId('signer-network')).toHaveText('Network: testnet-10, as the app says (the transaction names none). Test funds.');
   await expect(signer(page).getByTestId('signer-network')).toHaveAttribute('data-network', 'testnet-10');
   await approveInFrame(page, { title: 'Place order', lines: { 'Locked in orders': '2 KAS' }, orderTitles: ['Sell limit order'] });
   await waitSubmitted(page);
@@ -395,7 +395,7 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   // 20 s | DAA ...", never a bare "DAA score ..."
   const timeCells = await f.getByTestId('signer-order-0').locator('dd[data-daa]').allTextContents();
   expect(timeCells.length).toBeGreaterThan(0);
-  for (const text of timeCells) expect(text).toMatch(/^(now|in \d+ \w+)DAA \d+$/);
+  for (const text of timeCells) expect(text).toMatch(/^(now|in \d+ \w+)DAA \d+; the time is by the app.s clock$/);
   const t0 = Date.now();
   const receipt = await readReceipt(page);
   expect(receipt.title).toBe('Place order');
@@ -415,7 +415,7 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   // the table follows the market and the clock while it is open: its start is said from the clock
   // and moves on
   const start = f.getByTestId('signer-order-0').locator('dd[data-daa]').first();
-  await expect(start).toContainText(/^(now|in \d+ s)DAA \d+$/, { timeout: 5_000 });
+  await expect(start).toContainText(/^(now|in \d+ s)DAA \d+; the time is by the app.s clock$/, { timeout: 5_000 });
   const daa0 = Number(await start.getAttribute('data-daa'));
   // the user reads for 9 s (the mock chain advances 10 DAA a second): the auction in the table
   // began on the clock of the click

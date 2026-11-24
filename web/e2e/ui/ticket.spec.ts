@@ -182,7 +182,7 @@ test.describe('order ticket', () => {
     // clock, said as a time from now.
     const start = page.getByTestId('confirm-order-order-0').locator('dd[data-daa]').first();
     const daa0 = Number(await start.getAttribute('data-daa'));
-    await expect(start).toContainText(/^(now|in \d+ s)DAA \d+$/, { timeout: 5_000 });
+    await expect(start).toContainText(/^(now|in \d+ s)DAA \d+; the time is by the app.s clock$/, { timeout: 5_000 });
     // The user reads for ~4 s (the mock chain advances 10 DAA a second).
     await page.waitForTimeout(4_000);
     expect(await wallet!.calls()).toHaveLength(0);

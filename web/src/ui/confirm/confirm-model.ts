@@ -318,7 +318,15 @@ function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string;
   };
 }
 
-const approxTime = (daa: bigint, f: Fmt): string | null => (f.clock ? f.time(daaToUnix(f.clock, daa)) : null);
+/**
+ * A signed DAA as a date, with the DAA the chain sees next to it (R9FB3-1). The date is from the
+ * agreed present; without a second witness it is marked "chain time unverified".
+ */
+const approxTime = (daa: bigint, f: Fmt): string | null => {
+  if (!f.clock) return null;
+  const at = f.tr('confirm.f.timeAtDaa', { time: f.time(daaToUnix(f.clock, daa)), daa: daa.toString() });
+  return f.clock.witness && f.clock.witness !== 'agreed' ? f.tr('confirm.f.timeUnverified', { time: at }) : at;
+};
 
 /**
  * A price of a pair order. The state price is B base units per `d.scale` base units of A, where

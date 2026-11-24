@@ -19,6 +19,7 @@
 //   escrow'(amount') - escrow(amount)`, where escrow is the spend of the whole amount at the worst
 //   leg (kob-wasm `condBidEscrow`). The delivery carriers and the keeper reserve stay as they are.
 import { bidWorst, slipForLimit, stopWorstPrice, type Legs } from '../../kob/orders/cond-legs';
+import { FIXED_PRICE_SCHEDULE } from '../../kob/orders/simple';
 import { baseKind } from '../../kob/order-facts';
 import type { PlanIssue } from '../../kob/plan-types';
 import type { OrderSnapshot, ReplacementSpec } from '../../kob/cancel';
@@ -84,11 +85,18 @@ export interface AmendOptions {
    * covenant's arithmetic. Without it the same quote rule runs in bigint.
    */
   kob?: KobWasm;
+  /** The verdict on the chain's present the renewal counts from (kob/chain-present.ts). */
+  nowWitness?: 'agreed' | 'unverified' | 'disagree';
 }
 
 /** The renewed expiry, or an issue when the clock is unknown. */
 function renewedExpiry(input: AmendInput, o: AmendOptions, issues: PlanIssue[]): { expiryDaa: string } | Record<string, never> {
   if (!input.renew) return {};
+  if (o.nowWitness === 'disagree') {
+    // R9FB3-1: a renewal is a signed time; one node's DAA the indexer contradicts builds none
+    issues.push(issue('renew-chain-time', 'error', 'the node and the indexer disagree about the chain time: the order cannot be renewed until they agree'));
+    return {};
+  }
   if (o.nowDaa === undefined) {
     issues.push(issue('renew-no-clock', 'error', 'the current DAA score is needed to renew the order'));
     return {};
@@ -182,7 +190,17 @@ function limitReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   // An ask's minimum fill never exceeds what is left, so a smaller amount keeps a valid minimum.
   const minFill = big(s.minFill);
   const fit = sell && amount !== null && minFill > amount ? { minFill: str(amount) } : {};
-  const next = { ...s, price: str(price), tip: str(tip), ...(sell ? { amountLeft: str(amount!) } : {}), ...fit, ...renewed };
+  // An order stored as an auction keeps its start in `price` and its limit in `priceEnd`, with a slope
+  // from an origin long past: changing only `price` would leave it trading at the old limit (R9FC2-1).
+  // An amend with a price writes the fixed-price schedule of a plain limit: from now on the order
+  // trades at exactly the price typed. `activeFrom` stays: a past one no longer moves the price (no
+  // slope), a future one keeps the start the user chose; slices keep their size and interval.
+  const scheduled = big(s.slope) !== 0n;
+  const fixed = input.price !== undefined && scheduled
+    ? { slope: str(FIXED_PRICE_SCHEDULE.slope), priceEnd: str(FIXED_PRICE_SCHEDULE.priceEnd), decayStep: str(FIXED_PRICE_SCHEDULE.decayStep) }
+    : {};
+  if (input.price !== undefined && scheduled) issues.push(issue('schedule-ends', 'info', 'the price schedule ends: the order trades at exactly this price from now on'));
+  const next = { ...s, price: str(price), tip: str(tip), ...fixed, ...(sell ? { amountLeft: str(amount!) } : {}), ...fit, ...renewed };
   const order = { kind: st.kind, state: next } as OrderState;
   let value = big(snap.order.amount);
   let bidNext: { value: bigint; maxAmount: bigint } | undefined;

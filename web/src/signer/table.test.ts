@@ -60,6 +60,14 @@ describe('G7 (b): the signer frame trusts a listed token only through the pinned
     ]);
   });
 
+  it('a hint with a source for a token the pinned table lists takes the table row, never its own decimals (R9FB2-3)', () => {
+    const pinned = tableHash(rows());
+    const out = trustedHints([hint(rows()[1]!, { decimals: 12, ticker: 'AAA', source: 'declared' }), hint({ covenantId: C, ticker: 'CCC', decimals: 3 }, { source: 'program' })], rows(), pinned);
+    expect(out[0]).toEqual({ covenantId: A, ticker: 'AAA', decimals: 8 });
+    // a token the table does not list keeps its marked hint
+    expect(out[1]).toMatchObject({ covenantId: C, source: 'program' });
+  });
+
   it('no table, an empty table, no pin: nothing is trusted', () => {
     const pinned = tableHash(rows());
     const h = [hint(rows()[0]!)];

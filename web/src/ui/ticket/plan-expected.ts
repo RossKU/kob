@@ -4,9 +4,11 @@
 // signing on any disagreement, so a bug in the planner, the builder or a tampered wasm cannot pass
 // unnoticed.
 import type { ExpectedSigning } from '../../kob/decode';
+import type { Clock } from '../../kob/plan-types';
 import type { OrderPlan } from '../../kob/plan-types';
 
-export function expectedFromPlan(plan: OrderPlan): ExpectedSigning {
+export function expectedFromPlan(plan: OrderPlan, present?: Clock): ExpectedSigning {
+  const at = present ? { present: { daa: present.daa, unixSeconds: present.unixSeconds, ...(present.witness ? { witness: present.witness } : {}) } } : {};
   const d = plan.disclosure;
   // A take creates no order: the tokens it trades, the KAS bound at the limit and the orders it
   // fills.
@@ -19,6 +21,7 @@ export function expectedFromPlan(plan: OrderPlan): ExpectedSigning {
   }
   return {
     orders: plan.states,
+    ...at,
     ...(d ? { kasLocked: d.kasLocked, tokensEscrowed: d.tokensEscrowed } : {}),
   };
 }
