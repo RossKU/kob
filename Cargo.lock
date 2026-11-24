@@ -2662,6 +2662,7 @@ dependencies = [
  "kaspa-rpc-core",
  "kaspa-txscript",
  "kob-protocol",
+ "libc",
  "rand 0.8.8",
  "rustls",
  "secp256k1",

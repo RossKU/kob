@@ -1195,8 +1195,15 @@ pub fn no_group_write(path: &Path) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.permissions().mode();
         if mode & 0o022 != 0 {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & !0o022 & 0o7777))
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & !0o022 & 0o7777)).map_err(|e| {
+                // Not ours to change (another account's folder, a mount that refuses): say what the
+                // start check will say, and how to fix it (R6D-I1).
+                format!(
+                    "{}: the group or others may change it, and kobd could not take that off ({e}); kobd will not start on mainnet with it: {}",
+                    path.display(),
+                    crate::executor::start_fix(path, "", false)
+                )
+            })?;
         }
     }
     #[cfg(not(unix))]
