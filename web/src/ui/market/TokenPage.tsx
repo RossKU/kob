@@ -1,3 +1,4 @@
+import { tokensWith } from '../../data/indexer';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marketPageTitle, pageTitle, useDocumentTitle } from '../../app/page-title';
 import { useDeclarationLookup } from '../../app/use-declaration';
@@ -103,7 +104,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [groupIdxNative, setGroupIdxNative] = useState(0);
   const [groupIdxInv, setGroupIdxInv] = useState(0);
 
-  const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, !!standalone]);
+  // a cut list lacking this token reads it by its id (R9: a token opened by id or link stays tradable)
+  const tokens = useAsync((signal) => (indexer ? tokensWith(indexer, [id], { signal }) : Promise.resolve(null)), [indexer, !!standalone, id]);
   // A token the registry does not list is named by its verified KCC-23 declaration (the selector,
   // the title, the name).
   const declaredOf = useDeclarationLookup();
