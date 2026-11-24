@@ -16,7 +16,8 @@ import { FamilyChip, GenesisFailedBanner, PowersWarning, RiskChip, SharedTickerB
 import { riskFactIds, templateDetail, tickerNoteOf, type TemplateDetail, type TokenRow } from './token-model';
 import type { BridgeMinter } from '../../data/genesis-check';
 import { useDeclaration } from '../../app/use-declaration';
-import { lockOpen, lockSharePercent, type VerifiedLock } from '../../kob/creator-lock';
+import { lockOpen, lockShareOfMarket, type VerifiedLock } from '../../kob/creator-lock';
+import type { Hex } from '../../kob/types';
 import { formatRowDate, rowTimeTitle } from '../kit/format';
 
 /**
@@ -24,9 +25,10 @@ import { formatRowDate, rowTimeTitle } from '../kit/format';
  * gives what the genesis locked, its share of the supply when the supply is proven, and the day it
  * opens. After that day the same line says it is open. What is still locked is the chain's to tell.
  */
-function creatorLockText(lock: VerifiedLock, decimals: number | null, ticker: string): string {
+function creatorLockText(lock: VerifiedLock, decimals: number | null, ticker: string, marketExt: Hex | null): string {
   const amount = `${decimals === null ? lock.amount : formatUnits(BigInt(lock.amount), decimals, { group: ',' })}${ticker ? ` ${ticker}` : ''}`;
-  const pct = lockSharePercent(lock.amount, lock.supply);
+  // A share of supply only for the class this market trades (R8FX-6): else the line has no share.
+  const pct = lockShareOfMarket(lock, marketExt);
   const date = formatRowDate(Number(lock.until));
   const key = lockOpen(lock.until) ? 'market.token.creatorLockOpen' : 'market.token.creatorLockValue';
   const text = pct === null ? t(`${key}NoShare`, { amount, date }) : t(key, { amount, pct, date });
@@ -287,7 +289,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
             },
             {
               label: t('market.token.creatorLock'),
-              value: lock ? <span title={rowTimeTitle(Number(lock.until))} data-testid="token-creator-lock">{creatorLockText(lock, r.decimals, r.ticker)}</span> : null,
+              value: lock ? <span title={rowTimeTitle(Number(lock.until))} data-testid="token-creator-lock">{creatorLockText(lock, r.decimals, r.ticker, r.info?.extensionCommitment ?? r.index?.extension_commitment ?? null)}</span> : null,
               show: !!lock,
             },
             { label: t('market.token.decimals'), value: r.decimals ?? '-' },
