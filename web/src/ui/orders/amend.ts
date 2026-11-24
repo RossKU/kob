@@ -196,10 +196,19 @@ function limitReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   // trades at exactly the price typed. `activeFrom` stays: a past one no longer moves the price (no
   // slope), a future one keeps the start the user chose; slices keep their size and interval.
   const scheduled = big(s.slope) !== 0n;
+  // A sliced auction (TWAP / DCA with a slope) runs each slice as its own auction from `price`: a
+  // new price cannot be made a fixed one there without changing the slices (kob-protocol
+  // check_amend_terms; the CLI refuses it the same way).
+  if (input.price !== undefined && scheduled && big(s.interval) > 0n) return fail([...issues, issue('sliced-auction-not-amendable', 'error', 'each slice of this order runs its own auction: cancel it and place it again to change its price')]);
+  // The fixed-price schedule of a placed limit (kob-protocol check_amend_terms): an order not yet
+  // active keeps its start, an active one gets 0, as a placed limit has.
+  const keepStart = o.nowDaa !== undefined && big(s.activeFrom) > o.nowDaa;
   const fixed = input.price !== undefined && scheduled
-    ? { slope: str(FIXED_PRICE_SCHEDULE.slope), priceEnd: str(FIXED_PRICE_SCHEDULE.priceEnd), decayStep: str(FIXED_PRICE_SCHEDULE.decayStep) }
+    ? { slope: str(FIXED_PRICE_SCHEDULE.slope), priceEnd: str(FIXED_PRICE_SCHEDULE.priceEnd), decayStep: str(FIXED_PRICE_SCHEDULE.decayStep), activeFrom: keepStart ? s.activeFrom : '0' }
     : {};
   if (input.price !== undefined && scheduled) issues.push(issue('schedule-ends', 'info', 'the price schedule ends: the order trades at exactly this price from now on'));
+  // the form has no book: a new price that crosses it fills at once, at this price
+  if (input.price !== undefined) issues.push(issue('may-cross', 'info', 'if this price crosses the book, the order fills against it at once, at this price', 'price'));
   const next = { ...s, price: str(price), tip: str(tip), ...fixed, ...(sell ? { amountLeft: str(amount!) } : {}), ...fit, ...renewed };
   const order = { kind: st.kind, state: next } as OrderState;
   let value = big(snap.order.amount);

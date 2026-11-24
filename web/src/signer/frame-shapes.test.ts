@@ -54,7 +54,9 @@ describe('R9FB2-1: a continuation bound to the genesis id of its order input is 
       const b = continuationAsGenesis(honest, orderInput(honest), genesisCovenantId);
       const s = frame(b);
       expect(s.problems).toBeGreaterThan(0);
-      expect(s.problemCodes).toContain('order-spk-mismatch');
+      // the wasm's amend and sweep recovery refuses it by itself now (recover-failed / sweep-invalid);
+      // the decoder's own genesis test says so too where the record is recovered
+      expect(s.problemCodes.some((c) => ['order-spk-mismatch', 'recover-failed', 'sweep-invalid'].includes(c))).toBe(true);
     });
   }
 });

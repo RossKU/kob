@@ -539,6 +539,8 @@ export default {
   'orders.amend.amount-not-positive': "The amount must be more than zero.",
   'orders.amend.bid-amount-fixed': 'A buy order keeps its KAS budget: the amount is not edited.',
   'orders.amend.renew-chain-time': 'The node and the indexer disagree about the chain\'s time: the order cannot be renewed until they agree.',
+  'orders.amend.sliced-auction-not-amendable': 'Each slice of this order runs its own auction: cancel it and place it again to change its price.',
+  'orders.amend.may-cross': 'If this price crosses the book, the order fills against it at once, at this price.',
   'orders.amend.schedule-ends': 'The price schedule ends: the order trades at exactly this price from now on.',
   'orders.amend.bid-budget-kept': 'The KAS budget of the buy order stays the same.',
   'orders.amend.not-amendable': 'This order type cannot be amended in place: cancel it and place a new one.',

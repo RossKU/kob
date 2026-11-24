@@ -326,7 +326,8 @@ export async function planAmendFor(s: Services, pubkey: Hex, entry: OrderEntry, 
   const token = tokenOf(s, tokenCovIdOf(snapshot.order.state));
   // A renewal needs the current DAA, because the new expiry is now + 90 days.
   // judged against the indexer's verified present (R9FB3-1)
-  const now = input.renew ? await readAgreedClock(s) : undefined;
+  // a price amend reads the DAA too: an order not yet active keeps its start (check_amend_terms)
+  const now = input.renew ? await readAgreedClock(s) : input.price !== undefined ? await readAgreedClock(s).catch(() => undefined) : undefined;
   const nowDaa = now?.daa;
   const amend = buildReplacement(snapshot, kind, input, { tick: token?.tick ?? undefined, kob: s.kob, ...(nowDaa !== undefined ? { nowDaa } : {}), ...(now?.witness ? { nowWitness: now.witness } : {}) });
   if (!amend.ok || !amend.spec) return { amend, plan: null, snapshot };
