@@ -487,6 +487,8 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
           routeLevels(ma.book, mb.book, a.scale, b.scale),
         );
         book = checked.book;
+        // A side of direct orders that could not be read is unknown, not empty (R7B-L2).
+        if (checked.unread.length) guardsUnavailable.push('book');
         if (checked.dropped.length) console.info(`pair book check: ${checked.dropped.length} order(s) of the indexer's pair book left out (${[...new Set(checked.dropped.map((d) => d.reason))].join(', ')})`);
         if (checked.beyond) console.info(`pair book check: ${checked.beyond} order(s) behind the verified depth are not part of the book`);
       }

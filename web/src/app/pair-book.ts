@@ -64,6 +64,8 @@ export interface PairBookDeps {
    */
   depth?: bigint;
   timeoutMs?: number;
+  /** Default BOOK_ORDER_READ_TIMEOUT_MS (app/book-verify.ts). */
+  orderTimeoutMs?: number;
 }
 
 /** The result of `verifyPairBook`. */
@@ -76,6 +78,12 @@ export interface VerifiedPairBook {
   dropped: DroppedBookOrder[];
   /** Rows behind the verified depth, left out. */
   beyond: number;
+  /**
+   * Sides of the direct orders whose touch could not be checked, as in `VerifiedBook.unread`: an
+   * order read of the indexer failed or timed out ahead of every confirmed row. The pair env then
+   * counts the book as unavailable (R7B-L2).
+   */
+  unread: ('sell' | 'buy')[];
 }
 
 interface Row {
@@ -234,6 +242,7 @@ export async function verifyPairBook(deps: PairBookDeps, orders: readonly OrderV
     confirmed: 0,
     depth: 0n,
     levels: [] as BookLevel[],
+    unread: false,
   }));
   const dropped: DroppedBookOrder[] = [];
   const want = deps.depth ?? 0n;
@@ -243,9 +252,13 @@ export async function verifyPairBook(deps: PairBookDeps, orders: readonly OrderV
     const batch = sides.flatMap((s) => (satisfied(s) ? [] : s.cands.slice(s.next, Math.min(s.next + BOOK_CHECK_PER_SIDE, BOOK_CHECK_MAX_ROWS)).map((row) => ({ s, row }))));
     if (!batch.length) break;
     for (const s of sides) if (!satisfied(s)) s.next = Math.min(s.next + BOOK_CHECK_PER_SIDE, BOOK_CHECK_MAX_ROWS);
-    const got = await confirmOrders({ ...deps }, batch.map((b) => b.row.key));
+    const unread = new Set<number>();
+    const got = await confirmOrders({ ...deps }, batch.map((b) => b.row.key), unread);
     batch.forEach((b, i) => {
       const g = got[i];
+      // Rows are checked best first: a failed read before the first confirmed row is ahead of the
+      // touch.
+      if (unread.has(i) && b.s.confirmed === 0) b.s.unread = true;
       const v: Verdict = g ? judge(deps, b.row, g.confirmed) : 'unproven';
       if (typeof v === 'object') {
         b.s.confirmed++;
@@ -258,5 +271,5 @@ export async function verifyPairBook(deps: PairBookDeps, orders: readonly OrderV
   const [a, b] = sides as [(typeof sides)[number], (typeof sides)[number]];
   // A side whose rows are all refused has only the route. The planners then find what the route
   // offers and no more.
-  return { book: { asks: mergeLevels([...a.levels, ...route.asks], 'sell'), bids: mergeLevels([...b.levels, ...route.bids], 'buy') }, dropped, beyond };
+  return { book: { asks: mergeLevels([...a.levels, ...route.asks], 'sell'), bids: mergeLevels([...b.levels, ...route.bids], 'buy') }, dropped, beyond, unread: sides.filter((s) => s.unread).map((s) => s.side) };
 }
