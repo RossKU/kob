@@ -572,7 +572,7 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
           {s.lines.map((l, i) => (
             <div class={`send-line ${l.dir ?? ''}${live.flash(`l:${i}`)}`} key={i}>
               <dt><span key={l.label}>{l.label}</span></dt>
-              <dd><span key={l.value}>{unitParts(l.value, true)}</span></dd>
+              <dd class={l.mono ? 'send-mono' : undefined}><span key={l.value}>{l.mono ? l.value : unitParts(l.value, true)}</span></dd>
             </div>
           ))}
           <div class={`send-line send-fee${live.flash('fee')}`}>

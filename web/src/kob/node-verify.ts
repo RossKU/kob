@@ -202,8 +202,30 @@ export interface SnapshotCheck {
   finish(facts: ReadonlyMap<string, NodeInputFact>): OrderSnapshot;
 }
 
+/**
+ * The custody is the exact unit (borrow guard zero) whenever one is listed, whatever unit the indexer
+ * names: a guarded unit the contracts would also accept then leaves with the cancel as a twin, as the
+ * kob-protocol builders take them (the exact one as the custody, the other as a stray, both to the
+ * maker). Only when no exact unit is listed is a guarded one the custody.
+ */
+function exactCustodyFirst(snap: OrderSnapshot): OrderSnapshot {
+  const c = snap.custody;
+  if (!c) return snap;
+  const guardZero = (u: TokenUtxo) => !/[1-9a-f]/i.test(String((u.state as { borrow_guard?: string }).borrow_guard ?? ''));
+  if (guardZero(c)) return snap;
+  const st = c.state as unknown as Record<string, unknown>;
+  const same = (u: TokenUtxo) => {
+    const x = u.state as unknown as Record<string, unknown>;
+    return (u.covenantId ?? null) === (c.covenantId ?? null) && x.owner === st.owner && x.owner_scheme === st.owner_scheme && Number(x.borrow_scheme ?? 0) === 0 && x.extension_commitment === st.extension_commitment && String(x.amount) === String(st.amount);
+  };
+  const exact = snap.strays.find((u) => guardZero(u) && same(u));
+  if (!exact) return snap;
+  return { ...snap, custody: exact, strays: [...snap.strays.filter((u) => u !== exact), c] };
+}
+
 /** Derives the outpoints a snapshot must have on the node and the check of the node's answer. */
-export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck {
+export function snapshotCheck(kob: KobWasm, snap0: OrderSnapshot): SnapshotCheck {
+  const snap = exactCustodyFirst(snap0);
   const st = snap.order.state;
   // An unbound curve, created in its token's genesis, names no token in its state. Its token is its
   // custody's, an output of the curve's own transaction, and the node must hold that custody under

@@ -1,3 +1,4 @@
+import { tokensWith } from '../../data/indexer';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useMedia } from '../shell/narrow';
 import { useServices } from '../../app/context';
@@ -60,7 +61,7 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
     setBusy(true);
     setMessage(null);
     try {
-      const found = (await indexer.tokens()).find((x) => x.covenant_id === id);
+      const found = (await tokensWith(indexer, [id])).find((x) => x.covenant_id === id);
       if (!found) setMessage({ tone: 'error', text: t('market.add.notFound'), page: routeToHash(tokenRoute(id)) });
       else if (!tradableHere({ source: 'indexer', info: null, index: found }, kob.templates())) setMessage({ tone: 'error', text: t('market.add.untradable') });
       else {

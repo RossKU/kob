@@ -17,6 +17,7 @@
 // follows. Live, `book:<base>` and `book:<quote>` trigger a debounced refetch, with 5 s polling
 // without the socket. An indexer without the pair routes (404, 405 or 501) shows "pair book
 // unavailable" and still lets the user place orders.
+import { tokensWith } from '../../data/indexer';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
@@ -84,7 +85,7 @@ export function PairPage(props: { base: string; quote: string }) {
   // Bumps on a reorg or resync. The chart reloads in full (TokenPage).
   const [resyncKey, setResyncKey] = useState(0);
   const [prefill, setPrefill] = useState<{ price: bigint; seq: number } | undefined>(undefined);
-  const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, standalone]);
+  const tokenList = useAsync((signal) => (indexer ? tokensWith(indexer, [props.base, props.quote], { signal }) : Promise.resolve(null)), [indexer, standalone, props.base, props.quote]);
   const declared = useDeclarationLookup();
   const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, [], declared), [registry, tokenList.data, declared]);
   const choiceRows = useMemo(() => tradableRows(rows, kob.templates()), [rows, kob]);

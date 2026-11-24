@@ -360,11 +360,14 @@ test.describe('the private-key signer', () => {
     await expect(page.getByTestId('signer-overlay')).toBeVisible();
     const receipt = await readReceipt(page);
     expect(receipt.from).toBe('signer');
+    // the lines say "token A" / "token B"; both ids are named in full above them (founder 2026-11-12)
     expect(receipt.orders[0]!.rows).toMatchObject({
-      Pair: `sells ${long(base)} for ${long(QUOTE)} (prices in ${long(QUOTE)} per ${long(base)})`,
-      'Base tokens locked in the order': `2 ${long(base)}`,
-      'Limit price': `0.0515 ${long(QUOTE)} per ${long(base)}`,
+      Pair: 'sells token A for token B (prices in token B per token A)',
+      'Base tokens locked in the order': '2 token A',
+      'Limit price': '0.0515 token B per token A',
     });
+    expect(receipt.orders[0]!.token).toContain(`token A: ${base}`);
+    expect(receipt.orders[0]!.token).toContain(`token B: ${QUOTE}`);
     await expect(frame.getByTestId('signer-problems')).toHaveCount(0);
     await confirmReceipt(page);
     const placed = await placedBy(mock, await waitSubmitted(page));

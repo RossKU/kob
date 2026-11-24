@@ -54,9 +54,13 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button:disabled { color: var(--muted); background: var(--bg); border-color: var(--border); cursor: default; }
 .lines { margin: 0; }
 .line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
-.line dt { color: var(--muted); flex: 1 1 0; min-width: 0; }
+.line dt { color: var(--muted); flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
 /* the value keeps its own width (a long label wraps instead of squeezing a number into "-10" / "0"); only a value wider than 70% of the row breaks */
 .line dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; flex: 0 0 auto; max-width: 70%; }
+/* a whole id or key: the label above, the value below over the full width, broken anywhere */
+.line.mono { flex-direction: column; gap: 2px; }
+.line.mono dt { flex: none; }
+.line dd.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; text-align: left; word-break: break-all; max-width: 100%; flex: none; }
 .line.out dd { color: var(--bad); }
 .line.in dd { color: var(--ok); }
 .line.fee { border-bottom: 0; }

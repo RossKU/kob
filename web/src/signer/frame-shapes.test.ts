@@ -9,6 +9,7 @@ import { golden, goldenRequest, keyUtxo, MAKER, placeGolden, strayFor } from '..
 import { planSweep, type CancelEnv } from '../kob/cancel';
 import type { BookOrderUtxo, BookView, PlanEnv } from '../kob/plan-types';
 import { planOrder } from '../kob/plan';
+import { planCancelAll } from '../kob/cancel';
 import { KAS as FKAS, OTHER_PK, TOK, keyUtxo as fKeyUtxo, makeEnv, market3x3, tokenUtxo as fTokenUtxo, CLOCK } from '../testing/fixtures';
 import { snapshotOfRecovered } from '../testing/chain-fixtures';
 import { bundle, continuationAsGenesis } from '../testing/hostile-tx';
@@ -189,5 +190,72 @@ describe('R9FB2-9: the decoder\'s info findings are shown in the frame', () => {
     const s = frame(b);
     expect(s.decoded!.info.length).toBeGreaterThan(0);
     expect(s.lines.filter((l) => l.label === 'Note').length).toBe(s.decoded!.info.length);
+  });
+});
+
+describe('a take explains where the wallet\'s KAS goes, from bound data (no "script this signer cannot read")', () => {
+  it('a partial take of an ask: a payment to the maker by its whole key, the order\'s own remainder apart, scaled token units', () => {
+    const s = frame(takeOf('buy'));
+    expect(s.problems).toBe(0);
+    expect(s.lines.some((l) => /cannot read/.test(l.value))).toBe(false);
+    const pay = s.lines.find((l) => l.label === 'Pays')!;
+    expect(pay.value).toContain(OTHER_PK);
+    expect(pay.mono).toBe(true);
+    expect(s.lines.some((l) => /^Stays in the orders you fill/.test(l.label))).toBe(true);
+    expect(s.lines.find((l) => l.label === 'You pay, with the fee')!.value).not.toMatch(/ \d{6,}$/);
+  });
+});
+
+// every action through the frame, its lines as text (written for the review when KOB_FRAME_LINES is set)
+it('the frame lines of each action', async () => {
+  const out = process.env.KOB_FRAME_LINES;
+  if (!out) return;
+  const { claim } = await import('../testing/claim-fixtures');
+  const fs = await import('node:fs');
+  const snapAsk = placeGolden(kob, 'create.ask').snapshots[0]!;
+  const fullTake = () => {
+    const r = resting('sell', 250_000_000n, 2n * TOK);
+    const level = { price: r.row.price, amount: r.row.amount, orders: 1 };
+    const env = { ...makeEnv({ book: { asks: [level], bids: [], askOrders: [r.row], bidOrders: [] }, tokenAmounts: [100n * TOK] }), bookOrders: new Map([[r.row.covenantId.toLowerCase(), r.utxo]]) };
+    return planOrder(env, { type: 'limit', side: 'buy', amount: 2n * TOK, price: 255_000_000n, crossing: 'take' }).built!;
+  };
+  const cases: [string, () => BuiltTx][] = [
+    ['take of an ask, partial', () => takeOf('buy')],
+    ['take of an ask, full', fullTake],
+    ['take of a bid (a sell)', () => takeOf('sell')],
+    ['send', () => build('send.tokens')],
+    ['place an ask', () => build('create.ask')],
+    ['place a bid', () => build('create.bid')],
+    ['cancel', () => build('cancel.ask')],
+    ['cancel-all (two orders)', () => planCancelAll(cancelEnv(), [snapAsk, placeGolden(kob, 'create.condAsk').snapshots[0]!]).find((p) => p.ok)!.built!],
+    ['cancel-replace', () => build('cancelReplace.ask')],
+    ['amend in place', () => build('amend.ask')],
+    ['sweep', () => planSweep(cancelEnv(), { ...snapAsk, strays: [strayFor(snapAsk, 4n, 92)] }).built!],
+    ['claim', () => claim('create.bid.acc').built],
+    ['refund', () => build('refund.ask.expiry')],
+  ];
+  const text: string[] = [];
+  for (const [name, make] of cases) {
+    const s = summarize(kob, make(), MAKER.pk, [{ covenantId: '70'.repeat(32), ticker: 'EXKCC', decimals: 3, source: 'declared' }]);
+    text.push(`### ${name}: ${s.title}${s.problems ? ` (PROBLEMS: ${s.problemCodes.join(', ')})` : ''}`);
+    for (const l of s.lines) text.push(`  ${l.label}: ${l.value}${l.dir ? ` [${l.dir}]` : ''}`);
+    text.push(`  Network fee: ${s.fee}`);
+    for (const o of s.orders) text.push(`  [order] ${o.title}: ${o.rows.map((r) => `${r.label} ${r.value}`).join(' | ')}`);
+  }
+  fs.writeFileSync(out, text.join('\n'));
+});
+
+describe('a token the frame cannot name: the unit is "token", the token is named once in full (founder, TN10 TUSD)', () => {
+  it('a market buy with a scale hint and the app\'s name', () => {
+    const b = build('create.bid.market');
+    const cov = (kob.recoverOrders(b.tx)[0]!.order.state as unknown as { state: { tokenCovId: string } }).state?.tokenCovId ?? (kob.recoverOrders(b.tx)[0]!.order.state as unknown as { tokenCovId: string }).tokenCovId;
+    const s = summarize(kob, b, MAKER.pk, [{ covenantId: cov, ticker: '', decimals: 8, source: 'scale', appName: 'TUSD' }]);
+    const o = s.orders[0]!;
+    expect(o.token).toBe(`${cov} (8 decimals, from its price scale) the app calls it TUSD (not verified by this signer)`);
+    const values = o.rows.map((r) => r.value).join(' | ');
+    expect(values).toMatch(/KAS per token/);
+    expect(values).not.toMatch(/[0-9a-f]{8}…[0-9a-f]{8}/);
+    expect(values).not.toMatch(/TUSD/);
+    expect(o.rows.some((r) => r.label === 'Buys with this budget')).toBe(true);
   });
 });

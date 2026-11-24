@@ -48,14 +48,16 @@ export function signerTokenHints(kob: KobWasm, built: BuiltTx, maker: Hex | null
     // one, because the frame names the token by its covenant id, and an order of the transaction
     // names its own scale (signer/summary.ts `withOrderScales`).
     const shown = displayToken(registry, network, id)!;
+    // the name this app shows for it, passed as the app's name only (the frame never takes it as a unit)
+    const appName = /^[\x20-\x7e]{1,24}$/.test(shown.ticker) && !/^[0-9a-f]{8}…[0-9a-f]{8}$/.test(shown.ticker) ? { appName: shown.ticker } : {};
     if (shown.decimalsSource === 'program' && shown.decimalsConvention && /^[\x20-\x7e]{1,40}$/.test(shown.decimalsConvention)) {
-      return [{ covenantId: id, ticker: '', decimals: shown.decimals, source: 'program', convention: shown.decimalsConvention, ...inverted }];
+      return [{ covenantId: id, ticker: '', decimals: shown.decimals, source: 'program', convention: shown.decimalsConvention, ...appName, ...inverted }];
     }
-    if (shown.decimalsSource === 'scale') return [{ covenantId: id, ticker: '', decimals: shown.decimals, source: 'scale', ...inverted }];
+    if (shown.decimalsSource === 'scale') return [{ covenantId: id, ticker: '', decimals: shown.decimals, source: 'scale', ...appName, ...inverted }];
     const source = shown.decimalsSource === 'declared' || shown.decimalsSource === 'issued' ? shown.decimalsSource : null;
     return source && /^[\x20-\x7e]{1,24}$/.test(shown.ticker)
       ? [{ covenantId: id, ticker: shown.ticker, decimals: shown.decimals, source, ...inverted }]
-      : [{ covenantId: id, ticker: '', decimals: shown.decimals, source: 'assumed', ...inverted }];
+      : [{ covenantId: id, ticker: '', decimals: shown.decimals, source: 'assumed', ...appName, ...inverted }];
   });
 }
 

@@ -256,7 +256,8 @@ const isUnsupported = (e: unknown): boolean => e instanceof IndexerError && (e.s
 /** The indexer reads the app uses. */
 export interface IndexerApi {
   health(o?: RequestOptions): Promise<HealthView>;
-  tokens(o?: RequestOptions): Promise<IndexerTokenView[]>;
+  /** The token list; `truncated` is set on the array when kobd cut it. */
+  tokens(o?: RequestOptions): Promise<IndexerTokenView[] & { truncated?: true }>;
   /**
    * `GET /v1/tokens/{id}/declaration`: the token's KCC-23 launch proof (`kob-kcc23-proof/1`), or
    * null when the indexer holds none or does not serve the route. It is never trusted as it is.
@@ -594,8 +595,16 @@ export class HttpIndexer implements IndexerApi {
   }
 
   async tokens(o?: RequestOptions) {
-    const r = await this.get<{ tokens?: IndexerTokenView[] }>('/v1/tokens', {}, o);
-    return Array.isArray(r?.tokens) ? r.tokens.filter((v) => typeof v?.covenant_id === 'string' && /^[0-9a-f]{64}$/.test(v.covenant_id)).map(normalizeTokenView) : [];
+    const r = await this.get<{ tokens?: IndexerTokenView[]; truncated?: boolean }>('/v1/tokens', {}, o);
+    const list: IndexerTokenView[] & { truncated?: true } = Array.isArray(r?.tokens) ? r.tokens.filter((v) => typeof v?.covenant_id === 'string' && /^[0-9a-f]{64}$/.test(v.covenant_id)).map(normalizeTokenView) : [];
+    if (r?.truncated === true) list.truncated = true;
+    return list;
+  }
+
+  /** One token's view (`GET /v1/tokens/{id}`), or null when the indexer does not know it. */
+  async tokenById(covenantId: Hex, o?: RequestOptions): Promise<IndexerTokenView | null> {
+    const v = await this.getOrNull<IndexerTokenView>(`/v1/tokens/${assertHash('covenant id', covenantId)}`, {}, o);
+    return v && typeof v.covenant_id === 'string' && /^[0-9a-f]{64}$/.test(v.covenant_id) ? normalizeTokenView(v) : null;
   }
 
   async declaration(covenantId: Hex, o?: RequestOptions) {
@@ -1226,4 +1235,19 @@ export class IndexerFeed {
     }
     this.setStatus('closed');
   }
+}
+
+/**
+ * The token list with `ids` in it: kobd cuts `/v1/tokens` (`truncated`), and a token missing from a
+ * cut list is read by its id (`GET /v1/tokens/{id}`), so a token opened by its id or a link is still
+ * tradable. An id the indexer does not know (404) stays out.
+ */
+export async function tokensWith(ix: Pick<IndexerApi, 'tokens'> & { tokenById?: (id: Hex, o?: RequestOptions) => Promise<IndexerTokenView | null> }, ids: readonly string[], o?: RequestOptions): Promise<IndexerTokenView[]> {
+  const list = await ix.tokens(o);
+  if (!list.truncated || typeof ix.tokenById !== 'function') return list;
+  const have = new Set(list.map((t) => t.covenant_id.toLowerCase()));
+  const missing = [...new Set(ids.map((x) => x.toLowerCase()))].filter((x) => /^[0-9a-f]{64}$/.test(x) && !have.has(x));
+  if (!missing.length) return list;
+  const extra = await Promise.all(missing.map((id) => ix.tokenById!(id as Hex, o).catch(() => null)));
+  return Object.assign([...list, ...extra.filter((t): t is IndexerTokenView => !!t)], { truncated: true as const });
 }

@@ -56,3 +56,17 @@ describe('a cancel releasing a custody with a borrow guard', () => {
     expect(s.blocking.map((b) => b.code)).toEqual([]);
   });
 });
+
+describe('both an exact and a guarded unit: the exact one is the custody, whatever the indexer names', () => {
+  it('the indexer names the guarded one: the node check takes the exact one, the guarded one leaves as a twin', () => {
+    const snap = placeGolden(kob, 'create.ask').snapshots[0]!;
+    const exact = snap.custody!;
+    const guarded = { ...exact, transactionId: '5a'.repeat(32), index: 3, state: { ...(exact.state as Kcc20State), borrow_guard: '11'.repeat(32) } as TokenState };
+    const named = { ...snap, custody: guarded, strays: [exact] };
+    const check = snapshotCheck(kob, named);
+    const facts = new Map<string, NodeInputFact>(check.refs.map((r) => [outpointKey(r.transactionId, r.index), { amount: 1_000n, scriptPublicKey: r.scriptPublicKey, covenantId: r === check.refs[0] ? snap.covenantId : exact.covenantId! }]));
+    const done = check.finish(facts);
+    expect(done.custody!.transactionId).toBe(exact.transactionId);
+    expect(done.strays.map((u) => u.transactionId)).toEqual([guarded.transactionId]);
+  });
+});

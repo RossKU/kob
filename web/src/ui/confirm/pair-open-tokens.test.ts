@@ -119,22 +119,25 @@ describe('the confirmation table of a pair whose tokens have no ticker', () => {
   it('names the quote by its covenant id, never an empty name', () => {
     const hints = signerTokenHints(kob, built, MAKER.pk, empty, NET);
     expect(hints.find((h) => h.covenantId === B)).toMatchObject({ ticker: '', source: 'assumed' });
-    const value = rowOf(hints, 'pairPair').value;
-    expect(value).toContain(longId(A));
-    expect(value).toContain(longId(B));
-    expect(rowOf(hints, 'pairTotal').value).toContain(longId(B));
+    // the lines say "token A" / "token B"; both ids are named in full above them
+    expect(rowOf(hints, 'pairPair').value).toContain('token A');
+    expect(rowOf(hints, 'pairPair').value).toContain('token B');
+    expect(rowOf(hints, 'pairTotal').value).toContain('token B');
+    const token = summarize(kob, built, MAKER.pk, hints).orders[0]!.token;
+    expect(token).toContain(`token A: ${A}`);
+    expect(token).toContain(`token B: ${B}`);
   });
 
   it('reads each token on the scale the order names: the whole token the ticket used', () => {
     const s = summarize(kob, built, MAKER.pk, signerTokenHints(kob, built, MAKER.pk, empty, NET));
-    expect(s.orders[0]!.token).toBe(`${longId(A)} (${decimalsOfScale(pair.base.scale)} decimals, from its price scale)`);
+    expect(s.orders[0]!.token).toContain(`token A: ${A} (${decimalsOfScale(pair.base.scale)} decimals, from its price scale)`);
     const held = pair.custodies[0]!.amount;
-    expect(s.orders[0]!.rows.find((r) => r.id === 'pairEscrowA')!.value).toBe(`${formatTokenAmount(held, decimalsOfScale(pair.base.scale)!, { group: ',' })} ${longId(A)}`);
+    expect(s.orders[0]!.rows.find((r) => r.id === 'pairEscrowA')!.value).toBe(`${formatTokenAmount(held, decimalsOfScale(pair.base.scale)!, { group: ',' })} token A`);
   });
 
   it('a declared or program-default decimals hint comes first, as on the ticket', () => {
     const s = summarize(kob, built, MAKER.pk, [{ covenantId: A, ticker: 'AAA', decimals: decimalsOfScale(pair.base.scale)!, source: 'declared' }]);
     expect(s.orders[0]!.token).toContain('AAA');
-    expect(s.orders[0]!.token).toContain('declared on chain, unverified');
+    expect(s.orders[0]!.token).toContain('AAA, 3 decimals, declared on chain'.replace('3', String(decimalsOfScale(pair.base.scale))));
   });
 });

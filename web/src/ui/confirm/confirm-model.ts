@@ -478,6 +478,15 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
     // A plain bid is a KAS budget, so how much that buys depends on the price.
     const budget = extra.locked.escrow;
     rows.push(row('budget', tr('confirm.f.budget'), kas(budget), 'normal', tr('confirm.f.budgetAmount')));
+    // What the budget buys, from the signed state alone, so the user can connect it with the amount
+    // typed: at the worst price (an auction's end, else the limit) and, for an auction, at its start.
+    if (!pair && d.scale > 0n) {
+      const units = (price: bigint): bigint => (price + d.tip > 0n ? (budget * d.scale) / (price + d.tip) : 0n);
+      const worst = d.auction && d.auction.slope > 0n && d.auction.priceEnd > 0n ? d.auction.priceEnd : d.price;
+      const atWorst = tokenAmountText(f.ref, units(worst), tr);
+      const value = worst !== d.price && d.price > 0n ? tr('confirm.f.buysRange', { least: atWorst, most: tokenAmountText(f.ref, units(d.price), tr) }) : tr('confirm.f.buysAtLimit', { amount: atWorst });
+      rows.push(row('buys', tr('confirm.f.buys'), value, 'normal', tr('confirm.f.buysHint')));
+    }
   }
   // The smallest fill, unless a fill takes everything left (the order's anti-dust rule).
   rows.push(row('minFill', tr('confirm.f.minFill'), tokenAmountText(f.ref, d.minFill, tr), 'muted', tr('confirm.f.minFillHint')));
