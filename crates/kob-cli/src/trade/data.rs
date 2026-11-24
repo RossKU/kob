@@ -341,12 +341,24 @@ pub fn book_from_indexer(scale: i64, v: &Value) -> Book {
     Book { asks, bids, ask_orders, bid_orders }
 }
 
-/// The live orders (`status=active`) of `maker` under `token`, every page up to 20: a page may stop short of `limit` and
-/// still carry a cursor (a status read in history order is bounded per call).
+/// Most pages [`active_orders`] reads before it gives up and calls the list incomplete.
+const ACTIVE_PAGES_MAX: usize = 200;
+
+/// Whether an order-list cursor has the form the indexer gives: `<genesis block>:<64 hex covenant id>`.
+fn order_cursor_ok(c: &str) -> bool {
+    c.split_once(':').is_some_and(|(b, id)| {
+        !b.is_empty() && b.bytes().all(|x| x.is_ascii_digit()) && id.len() == 64 && id.bytes().all(|x| x.is_ascii_hexdigit())
+    })
+}
+
+/// The live orders (`status=active`) of `maker` under `token`, following the cursor to the end: a page may stop short
+/// of `limit` and still carry a cursor (a status read in history order is bounded per call). It ends with the whole
+/// list or an error, never a cut list taken as whole (R7DF-2): past [`ACTIVE_PAGES_MAX`] pages, on a malformed or
+/// repeated cursor, it says the list is incomplete, and the caller raises its own-orders guard.
 fn active_orders(indexer: &str, maker: &[u8; 32], token: &[u8; 32]) -> Result<Vec<Value>, String> {
     let mut out = vec![];
     let mut cursor: Option<String> = None;
-    for _ in 0..20 {
+    for _ in 0..ACTIVE_PAGES_MAX {
         let mut path = format!("/v1/orders?maker={}&token={}&status=active&limit=200", to_hex(maker), to_hex(token));
         if let Some(c) = &cursor {
             path.push_str(&format!("&cursor={c}"));
@@ -354,11 +366,16 @@ fn active_orders(indexer: &str, maker: &[u8; 32], token: &[u8; 32]) -> Result<Ve
         let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
         out.extend(v.get("items").and_then(Value::as_array).cloned().unwrap_or_default());
         match v.get("next_cursor").and_then(Value::as_str) {
-            Some(c) if !c.is_empty() => cursor = Some(c.to_string()),
-            _ => break,
+            Some(c) if !c.is_empty() => {
+                if !order_cursor_ok(c) || cursor.as_deref() == Some(c) {
+                    return Err(format!("the indexer's live-order list is incomplete: a bad cursor {c:?}"));
+                }
+                cursor = Some(c.to_string());
+            }
+            _ => return Ok(out),
         }
     }
-    Ok(out)
+    Err(format!("the indexer's live-order list is incomplete: more than {ACTIVE_PAGES_MAX} pages"))
 }
 
 /// The live orders of the maker for `m` in its KAS book, for self-trade prevention.
@@ -691,5 +708,27 @@ mod tests {
         routes.insert(format!("{base}&cursor={past}"), json!({"items": [], "next_cursor": past}));
         let (url, _) = http::mock::start(routes);
         assert!(owner_token_items(&url, &owner, &cov).unwrap_err().contains("incomplete"));
+    }
+
+    /// R7DF-2: the live-order list follows the cursor through short and empty pages to its end; a cursor that repeats or
+    /// is malformed makes it incomplete (an error, so the own-orders guard is raised), never a cut list taken as whole.
+    #[test]
+    fn the_live_order_list_is_whole_or_an_error() {
+        let (maker, cov) = ([0x11u8; 32], [0x22u8; 32]);
+        let base = format!("/v1/orders?maker={}&token={}&status=active&limit=200", to_hex(&maker), to_hex(&cov));
+        let c1 = format!("7:{}", "ab".repeat(32));
+        let mut routes = BTreeMap::new();
+        routes.insert(base.clone(), json!({"items": [], "next_cursor": c1}));
+        routes.insert(format!("{base}&cursor={c1}"), json!({"items": [{"covenant_id": "x"}], "next_cursor": null}));
+        let (url, _) = http::mock::start(routes);
+        assert_eq!(active_orders(&url, &maker, &cov).unwrap().len(), 1);
+        for bad in [c1.clone(), "7:zz".to_string()] {
+            let mut routes = BTreeMap::new();
+            routes.insert(base.clone(), json!({"items": [], "next_cursor": c1}));
+            routes.insert(format!("{base}&cursor={c1}"), json!({"items": [], "next_cursor": bad}));
+            let (url, _) = http::mock::start(routes);
+            assert!(active_orders(&url, &maker, &cov).unwrap_err().contains("incomplete"), "{bad}");
+        }
+        assert!(order_cursor_ok(&c1) && !order_cursor_ok("x:ab") && !order_cursor_ok(&format!("7:{}&a=b", "ab".repeat(31))));
     }
 }
