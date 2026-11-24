@@ -163,6 +163,14 @@ pub fn held_program_from(
     }
 }
 
+/// Whether `c` has the form of a holdings cursor, `<block>:<64 hex>:<index>`.
+fn holding_cursor_ok(c: &str) -> bool {
+    let mut it = c.splitn(3, ':');
+    let (Some(b), Some(t), Some(i)) = (it.next(), it.next(), it.next()) else { return false };
+    let num = |x: &str| !x.is_empty() && x.len() <= 20 && x.bytes().all(|d| d.is_ascii_digit() || d == b'-');
+    num(b) && num(i) && t.len() == 64 && t.bytes().all(|d| d.is_ascii_hexdigit())
+}
+
 /// Most pages of `GET /v1/token-utxos?owner=&token=` one listing follows.
 const OWNER_TOKEN_PAGES: usize = 20;
 
@@ -183,6 +191,9 @@ fn owner_token_items(indexer: &str, owner: &[u8; 32], cov: &[u8; 32]) -> Result<
         let page = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
         items.extend(page.get("items").and_then(Value::as_array).cloned().unwrap_or_default());
         match page.get("next_cursor").and_then(Value::as_str) {
+            // A holdings cursor is `<block>:<txid hex>:<index>`; anything else would put the indexer's
+            // text into the request (R6C2b-I5).
+            Some(c) if !holding_cursor_ok(c) => return Err(format!("{}: the indexer sent a malformed cursor", to_hex(cov))),
             Some(c) if Some(c) != cursor.as_deref() => cursor = Some(c.to_string()),
             Some(_) => return Err(format!("{}: the indexer's list of your token UTXOs does not advance: incomplete", to_hex(cov))),
             None => return Ok(items),
@@ -330,14 +341,32 @@ pub fn book_from_indexer(scale: i64, v: &Value) -> Book {
     Book { asks, bids, ask_orders, bid_orders }
 }
 
+/// The live orders (`status=active`) of `maker` under `token`, every page up to 20: a page may stop short of `limit` and
+/// still carry a cursor (a status read in history order is bounded per call).
+fn active_orders(indexer: &str, maker: &[u8; 32], token: &[u8; 32]) -> Result<Vec<Value>, String> {
+    let mut out = vec![];
+    let mut cursor: Option<String> = None;
+    for _ in 0..20 {
+        let mut path = format!("/v1/orders?maker={}&token={}&status=active&limit=200", to_hex(maker), to_hex(token));
+        if let Some(c) = &cursor {
+            path.push_str(&format!("&cursor={c}"));
+        }
+        let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
+        out.extend(v.get("items").and_then(Value::as_array).cloned().unwrap_or_default());
+        match v.get("next_cursor").and_then(Value::as_str) {
+            Some(c) if !c.is_empty() => cursor = Some(c.to_string()),
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
 /// The live orders of the maker for `m` in its KAS book, for self-trade prevention.
 ///
 /// Pair orders and unpriced stops are left out.
 pub fn own_orders(indexer: &str, m: &TokenMarket, maker: &[u8; 32]) -> Result<Vec<OwnOrder>, String> {
-    let path = format!("/v1/orders?maker={}&token={}&status=active&limit=200", to_hex(maker), to_hex(&m.cov));
-    let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
     let mut out = vec![];
-    for o in v.get("items").and_then(Value::as_array).cloned().unwrap_or_default() {
+    for o in active_orders(indexer, maker, &m.cov)? {
         let status = o.get("status").and_then(Value::as_str).unwrap_or("");
         if !(status == "open" || status == "partial") || o.get("pair").is_some_and(|p| !p.is_null()) {
             continue;
@@ -449,10 +478,8 @@ pub fn pair_book_from(v: &Value, scale_a: i64) -> Book {
 
 /// The live pair orders of the maker for A/B.
 pub fn own_pair_orders(indexer: &str, a: &TokenMarket, b: &TokenMarket, maker: &[u8; 32]) -> Result<Vec<OwnOrder>, String> {
-    let path = format!("/v1/orders?maker={}&token={}&status=active&limit=200", to_hex(maker), to_hex(&a.cov));
-    let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
     let mut out = vec![];
-    for o in v.get("items").and_then(Value::as_array).cloned().unwrap_or_default() {
+    for o in active_orders(indexer, maker, &a.cov)? {
         let Some(p) = o.get("pair").filter(|p| !p.is_null()) else { continue };
         let status = o.get("status").and_then(Value::as_str).unwrap_or("");
         let h = |k: &str| p.get(k).and_then(Value::as_str).and_then(kob_protocol::registry::parse_hex32);
