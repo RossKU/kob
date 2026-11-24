@@ -30,8 +30,10 @@
 //!   once per authority before its first step ([`ChainSource::check_capabilities`]). One that only
 //!   closes the connection on it is warned about and checked again, never stopped on.
 //! - A lane proof the synced node can no longer serve, because the cursor is before its pruning
-//!   point (`BlockTooDeep`): state `gap`. No batch from there can be proven, and none is
-//!   applied unproven. A recovering follower does not move the store past it.
+//!   point (`BlockTooDeep`), when the cursor block is older than the network's pruning depth by
+//!   its verified time: state `gap`, shown and asked again with the backoff, so it is left by
+//!   itself once a node serves the proof. No batch from there is applied unproven. Of a younger
+//!   cursor the answer is the node's failure, not a gap (R8C1-M1).
 //!
 //! # Batch size
 //!
@@ -244,6 +246,15 @@ pub const EXCURSION_WINDOW: Duration = Duration::from_secs(3_600);
 /// whoever's time it was (R7C1-M1): a backstop, so that no mix of the authority's, another
 /// node's and kobd's own time can hold the role longer. Ordinary periods end long before.
 pub const PERIOD_WALL_MAX: Duration = Duration::from_secs(30 * 60);
+
+/// What the lag must have fallen by within [`PERIOD_WALL_MAX`] of wall time for the backstop to
+/// let the period go on (R8C1-L1): in chain time, the cursor must have advanced by 30 minutes and
+/// 90 s. It is progress, not time, so whose time it was does not matter: an authority that holds
+/// the index at a constant lag serves chain at the rate of real time and fails it; an honest
+/// catch-up, which serves chain many times faster than real time even when kobd's own work takes
+/// most of the follower's time (a catch-up at 1.05 times real time gains 90 s in 30 minutes),
+/// passes it. 90 s is the tolerance: a tenth of the gain the period rule asks of the same time.
+pub const PERIOD_WALL_GAIN: Duration = Duration::from_secs(90);
 
 /// Whose time the follower waits on (module documentation, *Progress*): the chain authority's,
 /// the only time that runs the progress rule's clock ...
@@ -502,6 +513,11 @@ struct Rule {
     excursions: std::collections::VecDeque<(u64, u64)>,
     /// The authority deposed last, until its successor shows whether it was to blame.
     blame: Option<Blame>,
+    /// Excursions of this authority that its budget already charged (the budget started again):
+    /// kept with its stint (R8C1-L2).
+    spent: std::collections::VecDeque<(u64, u64)>,
+    /// The last handover found no other node: the backstop then only says so (R8C1-L1).
+    lone: bool,
 }
 
 impl Rule {
@@ -509,7 +525,9 @@ impl Rule {
     /// for an hour of running time: a node that gets the role back within it goes on with them
     /// (R6C1-I3, R7C1-L2).
     fn keep_stint(&mut self, old: String) {
-        let kept = (self.kept_up, std::mem::take(&mut self.excursions), self.run_ms);
+        let mut ex = std::mem::take(&mut self.spent);
+        ex.extend(std::mem::take(&mut self.excursions));
+        let kept = (self.kept_up, ex, self.run_ms);
         self.kept_up = false;
         self.past.retain(|(k, _)| *k != old);
         self.past.push((old, kept));
@@ -564,6 +582,9 @@ struct Period {
     /// The wall clock (ms) when it began: a period older than [`PERIOD_WALL_MAX`] fails whoever's
     /// time it was (R7C1-M1).
     wall_start: u64,
+    /// The lag at `wall_start`: the backstop fires only if the lag has not fallen by
+    /// [`PERIOD_WALL_GAIN`] since (R8C1-L1).
+    wall_lag: Option<i64>,
 }
 
 /// How often the free space of the data directory and the size of the database are measured.
@@ -648,6 +669,15 @@ fn retry_is_routine(reason: &str, attempt: u32, cross_wait: bool) -> bool {
         || (reason.starts_with(TIP_REORG) && attempt < 3)
 }
 
+/// The network's pruning depth in time (ms): a block younger than this by its verified time is
+/// within every synced node's reach (rusty-kaspa v2.1.0 `pruning_depth` at its block rate, about
+/// 30 h on mainnet).
+fn pruning_horizon_ms(network: &str) -> i64 {
+    use kaspa_consensus_core::config::params::{MAINNET_PARAMS, TESTNET_PARAMS};
+    let p = if network == "mainnet" { &MAINNET_PARAMS } else { &TESTNET_PARAMS };
+    (p.pruning_depth() * 1_000 / p.bps().max(1)) as i64
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -718,10 +748,19 @@ impl<S: ChainSource> Follower<S> {
                 last_check: None,
                 excursions: Default::default(),
                 blame: None,
+                spent: Default::default(),
+                lone: false,
             }),
             cursor_seen: Mutex::new(None),
             alone_at: Mutex::new(None),
         }
+    }
+
+    /// The cursor block's age by its verified header time and the local wall clock, when known.
+    fn cursor_age_ms(&self) -> Option<i64> {
+        let cursor = *self.cursor_seen.lock().unwrap_or_else(|e| e.into_inner());
+        let ts = self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| Some(*h) == cursor).map(|(_, t)| t)?;
+        Some(self.wall_ms() as i64 - ts as i64)
     }
 
     /// Sets the local clock to read `unix_ms` now and run on with the monotonic clock (tests whose
@@ -898,8 +937,8 @@ impl<S: ChainSource> Follower<S> {
             if std::mem::take(&mut r.restart) {
                 let host = std::mem::take(&mut r.host_pause);
                 if let Some(p) = r.period.as_mut() {
-                    let wall_start = if host { wall } else { p.wall_start };
-                    *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start };
+                    let (wall_start, wall_lag) = if host { (wall, lag) } else { (p.wall_start, p.wall_lag) };
+                    *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start, wall_lag };
                 }
                 // The pause is not an excursion of the authority.
                 r.last_check = None;
@@ -936,21 +975,37 @@ impl<S: ChainSource> Follower<S> {
                     PaceState::KeepingUp
                 }
                 _ => {
-                    let p = r.period.get_or_insert(Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall });
+                    let p = r.period.get_or_insert(Period {
+                        start_ms: run,
+                        start_lag: lag,
+                        calm_since: None,
+                        wall_start: wall,
+                        wall_lag: lag,
+                    });
                     p.calm_since = None;
                     if p.start_lag.is_none() {
                         p.start_lag = lag;
                     }
                     let wall_max = PERIOD_WALL_MAX.as_millis() as u64;
-                    if wall.saturating_sub(p.wall_start) > wall_max {
-                        // The backstop: so long above the tolerance, whoever's time it was.
-                        r.failed = Some(format!(
-                            "the chain authority does not keep up with real time: the cursor's chain block has been more than {} s behind the local clock for {} minutes",
+                    let progressed = matches!((p.wall_lag, lag), (Some(a), Some(b)) if a - b >= PERIOD_WALL_GAIN.as_millis() as i64);
+                    if wall.saturating_sub(p.wall_start) > wall_max && progressed {
+                        // The backstop's window passed with progress (R8C1-L1): a new window.
+                        (p.wall_start, p.wall_lag) = (wall, lag);
+                    } else if wall.saturating_sub(p.wall_start) > wall_max {
+                        // The backstop: so long above the tolerance with no progress, whoever's time
+                        // it was. With no other node to hand over to (`lone`), the health says so
+                        // and no step is given up for nothing.
+                        let why = format!(
+                            "the chain authority does not keep up with real time: the cursor's chain block has been more than {} s behind the local clock for {} minutes without gaining {} s on it",
                             tol / 1_000,
-                            wall_max / 60_000
-                        ));
+                            wall_max / 60_000,
+                            PERIOD_WALL_GAIN.as_secs()
+                        );
+                        *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall, wall_lag: lag };
+                        if !r.lone {
+                            r.failed = Some(why);
+                        }
                         r.failing = true;
-                        *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall };
                     } else if run.saturating_sub(p.start_ms) >= stall {
                         let need = (stall / 2) as i64;
                         let gained = matches!((p.start_lag, lag), (Some(a), Some(b)) if a - b >= need);
@@ -967,7 +1022,7 @@ impl<S: ChainSource> Follower<S> {
                         }
                         gained_period = gained;
                         r.failing = !gained;
-                        *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall };
+                        *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall, wall_lag: lag };
                     }
                     // Past the budget of excursions: failing as well, and the budget starts again.
                     if !r.failing && r.kept_up && used > budget {
@@ -979,7 +1034,10 @@ impl<S: ChainSource> Follower<S> {
                             budget / 1_000
                         ));
                         r.failing = true;
-                        r.excursions.clear();
+                        // The budget starts again, and what was spent is kept for the stint, so that
+                        // a node deposed for it comes back with it spent (R8C1-L2).
+                        let spent = std::mem::take(&mut r.excursions);
+                        r.spent.extend(spent);
                     }
                     match (r.failing, lag) {
                         (true, _) => PaceState::Failing,
@@ -1105,6 +1163,7 @@ impl<S: ChainSource> Follower<S> {
         // Whatever the source did, the count begins again: the next try needs as many failures.
         // With no other node, the next period of the progress rule asks again.
         self.chain_failures.lock().unwrap_or_else(|e| e.into_inner()).0 = 0;
+        self.rule().lone = !moved;
         if !moved {
             return None;
         }
@@ -1212,13 +1271,15 @@ impl<S: ChainSource> Follower<S> {
             return;
         }
         let snap = self.health.snapshot();
-        if snap.lag_daa().is_some_and(|lag| lag > LEAN_MAX_LAG_DAA) {
+        // The cursor block's verified age, never the node's claimed position (R8C1-L4).
+        if snap.lag_seconds(self.wall_ms()).is_none_or(|s| s.saturating_mul(10) > LEAN_MAX_LAG_DAA) {
             *self.lean_next.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + LEAN_BUSY_EVERY);
             return;
         }
-        let node_daa = snap.node_daa;
+        // The retention is counted from the cursor: a node's claim far ahead would make it cut
+        // history a correct claim keeps (R8C1-L4).
         let began = std::time::Instant::now();
-        let next = match self.blocking(move |i| i.prune_batch(node_daa)).await {
+        let next = match self.blocking(move |i| i.prune_batch(None)).await {
             Ok(Some(rep)) => {
                 if rep.over_cap != snap.lean_over_cap {
                     if rep.over_cap {
@@ -1859,18 +1920,39 @@ impl<S: ChainSource> Follower<S> {
             let confirmed = self.confirm(start, &raw, origin, confirm).await;
             return (raw, Ok(()), confirmed);
         };
-        let p = proof.clone();
-        // kobd's own CPU, not the authority's time (R6C1-I4).
-        let (raw, plan) = self
-            .waiting_on(
-                WAIT_OWN,
-                tokio::task::spawn_blocking(move || {
-                    let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
-                    (raw, r)
-                }),
-            )
-            .await
-            .expect("proof task panicked");
+        let mut raw = raw;
+        let plan = loop {
+            let p = proof.clone();
+            // kobd's own CPU, not the authority's time (R6C1-I4).
+            let (r, plan) = self
+                .waiting_on(
+                    WAIT_OWN,
+                    tokio::task::spawn_blocking(move || {
+                        let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
+                        (raw, r)
+                    }),
+                )
+                .await
+                .expect("proof task panicked");
+            raw = r;
+            match plan {
+                // More lanes than one batch proves (`MAX_BATCH_LANES`): the window is proven and
+                // applied in pieces, its longest prefix within the bound first, at least one chain
+                // block. kobd's own bound: no refusal, no blame (R8C1-H1).
+                Ok(Some(p)) if p.lanes.len() > crate::rpc::proof::MAX_BATCH_LANES && p.blocks() > 1 => {
+                    let k = p.lane_prefix(crate::rpc::proof::MAX_BATCH_LANES);
+                    tracing::info!(
+                        lanes = p.lanes.len(),
+                        chain_blocks = p.blocks(),
+                        first = k,
+                        "a window needs more lanes than one batch proves: it is proven and applied in pieces"
+                    );
+                    raw.added_chain_block_hashes.truncate(k);
+                    raw.chain_block_accepted_transactions.truncate(k);
+                }
+                other => break other,
+            }
+        };
         let plan = match plan {
             Ok(p) => p,
             Err(e) => {
@@ -1888,6 +1970,11 @@ impl<S: ChainSource> Follower<S> {
         });
         let confirmed = self.confirm(start, &raw, origin, confirm);
         let (proved, confirmed) = tokio::join!(proved, confirmed);
+        // The proofs were asked of the authority: a failure of theirs is its own, whatever the
+        // cross copies awaited at the same time set (R8C1-L3).
+        if proved.is_err() && self.fault.load(std::sync::atomic::Ordering::Relaxed) == WAIT_OTHER {
+            self.fault(WAIT_AUTHORITY);
+        }
         let verdict = self.proof_verdict(&proof, origin, proved).await;
         (raw, verdict, confirmed)
     }
@@ -1913,18 +2000,37 @@ impl<S: ChainSource> Follower<S> {
                 {
                     return Err(o);
                 }
+                // Nothing a node says decides a state only the operator leaves (R8C1-M1). "Too deep"
+                // can be true only of a cursor older than the network's pruning depth by its verified
+                // header time. Of a younger one, or one whose time is not verified, it is the node's
+                // failure: blamed, and the batch asked again (another node, or the same later).
+                let horizon = pruning_horizon_ms(&self.cfg.network);
+                let age = self.cursor_age_ms();
+                if !age.is_some_and(|a| a > horizon) {
+                    let msg = format!(
+                        "chain proof refused: the node says the cursor is too deep ({why}), but the cursor block is {} old by its verified time, within the network's pruning depth of {} h",
+                        age.map_or("of an unknown age".to_string(), |a| format!("{} s", a / 1_000)),
+                        horizon / 3_600_000
+                    );
+                    tracing::warn!("{msg}");
+                    self.source.chain_refused(Origin::PRIMARY, &msg);
+                    self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                    return Err(StepOutcome::Retry(msg));
+                }
                 let msg = format!(
                     "{PROOF_TOO_DEEP}: {why}. The cursor is before the node's pruning point, and chain proofs apply no batch unproven: \
                      use a node that still proves it, or rebase the store (kobd db rebase). Turning [chain_proof] off instead would \
                      follow the node's word: no batch proven, and the cursor's time, which the chain authority is judged by, unverified"
                 );
                 tracing::error!("{msg}");
+                // Shown as a gap, but asked again with the backoff: once a node serves the proof,
+                // the batch applies and the gap is left by itself.
                 self.health.update(|h| {
                     h.state = FollowerState::Gap;
                     h.gap_reason = Some(msg.clone());
                     h.last_error = Some(msg.clone());
                 });
-                Err(StepOutcome::Gap(msg))
+                Err(StepOutcome::Retry(msg))
             }
             // The batch's fault, or that of the node that served a proof for it (K-M2).
             Err(ProofError::Refused(why)) => self.refuse_batch(proof, origin, why),
@@ -2027,12 +2133,17 @@ impl<S: ChainSource> Follower<S> {
             lock().learn_lane(lane, &p, from)?;
         }
         let expected = lock().expected(&plan)?;
-        let asks = expected.iter().map(|(lane, _)| self.source.lane_proof(plan.end, Hash32(lane.as_bytes())));
-        let proofs = futures_util::future::join_all(asks)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| unavailable("a lane proof at the batch's end", e))?;
+        // At most `PROOF_FETCHES` at a time: a batch may need thousands of lanes (R8C1-H1).
+        let (end, lanes): (Hash32, Vec<_>) = (plan.end, expected.iter().map(|(lane, _)| *lane).collect());
+        let mut asked = std::pin::pin!(asked_in_order(lanes.iter().copied(), PROOF_FETCHES, |lane| {
+            self.source.lane_proof(end, Hash32(lane.as_bytes()))
+        }));
+        let mut proofs = Vec::with_capacity(lanes.len());
+        for _ in &lanes {
+            proofs.push(
+                asked.next().await.expect("one answer per lane").map_err(|e| unavailable("a lane proof at the batch's end", e))?,
+            );
+        }
         lock().finish(plan, &expected, &proofs)
     }
 
@@ -2331,11 +2442,11 @@ impl<S: ChainSource> Follower<S> {
                     );
                 }
                 self.refresh_status().await;
-                let snapshot_node_daa = self.health.snapshot().node_daa;
-                // A batch that the window ended leaves chain behind it, whatever the node position
-                // says.
-                let more = c.by_window
-                    || snapshot_node_daa.map(|n| n.saturating_sub(a.cursor.daa) > self.cfg.caught_up_daa).unwrap_or(a.added > 0);
+                // A batch that the window ended leaves chain behind it. Else the cursor block's
+                // verified age decides (more than `caught_up_daa` at 10 DAA a second), never the
+                // node's claimed position (R8C1-L4).
+                let age = last_ts.filter(|(h, _)| *h == a.cursor.hash).map(|(_, t)| self.wall_ms() as i64 - t as i64);
+                let more = c.by_window || age.map(|ms| ms > self.cfg.caught_up_daa as i64 * 100).unwrap_or(a.added > 0);
                 let orders_total =
                     if a.new_orders > 0 || a.reverted_rows_blocks > 0 { self.blocking(|i| i.order_count().ok()).await } else { None };
                 let records_next = self.blocking(|i| i.records_next()).await;
@@ -2367,8 +2478,9 @@ impl<S: ChainSource> Follower<S> {
                     if h.last_progress_unix_ms == 0 {
                         h.last_progress_unix_ms = now;
                     }
-                    // A commit went through, so there is no storage error any more.
+                    // A commit went through, so there is no storage error any more, and no gap.
                     h.halt_reason = None;
+                    h.gap_reason = None;
                     if a.removed_hashes > 0 {
                         h.reorgs_total += 1;
                     }
@@ -3044,10 +3156,11 @@ mod tests {
         }
 
         /// A lane proof the node can no longer serve at the cursor (`BlockTooDeep`) is no
-        /// `node_unavailable` for ever: nothing while the node is not synced, then a gap that a
-        /// recovering follower does not move past. Nothing is applied unproven.
+        /// `node_unavailable` for ever: nothing while the node is not synced, then, the cursor
+        /// being older than the pruning depth by its verified time, a gap shown in the health that
+        /// is left by itself once a node serves the proof (R8C1-M1). Nothing is applied unproven.
         #[tokio::test]
-        async fn a_lane_proof_too_deep_halts_once_the_node_is_synced() {
+        async fn a_lane_proof_too_deep_shows_a_gap_once_the_node_is_synced() {
             let (f, src, ingest, health) = follower(TN10, |_| {});
             ingest.lock().unwrap().init_cursor(&Cursor { hash: src.fx.start, daa: 0 }).unwrap();
             src.too_deep.store(true, SeqCst);
@@ -3057,12 +3170,35 @@ mod tests {
             assert_eq!(health.snapshot().state, FollowerState::NodeUnavailable);
             src.unsynced.store(false, SeqCst);
             let o = f.step().await;
-            let StepOutcome::Gap(why) = &o else { panic!("{o:?}") };
+            let StepOutcome::Retry(why) = &o else { panic!("{o:?}") };
             assert!(why.starts_with(PROOF_TOO_DEEP) && why.contains("too deep") && !is_pruned_gap(why), "{why}");
             let h = health.snapshot();
             assert_eq!((h.state, h.gap_reason.as_deref()), (FollowerState::Gap, Some(why.as_str())));
             assert_eq!(cursor(&ingest), src.fx.start, "nothing applied");
             assert_eq!(h.chain_proof.unwrap().refused_total, 0, "the node is not blamed");
+            // A node serves the proof again: the batch applies and the gap is left.
+            src.too_deep.store(false, SeqCst);
+            let o = f.step().await;
+            assert!(matches!(o, StepOutcome::Applied { .. }), "{o:?}");
+            let h = health.snapshot();
+            assert!(h.state != FollowerState::Gap && h.gap_reason.is_none(), "{:?} {:?}", h.state, h.gap_reason);
+        }
+
+        /// R8C1-M1: "too deep" of a cursor younger than the pruning depth by its verified time is a
+        /// lie of the node: no gap, the node is blamed, and the batch is asked again.
+        #[tokio::test]
+        async fn a_too_deep_from_the_node_at_a_recent_cursor_is_no_gap() {
+            let (mut f, src, ingest, health) = follower(TN10, |_| {});
+            f.set_clock_at(src.fx.start_header.timestamp + 60_000);
+            ingest.lock().unwrap().init_cursor(&Cursor { hash: src.fx.start, daa: 0 }).unwrap();
+            src.too_deep.store(true, SeqCst);
+            for _ in 0..3 {
+                let o = f.step().await;
+                assert!(matches!(&o, StepOutcome::Retry(m) if m.contains("within the network's pruning depth")), "{o:?}");
+                let h = health.snapshot();
+                assert!(h.state != FollowerState::Gap && h.gap_reason.is_none(), "{:?}", h.state);
+            }
+            assert_eq!(cursor(&ingest), src.fx.start, "nothing applied");
         }
 
         /// The proofs of a batch wait one round trip per kind of request, not one per request: the

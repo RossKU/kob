@@ -946,7 +946,7 @@ impl HealthSnapshot {
     /// Whether the store is caught up with the node.
     ///
     /// That holds when the follower's last poll applied the chain to within its catch-up distance
-    /// of the node's sink (`following`). Until then the store lags the chain, and an order or token
+    /// (`following`: the cursor block at most `caught_up_daa` old by its verified time, R8C1-L4). Until then the store lags the chain, and an order or token
     /// it lists may already be spent. That covers `starting` after a restart, `catching_up`, node
     /// unavailable and gap. The matcher, the keepers and the maintenance jobs plan nothing in that
     /// time. `GET /v1/health` reports it as `caught_up`.
@@ -955,7 +955,8 @@ impl HealthSnapshot {
     /// clock (R5C1-I2): the follower's progress rule judged at most the tolerance ago that the
     /// authority keeps up ([`AuthorityPace::keeping_up`]), and the health is not `stale`.
     pub fn caught_up(&self) -> bool {
-        self.state == FollowerState::Following && self.node_daa.is_some() && self.keeps_up(now_unix_ms())
+        // The cursor block's verified time, never the node's claimed position (R8C1-L4).
+        self.state == FollowerState::Following && self.cursor_time_unix_ms.is_some() && self.keeps_up(now_unix_ms())
     }
 
     /// Whether the follower's last verdict says the chain authority keeps up with real time and
@@ -974,7 +975,8 @@ impl HealthSnapshot {
     /// Whether the store may be planned against although it is not caught up.
     ///
     /// That holds when the follower is applying the chain (`following` or `catching_up`) and the
-    /// node's sink is at most `lag_tolerance_daa` ahead of its cursor. A stale view is harmless:
+    /// cursor block is at most `lag_tolerance_daa` (at 10 DAA a second) old by its verified time
+    /// (R8C1-L4; the node's claimed position is shown, never used). A stale view is harmless:
     /// the covenants enforce every order's terms, and a spent input only loses the race
     /// (`MissingInput`). The tolerance bounds how many such lost transactions a lagging store can
     /// cause. A tolerance of 0 never qualifies, and neither does any state other than the two
@@ -986,7 +988,9 @@ impl HealthSnapshot {
         }
         self.lag_tolerance_daa > 0
             && matches!(self.state, FollowerState::Following | FollowerState::CatchingUp)
-            && self.lag_daa().is_some_and(|l| l <= self.lag_tolerance_daa)
+            // The cursor block's verified age against the tolerance (10 DAA a second), never the
+            // node's claimed position (R8C1-L4).
+            && self.lag_seconds(now_unix_ms()).is_some_and(|s| s.saturating_mul(10) <= self.lag_tolerance_daa)
             && self.keeps_up(now_unix_ms())
     }
 
@@ -1287,7 +1291,9 @@ mod tests {
         h.catch_up = None;
         h.state = FollowerState::Following;
         h.node_daa = Some(1_004);
+        h.cursor_time_unix_ms = Some(now_unix_ms() - 2_000);
         assert_eq!(h.status_line(), "indexer following, caught up (4 DAA behind the node), 7 orders indexed");
+        h.cursor_time_unix_ms = None;
         h.state = FollowerState::NodeUnavailable;
         h.last_error = Some("getServerInfo: transport: refused".into());
         assert!(
@@ -1526,7 +1532,13 @@ mod tests {
             assert_eq!(h.not_caught_up(), Some(format!("indexer {name}, 100 DAA behind the node")));
         }
         h.state = FollowerState::Following;
+        // Decided by the cursor block's verified time (R8C1-L4): unknown, not caught up; known and
+        // recent, caught up, whatever the node claims of its position.
+        assert!(!h.caught_up());
+        h.cursor_time_unix_ms = Some(now_unix_ms() - 2_000);
         assert!(h.caught_up() && h.not_caught_up().is_none());
+        h.node_daa = Some(1_000_000);
+        assert!(h.caught_up(), "a claim far ahead decides nothing");
     }
 
     /// The lag tolerance (`max_lag_secs`).
@@ -1541,22 +1553,29 @@ mod tests {
         assert!(!h.within_lag_tolerance());
         assert_eq!(h.not_ready().as_deref(), Some("indexer starting, node position unknown"));
         h.node_daa = Some(1_300);
+        // The cursor block 20 s old by its verified time: within the 300 DAA (30 s).
+        h.cursor_time_unix_ms = Some(now_unix_ms() - 20_000);
         // Starting, unavailable, gap and stopped never qualify, however small the lag.
         for s in [FollowerState::Starting, FollowerState::NodeUnavailable, FollowerState::Gap, FollowerState::Stopped] {
             h.state = s;
             assert!(!h.within_lag_tolerance() && h.not_ready().is_some(), "{s:?}");
         }
-        // Catching up, or following above the follower's own 100 DAA, within the tolerance: ready,
-        // but not caught up.
+        // Catching up within the tolerance: ready, but not caught up. A claim far ahead decides
+        // nothing (R8C1-L4).
         h.state = FollowerState::CatchingUp;
         assert!(h.within_lag_tolerance() && h.not_ready().is_none());
+        h.node_daa = Some(1_000_000);
+        assert!(h.within_lag_tolerance());
+        h.node_daa = Some(1_300);
         assert!(!h.caught_up(), "caught_up stays strict");
         h.node_daa = Some(1_301);
+        h.cursor_time_unix_ms = Some(now_unix_ms() - 31_000);
         assert!(!h.within_lag_tolerance());
         assert_eq!(h.not_ready().as_deref(), Some("indexer catching_up, 301 DAA behind the node"));
         // The strict gate (tolerance 0): only `following`.
         h.lag_tolerance_daa = 0;
         h.node_daa = Some(1_001);
+        h.cursor_time_unix_ms = Some(now_unix_ms() - 2_000);
         assert!(!h.within_lag_tolerance() && h.not_ready().is_some());
         h.state = FollowerState::Following;
         assert!(h.within_lag_tolerance() && h.not_ready().is_none());

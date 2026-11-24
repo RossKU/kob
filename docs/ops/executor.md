@@ -3381,8 +3381,11 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   middle (the step aborted) leaves no label behind (R7C1-M2), kobd's own work is never given up half done, and the
   bookkeeping of a batch already in the store (the cursor's time, the health report, the floor, the notices) is
   finished before a step can be given up (R7C1-L1). **A backstop bounds the mix:** a period that began more than **30
-  minutes** ago by the wall clock (`PERIOD_WALL_MAX`), the lag still above 90 s, fails whoever's time it was: the
-  authority is handed over, or with no other node `/v1/health` says `failing`. A gap of more than 30 s (`PAUSE_CAP`), on
+  minutes** ago by the wall clock (`PERIOD_WALL_MAX`), the lag still above 90 s and not fallen by at least 90 s in those
+  30 minutes (`PERIOD_WALL_GAIN`: the cursor advanced less than 31.5 minutes of chain), fails whoever's time it was: the
+  authority is handed over, or with no other node `/v1/health` says `failing` (and no step is given up for it). It
+  judges progress, so an honest catch-up on a slow host, which gains on real time however much of the time is kobd's
+  own, passes it (R8C1-L1). A gap of more than 30 s (`PAUSE_CAP`), on
   the monotonic clock or between it and the wall clock (the process stopped, the host suspended, a step of the wall
   clock), starts the period again from the lag at that moment, the backstop's clock too; a database task that took that
   long (a disk that hung) starts the period again but not the backstop's clock. A new authority (a handover, a failover
