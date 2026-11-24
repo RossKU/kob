@@ -87,6 +87,11 @@ pub const WINDOW_MAX_BYTES: usize = 256 << 20;
 /// The UTXO queries and the windows keep their own limits.
 pub const SMALL_CALL_MAX_BYTES: usize = 16 << 20;
 
+/// How long a small call ([`SMALL_CALL_MAX_BYTES`]) may take: 16 MiB arrive in about 13 s over
+/// the slowest measured link (1.2 MB/s), and a tip answer is a few KB. The request timeout
+/// (`rpc_timeout_secs`, 180 s) is for the large windows of a catch-up.
+pub const SMALL_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The largest acceptance-data answer (`getVirtualChainFromBlock` with transaction ids), 64 MiB.
 ///
 /// A cross-check window is tens to hundreds of KB, and a catch-up of hours stays far below it.
@@ -1013,8 +1018,13 @@ impl WrpcClient {
         self.call_on(self.vspc_slot().await, Wire::Borsh { frame: Box::new(frame) }, timeout, cap, parse).await
     }
 
+    /// A small call: at most [`SMALL_CALL_MAX_BYTES`], within [`SMALL_CALL_TIMEOUT`] (or the request
+    /// timeout, if shorter). These are the calls a follower at the tip makes at every step (the
+    /// sink, the DAG info, a header, a lane proof): a node must not hold them for the request
+    /// timeout that a large window needs (R6C1-M1), and a timeout counts against it.
     async fn call<T: DeserializeOwned>(&self, method: &str, params: serde_json::Value) -> Result<T, RpcError> {
-        self.call_capped(method, params, SMALL_CALL_MAX_BYTES).await
+        let raw = self.call_raw_capped(method, params, self.cfg.request_timeout.min(SMALL_CALL_TIMEOUT), SMALL_CALL_MAX_BYTES).await?;
+        serde_json::from_str(&raw).map_err(|e| RpcError::Decode(format!("{method}: {e}")))
     }
 
     async fn call_capped<T: DeserializeOwned>(&self, method: &str, params: serde_json::Value, cap: usize) -> Result<T, RpcError> {

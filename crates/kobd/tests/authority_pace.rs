@@ -103,6 +103,10 @@ struct Node {
     /// Swings the lag: in every cycle of `.1` ms from `.0`, it serves the chain for the first `.2` ms and then
     /// nothing new until the cycle ends (the lag rises at the rate of real time), then all of it at once.
     swing: Mutex<Option<(u64, u64, u64)>>,
+    /// Every VSPC answer takes this long (ms): a link.
+    call_ms: AtomicU64,
+    /// Claims every window asked with a size limit is larger than the limit (R6C1-L3).
+    oversize: AtomicBool,
 }
 
 impl Node {
@@ -113,6 +117,8 @@ impl Node {
             speed: Mutex::new(None),
             jitter: AtomicU64::new(0),
             swing: Mutex::new(None),
+            call_ms: AtomicU64::new(0),
+            oversize: AtomicBool::new(false),
         })
     }
 
@@ -129,6 +135,13 @@ impl Node {
 impl ChainSource for Node {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         self.miner.mine();
+        let ms = self.call_ms.load(Ordering::Relaxed);
+        if ms > 0 {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+        }
+        if let Some(limit) = req.max_bytes.filter(|_| self.oversize.load(Ordering::Relaxed)) {
+            return Err(RpcError::TooLarge { size: limit + 1, limit });
+        }
         let mut r = self.chain().vspc_v2(req).await?;
         let now = self.miner.clock.now();
         let mut until = u64::MAX;
@@ -231,12 +244,22 @@ fn config(start: Hash32, poll: Duration) -> FollowerConfig {
 }
 
 fn follower<S: ChainSource>(source: &Arc<S>, cfg: FollowerConfig, clock: &Clock) -> (Follower<S>, Arc<HealthState>) {
+    let (f, health, _) = follower_with_store(source, cfg, clock);
+    (f, health)
+}
+
+/// [`follower`], and its store.
+fn follower_with_store<S: ChainSource>(
+    source: &Arc<S>,
+    cfg: FollowerConfig,
+    clock: &Clock,
+) -> (Follower<S>, Arc<HealthState>, Arc<Mutex<Ingest>>) {
     let ingest = Arc::new(Mutex::new(Ingest::new(open_memory("testnet-10").unwrap(), processor(), None).with_config(wide_window())));
     let health = Arc::new(HealthState::new("testnet-10"));
     let (events, _) = tokio::sync::broadcast::channel(64);
-    let mut f = Follower::new(source.clone(), ingest, cfg, health.clone(), events);
+    let mut f = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
     f.set_clock_at(clock.now());
-    (f, health)
+    (f, health, ingest)
 }
 
 /// A named pair, the first node the chain authority, each cross-checking the other.
@@ -531,11 +554,12 @@ async fn an_honest_node_after_three_own_pauses_an_hour_is_never_blamed() {
     assert!(lag_secs(&health, &clock).is_some_and(|l| l <= 5));
 }
 
-/// A strike only when the successor shows the deposed node was to blame: the own node keeps up, then holds the lag at
-/// 100 s; it is deposed for the fallback, which serves the chain the own node held back and keeps up. That confirms
-/// the deposal: the own node is probed again only after a hold of 10 minutes, not after the usual 3 probes.
+/// A node of the operator's is never held off: the own node keeps up, then holds the lag at 100 s; it is deposed for
+/// the fallback, which serves the chain the own node held back and keeps up. That confirms the deposal, but a strike
+/// applies only to nodes the resolvers picked: the own node is probed back after the usual 3 probes, so a wrong blame
+/// cannot keep a trusted setup on the public nodes.
 #[tokio::test(start_paused = true)]
-async fn an_own_node_that_held_back_chain_is_held_off_after_its_deposal() {
+async fn an_own_node_deposed_for_holding_back_chain_is_probed_back_as_usual() {
     let _g = serial().await;
     let clock = Clock::new();
     let miner = Miner::new(&clock, 5_000, 1_000);
@@ -566,6 +590,71 @@ async fn an_own_node_that_held_back_chain_is_held_off_after_its_deposal() {
     })
     .await;
     let (deposed, back) = (deposed.expect("deposed"), back.expect("back on the own node"));
-    assert!(back - deposed >= 600, "held off {} s after its deposal", back - deposed);
-    assert!(back - deposed <= 600 + 180, "then probed back: {} s", back - deposed);
+    assert!(back - deposed <= 3 * 30 + 60, "probed back {} s after its deposal", back - deposed);
+}
+
+/// R6C1-L1: the data disk is full for 10 minutes at the tip, then space is freed. Every commit fails meanwhile and the
+/// lag grows to 10 minutes, but that is kobd's own time (its database, the backoffs after its storage errors), not the
+/// authority's: the honest authority is never deposed, and so never struck.
+#[tokio::test(start_paused = true)]
+async fn a_disk_full_for_ten_minutes_neither_deposes_nor_strikes_an_honest_authority() {
+    let _g = serial().await;
+    let clock = Clock::new();
+    let miner = Miner::new(&clock, 5_000, 1_000);
+    let (a, b) = (Node::new(&miner), Node::new(&miner));
+    let source = pair(&a, &b, 22);
+    let (f, health, ingest) = follower_with_store(&source, config(miner.first(), Duration::from_secs(1)), &clock);
+    let (mut full, mut failing) = (false, 0);
+    drive(&f, |s| {
+        if s == 120 {
+            ingest.lock().unwrap().conn().execute_batch("PRAGMA max_page_count = 1").unwrap();
+        }
+        if s == 720 {
+            ingest.lock().unwrap().conn().execute_batch("PRAGMA max_page_count = 1073741823").unwrap();
+        }
+        let h = health.snapshot();
+        full |= h.state == FollowerState::StorageError;
+        failing += h.authority_failing() as u32;
+        s < 1_020
+    })
+    .await;
+    assert!(full, "the store could not be written for a while");
+    assert_eq!(source.board().authority(), 0, "never handed over");
+    assert_eq!(failing, 0, "never failing");
+    assert!(lag_secs(&health, &clock).is_some_and(|l| l <= 5), "caught up: {:?}", lag_secs(&health, &clock));
+}
+
+/// R6C1-L3: during a catch-up the cross-checking node claims that every window asked of it with a size limit is larger
+/// than the limit. Taken as the window's size, that shrank every later window to one chain block and slowed the
+/// catch-up below real time, which failed the honest authority's period. Now the window goes to the next node (the authority
+/// last) and the claiming node backs off; only the authority's own answer splits a window, and the catch-up goes on.
+#[tokio::test(start_paused = true)]
+async fn a_cross_node_that_claims_oversized_windows_does_not_get_the_authority_deposed() {
+    let _g = serial().await;
+    let clock = Clock::new();
+    // ten minutes behind, ten blocks a second; every VSPC answer takes 200 ms
+    let miner = Miner::new(&clock, 600_000, 100);
+    miner.node.set_added_cap(2_480);
+    let (a, b) = (Node::new(&miner), Node::new(&miner));
+    a.call_ms.store(200, Ordering::Relaxed);
+    b.call_ms.store(200, Ordering::Relaxed);
+    b.oversize.store(true, Ordering::Relaxed);
+    let source = pair(&a, &b, 23);
+    let mut cfg = config(miner.first(), Duration::from_secs(1));
+    cfg.fetch_parallel = 4;
+    cfg.prefetch_min_lag_blue = 600;
+    cfg.prefetch_initial_blocks = 64;
+    let (f, health) = follower(&source, cfg, &clock);
+    let mut failing = 0;
+    drive(&f, |s| {
+        failing += health.snapshot().authority_failing() as u32;
+        s < 900 && lag_secs(&health, &clock).is_none_or(|l| l > 5)
+    })
+    .await;
+    let h = health.snapshot();
+    assert_eq!(source.board().authority(), 0, "never handed over");
+    assert_eq!(failing, 0, "never failing");
+    assert!(lag_secs(&health, &clock).is_some_and(|l| l <= 5), "caught up: {:?}", lag_secs(&health, &clock));
+    // each claim sends the window to the next node and backs the claiming node off
+    assert!(h.nodes[1].out_of_sync >= 1 && h.nodes[1].windows_ok == 0, "the claiming node pays for it: {:?}", h.nodes[1]);
 }

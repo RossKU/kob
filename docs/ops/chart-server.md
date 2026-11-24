@@ -337,8 +337,9 @@ stretch stay invisible (Part B, 7.4). To keep the history whole after a long out
   nodes it ends with both hosts and their state. `WARNING:` names what needs you.
 * `GET /v1/health` (locally `http://127.0.0.1:8090/v1/health`, publicly through the tunnel): `state` (`following`,
   `catching_up`, `node_unavailable`, `gap`), `lag_seconds`, `alarms`, `book_complete`, `authority_pace`, and while catching up
-  `catch_up` (pace and ETA). `authority_pace.state` says whether the node the index follows keeps up with real time, judged by
-  the cursor block's age on this host's clock alone (keep the clock on NTP): `failing` means it held the index more than 90 s
+  `catch_up` (pace and ETA). `authority_pace.state` says whether the node the index follows keeps up with real time, judged every
+  second by the cursor block's age on this host's wall clock alone, while the node is answering too (keep the clock on
+  NTP): `failing` means it held the index more than 90 s
   behind without gaining for 3 minutes, or for more than 5 minutes in an hour after it had kept up; with public nodes it is then replaced at once, and `ok` is false until the index keeps up
   again (docs/ops/executor.md, Part C, *Whether the chain authority keeps up*). `chain_proofs_off: true` means
   `[chain_proof] enabled = false`: leave the proofs on for a public server.

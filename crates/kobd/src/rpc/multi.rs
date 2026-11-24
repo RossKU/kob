@@ -2092,8 +2092,14 @@ impl<N: ChainSource> MultiNode<N> {
         let origin = Origin { node: i, trusted: false, tier: 0 };
         let node = &*self.nodes[i];
         let classify = |e: RpcError| match e {
-            // Too large for the window's own limit: the window is split, whichever node serves it.
-            e @ RpcError::TooLarge { size, .. } if w.max_bytes.is_some() && size <= super::MAX_MESSAGE_BYTES => Attempt::Window(e),
+            // Too large for the window's own limit, from a node other than the authority: the window
+            // goes to the next node, the authority last, and this node backs off (no strike: an honest
+            // window can outgrow its estimate). Taken as the window's size, a claim would shrink every
+            // later window for good and slow a catch-up the authority is judged by (R6C1-L3). Only the
+            // authority's own answer too large splits the window.
+            e @ RpcError::TooLarge { size, .. } if w.max_bytes.is_some() && size <= super::MAX_MESSAGE_BYTES => {
+                Attempt::Node(e, Fault::OutOfSync)
+            }
             // Beyond what the client takes at all. No window of an honest node is that large, so the
             // node failed it: it backs off and the window goes to the next node. Taken as the window's
             // size, the claim would split the window down to one chain block, ask for it without a

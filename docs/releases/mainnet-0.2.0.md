@@ -183,13 +183,19 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   `KOB_DUST_SELL=1`, which also takes `true`, `yes` or `on`, or `[launch] args = ["--dust-sell"]`) turns the sale on, which accepts that its price floor comes from a
   book anyone can post into. `--no-dust-sell` is still accepted and does nothing.
 - **The indexer judges the node it follows by the clock.** Whether the chain authority keeps up is decided by the cursor
-  block's verified header time against the host clock alone: within 90 s it keeps up; above that its lag must fall by
+  block's verified header time against the host's wall clock alone, judged every second (also while the node is
+  answering): within 90 s it keeps up; above that its lag must fall by
   90 s in every 3 minutes, and once it has kept up it may spend at most 5 minutes in an hour above 90 s, or another node
-  takes over (with a single node, `/v1/health` says so). A node deposed for it that held back chain its successor then
-  served is kept away 10 minutes, doubling up to 6 hours. New in `/v1/health`:
+  takes over (with a single node, `/v1/health` says so). Only the time kobd waits on that node counts: its own database
+  work, a full disk or a slow cross-checking node is not the node's. A public node deposed for it that held back chain
+  its successor then served is kept away 10 minutes, doubling up to 6 hours; nodes the operator configured are never
+  kept away. The small node calls of each step (the sink, the DAG info, a header) now time out after 30 s. New in `/v1/health`:
   `authority_pace` (`keeping_up`, `gaining`, `failing`, `unknown`) and `chain_proofs_off`; `ok`, `/v1/health/ready`,
   `caught_up` and `within_lag_tolerance` are false while the authority is `failing`, and `caught_up` also needs the cursor
-  block within 90 s of the host clock. New metrics `kob_indexer_authority_failing` and `kob_indexer_chain_proofs_off`.
+  block within 90 s of the host clock. New metrics `kob_indexer_authority_failing`, `kob_indexer_chain_proofs_off` and
+  `kob_indexer_cross_check_alone_seconds_total` (also `cross_check_alone_secs_total` in `/v1/health`). On Unix kobd and
+  kob take group and other write off the umask at the start, so the log, the data directory and `--state-dir` pass the
+  start check whatever the shell's umask.
   **Do:** keep the host clock on NTP (within 30 s); a clock more than 90 s fast makes every node look behind. A network
   that stops making blocks now makes the indexer change nodes every few minutes until blocks come again; that is
   expected (`docs/ops/executor.md`, Part C, *Whether the chain authority keeps up*).

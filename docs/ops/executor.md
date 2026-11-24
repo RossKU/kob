@@ -3350,53 +3350,72 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   holds one (from the authority), and from the cross-checking node at most 4 window requests per window, or, past 4 runs,
   one copy of the window from its first flagged chain block to its last (at most one extra copy of the authority's window,
   each answer at most 256 MiB, asked one after another). The referee is asked the same only on a difference.
-  **Whether the chain authority keeps up** (R2C-M1, R3C1-M1, R4C1-M1, R5C1-M1, R5C1-M2): decided from two things only,
-  the header time of the cursor's chain block as it was verified when the block was applied, and the local clock. No
-  field of any answer of the authority (its sink, its virtual DAA score, "more follows", an empty answer, how long it
-  takes to answer) and no claim of another node enters it. The *lag* is the local monotonic clock minus that header time.
-  While it is at most **90 s** (`AUTHORITY_LAG_TOLERANCE`), the authority keeps up (an honest node at the tip is seconds
-  behind; the web leaves an indexer whose lag is above 120 s and returns to it at 100 s or less, above this tolerance). Above it, the authority must gain on real time: in every
-  **180 s** (`AUTHORITY_STALL`) of the follower's own running time the lag must fall by at least **90 s**. A *period*
-  begins when the lag rises above 90 s and ends once the lag has stayed within 90 s for a whole period (a lag that rises
-  above it again before then continues the period). A period that reaches its end without the gain is the authority's
-  failure: it is handed over as below (*A failing chain authority*), and with nothing to hand over to, `/v1/health`
-  says so: `authority_pace.state` `failing`, `ok` false, `/v1/health/ready` 503, `caught_up` and `within_lag_tolerance`
-  false (the matcher, keepers and maintenance plan nothing), `kob_indexer_authority_failing` 1, `CHAIN AUTHORITY NOT
-  KEEPING UP` on the status line, and `stale` 10 minutes after the last progress. Not configurable. An honest catch-up
-  gains far more (14.6 s of chain a second measured; even one at 5 times real time gains 720 s a period), so it is
-  `gaining`, `ok`, until it is within 90 s. The running time is the follower's own: whatever a node takes to answer
-  counts (every wait on a node is inside a step), the follower's database work does not, and a gap of more than 30 s
-  (`PAUSE_CAP`: the process stopped, the host asleep, a disk that hung, a storage error) starts the period again from
-  the lag at that moment, so a pause on kobd's side is never the node's (R5C1-L1). A new authority (a handover, a
-  failover switch, a restart of kobd) begins with no period. **What a node can hold back, at most:** the index within
-  90 s of real time for good (`ok`, the web uses it); above that, one period: about 270 s of lag from the tip (90 s to
-  pass the tolerance, 180 s of period), or the lag it found plus 180 s, then it loses the role. **Excursions:** once an authority has kept up (its lag within 90 s) in its stint, the running time it spends with the
-  lag above 90 s is limited to **300 s in any rolling hour** of the running time (`EXCURSION_BUDGET`,
-  `EXCURSION_WINDOW`); past it, it is `failing` and handed over as for a failed period. A node that swings the lag
-  above the tolerance and back within each period (each swing must be followed by a whole period within 90 s) therefore
-  gets two swings at most: before its deposal it holds the lag above 120 s for at most about 240 s of an hour (two
-  excursions of 180 s and 120 s, each spending its first 30 s rising from 90 s to 120 s), about 7 %. The catch-up of a
-  stint that began behind is not an excursion (only the period rule applies until it first keeps up), and the
-  follower's own pauses do not use the budget: after a 2-minute commit, compaction or stop, only the seconds the node
-  then takes to catch up are charged. **Strikes:** a deposal counts against the deposed node only once its successor
-  shows it was to blame: the successor keeps up (within 90 s, or a period with the gain) after serving chain stamped
-  more than 90 s after the cursor block and before the deposal, chain that existed and the deposed node did not serve. If the
-  successor fails too, or the deposed node leads again first, nobody is struck: a halted network serves no such chain.
-  A struck public node is not resolved again for 10 minutes, doubling with each strike up to 6 hours
-  (`resolver::strike`); a struck own node behind a failover is probed again only after the same hold. With it, a
-  hostile node that is resolved again each time its hold ends gets about 3 stints in its first hour (about 720 s above
-  120 s, 20 %), 1 in the second (240 s), then one per hold up to 6 hours (about 1 %).
+  **Whether the chain authority keeps up** (R2C-M1, R3C1-M1, R4C1-M1, R5C1-M1, R5C1-M2, R6C1-M1): decided from two
+  things only, the header time of the cursor's chain block as it was verified when the block was applied, and the local
+  clock. No field of any answer of the authority (its sink, its virtual DAA score, "more follows", an empty answer, how
+  long it takes to answer) and no claim of another node enters it. The *lag* is the local wall clock minus that header
+  time, and it is judged **every second**, inside a step as well as after it: between two commits the cursor time stays
+  as it was, so a lag that rises above the tolerance while the authority holds an answer back is seen while it is there,
+  not only at the bottom of its sawtooth right after the next commit (R6C1-M1). While it is at most **90 s**
+  (`AUTHORITY_LAG_TOLERANCE`), the authority keeps up (an honest node at the tip is seconds behind; the web leaves an
+  indexer whose lag is above 120 s and returns to it at 100 s or less, above this tolerance). Above it, the authority must gain on real time: in every **180 s**
+  (`AUTHORITY_STALL`) of the time the follower waits on it the lag must fall by at least **90 s**. A *period* begins when
+  the lag rises above 90 s and ends once the lag has stayed within 90 s for a whole period (a lag that rises above it
+  again before then continues the period). A period that reaches its end without the gain is the authority's failure:
+  the step in flight is given up at once (an answer held back does not keep the role) and the authority is handed over
+  as below (*A failing chain authority*); with nothing to hand over to, `/v1/health` says so: `authority_pace.state`
+  `failing`, `ok` false, `/v1/health/ready` 503, `caught_up` and `within_lag_tolerance` false (the matcher, keepers and
+  maintenance plan nothing), `kob_indexer_authority_failing` 1, `CHAIN AUTHORITY NOT KEEPING UP` on the status line, and
+  `stale` 10 minutes after the last progress (progress is stamped each second only while the verdict is `keeping_up` or
+  `gaining`, so a step of 7 minutes stamps nothing just because it ends). Not configurable. An honest catch-up gains far
+  more (14.6 s of chain a second measured; even one at 5 times real time gains 720 s a period), so it is `gaining`, `ok`,
+  until it is within 90 s. **Whose time it is:** only time the follower spends waiting on the authority runs the
+  period's clock and the budget below. Time it waits on another node (the cross-checking node's copies of KOB
+  transactions, its answers the authority's wait for) or on itself (its database, its own parsing and proof checks, the
+  backoff after its own failure: a storage error, `commit failed`, `database:`, a failed rewind) does not, and the lag it
+  adds moves the period's starting lag up by as much, so it is not the authority's either. The backoff after the
+  authority's own failure and the pause between polls are the authority's. A gap of more than 30 s (`PAUSE_CAP`), on the
+  monotonic clock or between it and the wall clock (the process stopped, the host suspended, a disk that hung, a step of
+  the wall clock), starts the period again from the lag at that moment. A new authority (a handover, a failover switch,
+  a restart of kobd) begins with no period. **A step is bounded too:** the small calls a follower makes at every step
+  (the sink, the DAG info, a header, a lane proof) have 30 s (`SMALL_CALL_TIMEOUT`), and a timeout counts against the
+  node; `rpc_timeout_secs` (180 s) is left for the large windows of a catch-up. **What a node can hold back, at most:**
+  the index within 90 s of real time for good (`ok`, the web uses it); above that, one period: about 270 s of lag from
+  the tip (90 s to pass the tolerance, 180 s of period), or the lag it found plus 180 s, then it loses the role, whether
+  it answers or holds an answer back. **Excursions:** once an authority has kept up (its lag within 90 s), the time the
+  follower waits on it with the lag above 90 s is limited to **300 s in any rolling hour** (`EXCURSION_BUDGET`,
+  `EXCURSION_WINDOW`); past it, it is `failing` and handed over as for a failed period. Whether it kept up and what it
+  spent follow the node, not the stint: a node that gets the role back within the hour (after a dropped connection, say)
+  carries them on. A node that swings the lag above the tolerance and back within each period (each swing must be
+  followed by a whole period within 90 s) therefore gets two swings at most: before its deposal it holds the lag above
+  120 s for at most about 240 s of an hour (two excursions of 180 s and 120 s, each spending its first 30 s rising from
+  90 s to 120 s), about 7 %. The catch-up of a stint that began behind is not an excursion (only the period rule applies
+  until it first keeps up), and the follower's own time uses none of it: after a 2-minute commit, compaction, stop or a
+  full disk, only the seconds the node then takes to catch up are charged. **Strikes:** a deposal counts against the
+  deposed node only once its successor shows it was to blame: the successor keeps up (within 90 s, or a period with the
+  gain) after serving chain stamped more than 90 s after the cursor block and before the deposal, chain that existed and
+  the deposed node did not serve. If the successor fails too, or the deposed node leads again first, nobody is struck: a
+  halted network serves no such chain. **Only nodes the resolvers picked are struck:** such a node is not resolved again
+  for 10 minutes, doubling with each strike up to 6 hours (`resolver::strike`). A node the operator configured (an own
+  node behind `[failover]`, a node of a named pair) is deposed by the rule like any other, but never held off the probes
+  or its return: a wrong blame must not keep a trusted setup on the public nodes for hours. With it, a hostile public
+  node that is resolved again each time its hold ends gets about 3 stints in its first hour (about 720 s above 120 s,
+  20 %), 1 in the second (240 s), then one per hold up to 6 hours (about 1 %).
   **A network that stops making blocks** fails every authority the same way, so the nodes are handed over in turn,
   one period apart, until blocks come again: harmless, the cost of the handovers only (below, *A failing chain
-  authority*). **Clock:** the rule assumes a host clock within 30 s of real time (NTP). A clock slow by X under-reports
-  the lag by X (an authority may hold the index X more behind; a cursor block stamped more than 162 s ahead of the local
-  clock warns at the start and then hourly: `the host clock is slow`); one fast by more than 90 s makes every authority
-  look behind: a handover every period and `ok` false. The monotonic clock is not moved by steps of the wall clock.
+  authority*). **Clock:** the rule assumes a host clock within 30 s of real time (NTP). The lag is taken from the wall
+  clock, so a host suspend does not make later lags read low; the running time is the monotonic clock, and a suspend or
+  a step of the wall clock shows as a gap between the two, which starts the period again. A clock slow by X
+  under-reports the lag by X (an authority may hold the index X more behind; a cursor block stamped more than 162 s ahead
+  of the local clock warns at the start and then hourly: `the host clock is slow`); one fast by more than 90 s makes
+  every authority look behind: a handover every period and `ok` false.
   **Chain proofs off** (`[chain_proof] enabled = false`): the header time is then the node's word, taken only from a
   header that hashes to its block's hash (a cross-checking node vouches for the hashes), and a time not known counts as
   not keeping up; `/v1/health` `chain_proofs_off: true`, `kob_indexer_chain_proofs_off` 1, `chain proofs OFF` on the
   status line, and a warning at the start. Chain the cross-checking node reports past the authority's answer decides
-  nothing and costs nobody anything (R4C1-M2).
+  nothing and costs nobody anything (R4C1-M2). A node other than the authority that claims a window is larger than the
+  size it was asked for loses that window: it goes to the next node (the authority last), and the node backs off; only the authority's own answer that is too large splits a window, so another
+  node cannot shrink the windows of a catch-up the authority is judged by (R6C1-L3).
   **A window from another node whose KOB transactions differ from the authority's copy** (R4C1-L1): when the authority
   is a public node, its copy is only vouched for by ids, so the referee (or a third cross-checking node) decides before
   anyone is given up, as for the authority's own windows; with no third node, nobody is given up yet and the difference
@@ -3419,7 +3438,9 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   times in a row; after `single_node_after_secs` (default 120) without any answer the authority goes on alone with the
   chain proofs only (below), and `/v1/health` shows `cross_checked: false` with `cross_check_reason` (the status line
   says `NOT cross-checked`), `cross_check_alone: true`, a `cross-check:` entry in `node_alarms` and
-  `kob_indexer_cross_check_alone` 1. The first answer of a cross-checking node ends it. With no node left (a network blip of a home link, a
+  `kob_indexer_cross_check_alone` 1, and the seconds of it are counted (`cross_check_alone_secs_total`,
+  `kob_indexer_cross_check_alone_seconds_total`: an authority that keeps making itself run alone shows there, R6C1-L4).
+  The first answer of a cross-checking node ends it. With no node left (a network blip of a home link, a
   phone switching networks, a laptop waking up), both are resolved again with a backoff (2 s doubling to 60 s), never held back
   by the rate limit below: the pair is back within about a minute of the link. Every change is logged with the host names, and the status line
   shows both hosts, their state and how often each entry was replaced.
@@ -3516,8 +3537,8 @@ a minute gave up on a claimed tip reorg** (a lane proof answered "not in the sel
 same way (its alarm ends after a minute of answers; it is never promoted while it has one). A public node given up
 joins the hosts the next resolutions avoid (the last 8); one struck (its successor served chain it held back, above) is also kept out of every resolution for 10 minutes,
 doubling with each strike up to 6 hours, and forgiven after a day without one (`resolver::strike`). Avoided is not
-banned: when the resolvers name no other node, it is taken. The own node behind `[failover]` is probed back after the
-same hold when struck, else after the probes (`return_after_probes` x `probe_secs`). So a hostile public node holds the
+banned: when the resolvers name no other node, it is taken. The own node behind `[failover]` is never struck: it is probed back
+after the probes (`return_after_probes` x `probe_secs`) whatever the blame. So a hostile public node holds the
 index back at most one period (plus the tolerance), or its excursion budget, each time it gets the slot, and gets it
 again only after 10 minutes, 20, 40 ... up to 6 hours.
 

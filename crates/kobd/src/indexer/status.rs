@@ -190,6 +190,9 @@ pub struct HealthSnapshot {
     /// A cross-checking node is configured, but none answered for `cross_check.single_node_after_secs`:
     /// the chain authority goes on alone, with the chain proofs only. It is also a node alarm.
     pub cross_check_alone: bool,
+    /// Seconds the chain authority went on alone so far (`cross_check_alone`), counted: a node that
+    /// makes itself run alone time and again shows here (R6C1-L4).
+    pub cross_check_alone_secs_total: u64,
     /// The chain proofs of the batches (`rpc::proof`). Absent when off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain_proof: Option<crate::rpc::proof::ChainProofStatus>,
@@ -542,6 +545,7 @@ impl HealthSnapshot {
             cross_checked: false,
             cross_check_reason: None,
             cross_check_alone: false,
+            cross_check_alone_secs_total: 0,
             chain_proof: None,
             node_source: None,
             node_alarms: vec![],
@@ -827,6 +831,12 @@ impl HealthSnapshot {
             "gauge",
             "1 while a cross-checking node is configured but none answers, and the chain authority goes on alone.",
             self.cross_check_alone as u64,
+        );
+        m(
+            "kob_indexer_cross_check_alone_seconds_total",
+            "counter",
+            "Seconds the chain authority went on alone, with no cross-checking node answering, since the start.",
+            self.cross_check_alone_secs_total,
         );
         m(
             "kob_indexer_node_alarms",

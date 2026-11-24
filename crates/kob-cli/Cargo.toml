@@ -39,6 +39,10 @@ borsh = "1"
 rand.workspace = true
 tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 
+# the umask at the start (`main`): nothing kob creates is writable by the group or others
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 kaspa-hashes.workspace = true
 serde.workspace = true

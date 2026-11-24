@@ -218,6 +218,15 @@ pub const EXCURSION_BUDGET: Duration = Duration::from_secs(300);
 /// The rolling window of [`EXCURSION_BUDGET`], on the running time.
 pub const EXCURSION_WINDOW: Duration = Duration::from_secs(3_600);
 
+/// Whose time the follower waits on (module documentation, *Progress*): the chain authority's,
+/// the only time that runs the progress rule's clock ...
+const WAIT_AUTHORITY: u8 = 0;
+/// ... another node's (the cross-checking node's copies; its own strikes and timeouts deal with
+/// it) ...
+const WAIT_OTHER: u8 = 1;
+/// ... or the follower's own (its database, a backoff after its own failure).
+const WAIT_OWN: u8 = 2;
+
 /// How often the running time ticks while a step or the pause after it runs ([`PAUSE_CAP`]).
 const TICK: Duration = Duration::from_secs(1);
 
@@ -404,8 +413,11 @@ pub struct Follower<S: ChainSource> {
     contradiction_unsynced: std::sync::atomic::AtomicBool,
     /// The `ChainSource::authority_key` whose calls passed the check.
     checked_authority: Mutex<Option<String>>,
-    /// The local monotonic clock as Unix ms: an instant and the wall clock then.
-    clock: (tokio::time::Instant, u64),
+    /// Tests: the local clock as an instant and the Unix ms it read then ([`Follower::set_clock_at`]).
+    /// `None`: the wall clock.
+    test_clock: Option<(tokio::time::Instant, u64)>,
+    /// Whose time the follower waits on now ([`WAIT_AUTHORITY`], [`WAIT_OTHER`], [`WAIT_OWN`]).
+    waiting: std::sync::atomic::AtomicU8,
     /// The cursor whose header time was last asked of the node, and when.
     time_asked: Mutex<Option<(Hash32, tokio::time::Instant)>>,
     /// The progress rule (module documentation, *Progress*).
@@ -414,6 +426,9 @@ pub struct Follower<S: ChainSource> {
     own_busy: std::sync::atomic::AtomicUsize,
     /// The cursor the last step stood at.
     cursor_seen: Mutex<Option<Hash32>>,
+    /// Since when the chain authority goes on alone, counted in whole seconds
+    /// (`cross_check_alone_secs_total`).
+    alone_at: Mutex<Option<tokio::time::Instant>>,
 }
 
 /// The state of the progress rule (module documentation, *Progress*).
@@ -422,6 +437,11 @@ struct Rule {
     /// The follower's running time in ms, and its last tick.
     run_ms: u64,
     last_tick: tokio::time::Instant,
+    /// The wall clock (ms) at the last tick: a jump against the monotonic clock is a pause.
+    last_wall: u64,
+    /// Earlier authorities, the newest last: whether each kept up, its excursions and the running
+    /// time it left at, so that a node that gets the role back within the hour carries them on.
+    past: Vec<(String, PastStint)>,
     /// The authority (`ChainSource::authority_node`) the period belongs to.
     authority: Option<String>,
     /// The period while the lag is above the tolerance, or was within the last period.
@@ -446,6 +466,9 @@ struct Rule {
     /// The authority deposed last, until its successor shows whether it was to blame.
     blame: Option<Blame>,
 }
+
+/// What an earlier authority left: whether it kept up, its excursions, and the running time then.
+type PastStint = (bool, std::collections::VecDeque<(u64, u64)>, u64);
 
 /// A deposal waiting for its successor ([`ChainSource::deposal_confirmed`]).
 #[derive(Debug, Clone)]
@@ -552,6 +575,24 @@ fn retry_is_routine(reason: &str, attempt: u32) -> bool {
         || (reason.starts_with(TIP_REORG) && attempt < 3)
 }
 
+/// Whose time the backoff after a failed step is (module documentation, *Progress*): the
+/// follower's own after its own failure (its database, its store), a cross-checking node's while
+/// the authority's answers wait for one, else the authority's.
+fn whose_failure(reason: &str, state: FollowerState) -> u8 {
+    let own = state == FollowerState::StorageError
+        || ["commit failed", "database:", "rewind failed", "chain proof unavailable: database", "the database cannot be written"]
+            .iter()
+            .any(|p| reason.starts_with(p))
+        || reason.contains(": database: ");
+    if own {
+        WAIT_OWN
+    } else if reason.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK) {
+        WAIT_OTHER
+    } else {
+        WAIT_AUTHORITY
+    }
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -568,7 +609,8 @@ impl<S: ChainSource> Follower<S> {
         let window = Mutex::new(cfg.window());
         let prefetch = tokio::sync::Mutex::new(Prefetch::new(cfg.prefetch_limits()));
         let lean = ingest.lock().unwrap_or_else(|e| e.into_inner()).prunes();
-        let clock_at = source.simulated_clock_ms().unwrap_or_else(now_ms);
+        let sim = source.simulated_clock_ms();
+        let clock_at = sim.unwrap_or_else(now_ms);
         let proof =
             cfg.chain_proof.clone().filter(|_| source.proves_chain()).map(|p| Arc::new(Mutex::new(ChainProof::new(p, &cfg.network))));
         if let Some(p) = &proof {
@@ -600,11 +642,14 @@ impl<S: ChainSource> Follower<S> {
             proof,
             contradiction_unsynced: std::sync::atomic::AtomicBool::new(false),
             checked_authority: Mutex::new(None),
-            clock: (tokio::time::Instant::now(), clock_at),
+            test_clock: sim.map(|ms| (tokio::time::Instant::now(), ms)),
+            waiting: std::sync::atomic::AtomicU8::new(WAIT_AUTHORITY),
             time_asked: Mutex::new(None),
             rule: Mutex::new(Rule {
                 run_ms: 0,
                 last_tick: tokio::time::Instant::now(),
+                last_wall: clock_at,
+                past: vec![],
                 authority: None,
                 period: None,
                 failing: false,
@@ -618,59 +663,130 @@ impl<S: ChainSource> Follower<S> {
             }),
             own_busy: std::sync::atomic::AtomicUsize::new(0),
             cursor_seen: Mutex::new(None),
+            alone_at: Mutex::new(None),
         }
     }
 
-    /// Sets the local clock to read `unix_ms` now (tests whose blocks carry a fixed time). It runs
-    /// on from there with the monotonic clock.
+    /// Sets the local clock to read `unix_ms` now and run on with the monotonic clock (tests whose
+    /// blocks carry a fixed or a virtual time). Without it the local clock is the wall clock.
     pub fn set_clock_at(&mut self, unix_ms: u64) {
-        self.clock = (tokio::time::Instant::now(), unix_ms);
+        self.test_clock = Some((tokio::time::Instant::now(), unix_ms));
+        self.rule().last_wall = unix_ms;
     }
 
-    /// The local monotonic clock in Unix ms: the wall clock at the start plus the monotonic time
-    /// since, so a step of the wall clock does not move it.
-    fn mono_ms(&self) -> u64 {
-        self.clock.1 + self.clock.0.elapsed().as_millis() as u64
+    /// The local wall clock in Unix ms, which the lag is taken from (R6C1-L2): real time, so a
+    /// host suspend does not make every later lag read low. Tests may set another
+    /// ([`Follower::set_clock_at`]).
+    fn wall_ms(&self) -> u64 {
+        match self.test_clock {
+            Some((at, ms)) => ms + at.elapsed().as_millis() as u64,
+            None => now_ms(),
+        }
     }
 
     fn rule(&self) -> std::sync::MutexGuard<'_, Rule> {
         self.rule.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// One tick of the follower's running time (module documentation, *Progress*): the time
-    /// since the last tick counts when `counted` and no database task of the follower runs; a gap
-    /// longer than [`PAUSE_CAP`] is a pause of the follower, which starts the period again.
-    fn tick(&self, counted: bool) {
-        let now = tokio::time::Instant::now();
-        let mut r = self.rule();
-        let gap = now.saturating_duration_since(r.last_tick);
-        r.last_tick = now;
-        if gap > PAUSE_CAP {
-            r.restart = true;
-        } else if counted && self.own_busy.load(std::sync::atomic::Ordering::Relaxed) == 0 {
-            r.run_ms = r.run_ms.saturating_add(gap.as_millis() as u64);
-        }
+    /// `f`, with the follower waiting on `whose` time meanwhile (module documentation, *Progress*):
+    /// another node's ([`WAIT_OTHER`]) or its own ([`WAIT_OWN`]) does not advance the authority's
+    /// running time.
+    async fn waiting_on<T>(&self, whose: u8, f: impl std::future::Future<Output = T>) -> T {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.tick();
+        let before = self.waiting.swap(whose, Relaxed);
+        let r = f.await;
+        self.tick();
+        self.waiting.store(before, Relaxed);
+        r
     }
 
-    /// `f`, with the running time ticking while it runs.
-    async fn ticked<T>(&self, f: impl std::future::Future<Output = T>) -> T {
+    /// One tick of the follower's running time (module documentation, *Progress*), then the
+    /// progress rule at that moment ([`Follower::judge`]). The time since the last tick advances
+    /// the authority's running time only while the follower waits on the authority; time it waits
+    /// on another node or on itself moves the period's starting lag up by as much, so the lag it
+    /// adds is not the authority's either. A gap longer than [`PAUSE_CAP`] on the monotonic clock,
+    /// or between it and the wall clock (a host suspend, a step of the wall clock), is a pause of
+    /// the follower, which starts the period again.
+    fn tick(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let now = tokio::time::Instant::now();
+        let wall = self.wall_ms();
+        let whose = if self.own_busy.load(Relaxed) > 0 { WAIT_OWN } else { self.waiting.load(Relaxed) };
+        let jumped = {
+            let mut r = self.rule();
+            let gap = now.saturating_duration_since(r.last_tick).as_millis() as i64;
+            let wall_gap = wall as i64 - r.last_wall as i64;
+            r.last_tick = now;
+            r.last_wall = wall;
+            let cap = PAUSE_CAP.as_millis() as i64;
+            let skew = wall_gap - gap;
+            if gap > cap || skew.abs() > cap {
+                r.restart = true;
+                (skew.abs() > cap).then_some(skew)
+            } else {
+                if whose == WAIT_AUTHORITY {
+                    r.run_ms = r.run_ms.saturating_add(gap.max(0) as u64);
+                } else if let Some(p) = r.period.as_mut() {
+                    p.start_lag = p.start_lag.map(|l| l + gap.max(0));
+                }
+                None
+            }
+        };
+        if let Some(skew) = jumped {
+            tracing::info!(secs = skew / 1_000, "the wall clock moved against the monotonic clock (a host suspend or a clock step): the progress rule's period starts again");
+        }
+        self.judge(true);
+    }
+
+    /// `f`, with the running time ticking (and the progress rule judging) every second while it
+    /// runs. With `abort`, it gives up on `f` (`None`) once the rule found the authority failing
+    /// and no database task of the follower runs, so that a node that holds its answer back does
+    /// not keep the role while it does (R6C1-M1).
+    async fn ticked<T>(&self, abort: bool, f: impl std::future::Future<Output = T>) -> Option<T> {
         let mut f = std::pin::pin!(f);
         loop {
             tokio::select! {
                 biased;
-                o = &mut f => return o,
-                _ = tokio::time::sleep(TICK) => self.tick(true),
+                o = &mut f => return Some(o),
+                _ = tokio::time::sleep(TICK) => {
+                    self.tick();
+                    if abort
+                        && self.own_busy.load(std::sync::atomic::Ordering::Relaxed) == 0
+                        && self.rule().failed.is_some()
+                    {
+                        return None;
+                    }
+                }
             }
         }
     }
 
-    /// The progress rule at the cursor `cursor` (module documentation, *Progress*): the verdict,
-    /// also published in `/v1/health` (`authority_pace`) and told the source
-    /// ([`ChainSource::deposal_confirmed`]). A period that failed is left for [`Follower::hand_over`].
+    /// The progress rule at the cursor `cursor`, with its header time learnt first when unknown
+    /// ([`Follower::judge`]).
     async fn pace(&self, cursor: Hash32) -> PaceState {
         self.learn_cursor_time(cursor).await;
+        self.judge(false)
+    }
+
+    /// The progress rule now (module documentation, *Progress*), at every tick and at the end of
+    /// every step: the lag is the local wall clock minus the header time of the cursor as last
+    /// committed, so a lag that rises above the tolerance inside a long step is seen while it is
+    /// there (R6C1-M1). The verdict is published in `/v1/health` (`authority_pace`); a confirmed
+    /// deposal is told the source ([`ChainSource::deposal_confirmed`]). A period that failed is
+    /// left for [`Follower::hand_over`]. With `at_tick`, a cursor whose time is not known is left
+    /// for the end of the step, after its header was asked for.
+    fn judge(&self, at_tick: bool) -> PaceState {
+        let Some(cursor) = *self.cursor_seen.lock().unwrap_or_else(|e| e.into_inner()) else {
+            return PaceState::Unknown;
+        };
         let ts = self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == cursor).map(|(_, t)| t);
-        let lag = ts.map(|t| self.mono_ms() as i64 - t as i64);
+        let lag = ts.map(|t| self.wall_ms() as i64 - t as i64);
+        // A cursor whose time is not known yet (a start, a rewind, a header that did not hash) is
+        // judged at the end of a step, after its header was asked for, not by the ticks before.
+        if at_tick && lag.is_none() {
+            return PaceState::Unknown;
+        }
         let key = self.source.authority_node();
         let tol = self.cfg.authority_lag_tolerance.as_millis() as i64;
         let stall = self.cfg.authority_stall.as_millis() as u64;
@@ -680,24 +796,38 @@ impl<S: ChainSource> Follower<S> {
             let mut g = self.rule();
             let r = &mut *g;
             if r.authority.as_deref() != Some(key.as_str()) {
-                // A new authority, or the first step: it begins with no period, and has not kept up.
+                // A new authority, or the first step: it begins with no period. Whether it kept up
+                // and its excursions follow the node within the hour (R6C1-I3).
+                if let Some(old) = r.authority.take() {
+                    let kept = (r.kept_up, std::mem::take(&mut r.excursions), r.run_ms);
+                    r.past.retain(|(k, _)| *k != old);
+                    r.past.push((old, kept));
+                    if r.past.len() > 8 {
+                        r.past.remove(0);
+                    }
+                }
+                let back = r.past.iter().position(|(k, _)| *k == key).map(|i| r.past.remove(i).1);
+                (r.kept_up, r.excursions) = match back {
+                    Some((kept, ex, at)) if r.run_ms.saturating_sub(at) < window => (kept, ex),
+                    _ => (false, Default::default()),
+                };
                 r.authority = Some(key.clone());
                 r.period = None;
                 r.failing = false;
                 r.failed = None;
-                r.kept_up = false;
                 r.last_check = None;
-                r.excursions.clear();
             }
             let run = r.run_ms;
             if std::mem::take(&mut r.restart) {
                 if let Some(p) = r.period.as_mut() {
                     *p = Period { start_ms: run, start_lag: lag, calm_since: None };
                 }
+                // The pause is not an excursion of the authority.
+                r.last_check = None;
             }
             // The running time since the last check is charged as the lag stood then: above the
-            // tolerance, after this authority kept up, it is an excursion. The follower's own
-            // pauses are not on the running time, so they charge nothing.
+            // tolerance, after this authority kept up, it is an excursion. Only the time the
+            // follower waits on the authority is on the running time, so nothing else is charged.
             let above = lag.is_none_or(|l| l > tol);
             if let Some((prev, was_above)) = r.last_check {
                 if was_above && r.kept_up && run > prev {
@@ -738,7 +868,7 @@ impl<S: ChainSource> Follower<S> {
                         if !gained {
                             let secs = |l: Option<i64>| l.map_or("an unknown time".to_string(), |l| format!("{} s", l / 1_000));
                             r.failed = Some(format!(
-                                "the chain authority does not keep up with real time: in {} s of the follower's running time the cursor's chain block went from {} to {} behind the local clock; it must gain {} s on it, or come within {} s",
+                                "the chain authority does not keep up with real time: in {} s of the time the follower waited on it the cursor's chain block went from {} to {} behind the local clock; it must gain {} s on it, or come within {} s",
                                 stall / 1_000,
                                 secs(p.start_lag),
                                 secs(lag),
@@ -753,7 +883,7 @@ impl<S: ChainSource> Follower<S> {
                     // Past the budget of excursions: failing as well, and the budget starts again.
                     if !r.failing && r.kept_up && used > budget {
                         r.failed = Some(format!(
-                            "the chain authority does not keep up with real time: after it kept up it held the lag above {} s for {} s of the follower's running time within the last {} minutes (at most {} s)",
+                            "the chain authority does not keep up with real time: after it kept up it held the lag above {} s for {} s of the time the follower waited on it within the last {} minutes (at most {} s)",
                             tol / 1_000,
                             used / 1_000,
                             window / 60_000,
@@ -799,7 +929,9 @@ impl<S: ChainSource> Follower<S> {
             );
         }
         if confirm {
-            tracing::info!("the chain authority deposed last held back chain its successor served: it stays away longer (a strike)");
+            tracing::info!(
+                "the chain authority deposed last held back chain its successor served (a strike, where the resolvers picked it)"
+            );
             self.source.deposal_confirmed();
         }
         let pace = AuthorityPace {
@@ -893,7 +1025,7 @@ impl<S: ChainSource> Follower<S> {
         {
             let mut r = self.rule();
             let deposed = r.authority.take().unwrap_or_default();
-            r.blame = Some(Blame { deposed, cursor_ts, at_ms: self.mono_ms(), withheld: false });
+            r.blame = Some(Blame { deposed, cursor_ts, at_ms: self.wall_ms(), withheld: false });
             r.period = None;
             r.failing = false;
         }
@@ -1074,15 +1206,16 @@ impl<S: ChainSource> Follower<S> {
     async fn blocking<T: Send + 'static>(&self, f: impl FnOnce(&mut Ingest) -> T + Send + 'static) -> T {
         use std::sync::atomic::Ordering::Relaxed;
         let ing = self.ingest.clone();
-        self.tick(true);
+        self.tick();
         self.own_busy.fetch_add(1, Relaxed);
         let t0 = tokio::time::Instant::now();
         let r = tokio::task::spawn_blocking(move || f(&mut ing.lock().unwrap_or_else(|e| e.into_inner()))).await;
-        self.own_busy.fetch_sub(1, Relaxed);
         if t0.elapsed() > PAUSE_CAP {
             self.rule().restart = true;
         }
-        self.tick(false);
+        // The time since the last tick is the follower's own.
+        self.tick();
+        self.own_busy.fetch_sub(1, Relaxed);
         r.expect("blocking task panicked")
     }
 
@@ -1128,6 +1261,8 @@ impl<S: ChainSource> Follower<S> {
     async fn ensure_cursor(&self) -> Result<Cursor, StepOutcome> {
         if let Some(c) = self.blocking(|i| i.cursor()).await.map_err(|e| StepOutcome::Retry(format!("database: {e}")))? {
             *self.cursor_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(c.hash);
+            // Its time before the step's requests, so that the ticks meanwhile judge a known lag.
+            self.learn_cursor_time(c.hash).await;
             return Ok(c);
         }
         let info = self.source.server_info().await.map_err(|e| StepOutcome::Retry(format!("getServerInfo: {e}")))?;
@@ -1218,18 +1353,28 @@ impl<S: ChainSource> Follower<S> {
     /// With `fetch_parallel` > 1 and the cursor far behind, the batch is the next of the windows
     /// fetched ahead, see [`super::prefetch`].
     pub async fn step(&self) -> StepOutcome {
-        // The running time ticks through the step: whatever a node takes is in it (module
-        // documentation, *Progress*).
-        self.tick(true);
-        let outcome = self
-            .ticked(async {
-                let mut outcome = match self.check_authority().await {
+        // The running time ticks, and the progress rule judges, every second through the step:
+        // whatever the authority takes is in it, and a lag that rises above the tolerance while it
+        // takes it is seen then (module documentation, *Progress*, R6C1-M1).
+        self.tick();
+        let inner = self
+            .ticked(true, async {
+                match self.check_authority().await {
                     Some(o) => o,
                     None if self.cfg.fetch_parallel > 1 => self.step_prefetch().await,
                     None => self.step_sequential().await,
-                };
-                // The progress rule at every step, whatever the step did: an answer, an empty one,
-                // a timeout.
+                }
+            })
+            .await;
+        // Given up on: the authority failed the rule while the follower waited on it.
+        let outcome = inner.unwrap_or_else(|| {
+            StepOutcome::Retry("the chain authority does not keep up with real time while it answers: the step was given up".into())
+        });
+        let outcome = self
+            .ticked(false, async {
+                let mut outcome = outcome;
+                // The progress rule at the end of the step, with the cursor's time learnt first
+                // when unknown.
                 let cursor = *self.cursor_seen.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(c) = cursor {
                     self.pace(c).await;
@@ -1242,13 +1387,25 @@ impl<S: ChainSource> Follower<S> {
                 }
                 outcome
             })
-            .await;
-        self.tick(true);
+            .await
+            .expect("not given up");
+        self.tick();
         let nodes = self.source.node_stats();
         let source = self.source.source_status();
         // The alarms of named nodes (`rpc::judge`), process-wide.
         let mut alarms = crate::rpc::judge::alarms();
         let cross = self.source.cross_check();
+        let alone_secs = {
+            let mut at = self.alone_at.lock().unwrap_or_else(|e| e.into_inner());
+            let now = tokio::time::Instant::now();
+            let secs = match (*at, cross.alone) {
+                (Some(t), true) => now.saturating_duration_since(t).as_secs(),
+                _ => 0,
+            };
+            // Whole seconds only: the rest carries on to the next step.
+            *at = cross.alone.then(|| at.map_or(now, |t| t + Duration::from_secs(secs)));
+            secs
+        };
         if cross.alone {
             alarms.push(format!("cross-check: {}", cross.reason.as_deref().unwrap_or("none answers: the chain authority runs alone")));
         }
@@ -1256,6 +1413,7 @@ impl<S: ChainSource> Follower<S> {
         self.health.update(|h| {
             h.cross_checked = cross.checked;
             h.cross_check_alone = cross.alone;
+            h.cross_check_alone_secs_total += alone_secs;
             h.cross_check_reason = cross.reason;
             h.chain_proofs_off = proof.is_none();
             h.chain_proof = proof;
@@ -1370,14 +1528,16 @@ impl<S: ChainSource> Follower<S> {
                 }
             }
         };
-        let batch = match tokio::task::spawn_blocking(move || raw.into_batch()).await.expect("parse task panicked") {
-            Ok(b) => b,
-            Err(e) => {
-                let msg = format!("bad VSPC response: {e}");
-                self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
-                return StepOutcome::Retry(msg);
-            }
-        };
+        let batch =
+            match self.waiting_on(WAIT_OWN, tokio::task::spawn_blocking(move || raw.into_batch())).await.expect("parse task panicked")
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    let msg = format!("bad VSPC response: {e}");
+                    self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                    return StepOutcome::Retry(msg);
+                }
+            };
         let t_parse = t0.elapsed().saturating_sub(t_fetch + t_check);
         // Empty after a tip reorg: the extra confirmations, not the window, held the blocks back.
         if plan.by_window() && batch.added.is_empty() && refetches == 0 {
@@ -1489,7 +1649,11 @@ impl<S: ChainSource> Follower<S> {
                     return self.step_sequential().await;
                 }
                 let waited = t0.elapsed();
-                let batch = match tokio::task::spawn_blocking(move || raw.into_batch()).await.expect("parse task panicked") {
+                let batch = match self
+                    .waiting_on(WAIT_OWN, tokio::task::spawn_blocking(move || raw.into_batch()))
+                    .await
+                    .expect("parse task panicked")
+                {
                     Ok(b) => b,
                     Err(e) => {
                         self.prefetch.lock().await.discard();
@@ -1585,12 +1749,17 @@ impl<S: ChainSource> Follower<S> {
             return (raw, Ok(()), confirmed);
         };
         let p = proof.clone();
-        let (raw, plan) = tokio::task::spawn_blocking(move || {
-            let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
-            (raw, r)
-        })
-        .await
-        .expect("proof task panicked");
+        // kobd's own CPU, not the authority's time (R6C1-I4).
+        let (raw, plan) = self
+            .waiting_on(
+                WAIT_OWN,
+                tokio::task::spawn_blocking(move || {
+                    let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
+                    (raw, r)
+                }),
+            )
+            .await
+            .expect("proof task panicked");
         let plan = match plan {
             Ok(p) => p,
             Err(e) => {
@@ -1926,7 +2095,9 @@ impl<S: ChainSource> Follower<S> {
         if runs.is_empty() {
             return Ok(());
         }
-        self.source.confirm_bodies(start, raw, &runs).await.map(|_| ())
+        // The cross-checking node's time, not the authority's: a node that stalls its copies is benched
+        // and rotated for it, and must not get the authority deposed (R6C1-L3).
+        self.waiting_on(WAIT_OTHER, self.source.confirm_bodies(start, raw, &runs)).await.map(|_| ())
     }
 
     fn record_fetch(&self, batch: &VspcBatch, t_fetch: std::time::Duration) {
@@ -1997,6 +2168,9 @@ impl<S: ChainSource> Follower<S> {
                 if let Some(t) = last_ts.filter(|(h, _)| *h == a.cursor.hash) {
                     *self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
                 }
+                // The cursor and its time move together: every judgement in between (the ticks of the
+                // awaits below) sees the new cursor with its time, never one with the other's.
+                *self.cursor_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(a.cursor.hash);
                 let now = now_ms();
                 // Per-batch detail is logged at DEBUG (`RUST_LOG=kobd=debug`). The status line
                 // every `--status-secs` says how the indexer is doing, as kaspad's "Processed N
@@ -2046,7 +2220,6 @@ impl<S: ChainSource> Follower<S> {
                 // time and the local clock alone, whatever the state or the node's position (module
                 // documentation, *Progress*): it runs at the end of the step.
                 self.chain_answered();
-                *self.cursor_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(a.cursor.hash);
                 let cursor_time =
                     self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == a.cursor.hash).map(|(_, t)| t);
                 self.health.update(|h| {
@@ -2388,8 +2561,15 @@ impl<S: ChainSource> Follower<S> {
                 tokio::task::yield_now().await;
                 continue;
             }
+            // The pause is the time of whoever the step waited on last: after the follower's own
+            // failure its own, after a cross-checking node's its, else the authority's (a poll
+            // after a normal step, a backoff after the authority's failure).
+            let whose = match &outcome {
+                StepOutcome::Retry(r) => whose_failure(r, self.health.snapshot().state),
+                _ => WAIT_AUTHORITY,
+            };
             tokio::select! {
-                _ = self.ticked(tokio::time::sleep(delay)) => {}
+                _ = self.waiting_on(whose, self.ticked(true, tokio::time::sleep(delay))) => {}
                 _ = shutdown.changed() => {}
             }
         }

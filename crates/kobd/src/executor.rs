@@ -759,7 +759,7 @@ pub(crate) fn refuse_writable_by_others(network: &str, paths: &[PathBuf]) -> Res
 /// It is the command that fixes it where there is one. On a file system whose permissions cannot
 /// be set (a Windows drive in WSL, a Docker Desktop bind mount, a share), and for a drive's root,
 /// it says where to move kob instead (R4D-4).
-fn start_fix(path: &std::path::Path, who: &str, above: bool) -> String {
+pub(crate) fn start_fix(path: &std::path::Path, who: &str, above: bool) -> String {
     use crate::matcher::wallet;
     if let Some(m) = wallet::foreign_mount(path) {
         return m.advice().to_string();
@@ -917,12 +917,18 @@ mod tests {
         assert!(!sell(&[]));
         assert!(sell(&["--dust-sell"]));
         assert!(!sell(&["--no-dust-sell"]));
-        // `KOB_DUST_SELL` takes 1 / 0, true / false, yes / no and on / off (R5F-4).
+        // `KOB_DUST_SELL` takes 1 / 0, true / false, yes / no and on / off (R5F-4), through the flag's
+        // boolish parser; parsed here without touching the process environment, which the other
+        // tests of this binary read at the same time (R6F-7).
+        use clap::builder::TypedValueParser;
+        use clap::CommandFactory;
+        let cmd = T::command();
+        let arg = cmd.get_arguments().find(|a| a.get_long() == Some("dust-sell")).expect("the flag");
+        assert_eq!(arg.get_env(), Some(std::ffi::OsStr::new("KOB_DUST_SELL")));
         for (v, on) in [("1", true), ("true", true), ("yes", true), ("on", true), ("0", false), ("false", false), ("off", false)] {
-            std::env::set_var("KOB_DUST_SELL", v);
-            assert_eq!(sell(&[]), on, "KOB_DUST_SELL={v}");
+            let parsed = clap::builder::BoolishValueParser::new().parse_ref(&cmd, Some(arg), std::ffi::OsStr::new(v)).unwrap();
+            assert_eq!(parsed, on, "KOB_DUST_SELL={v}");
         }
-        std::env::remove_var("KOB_DUST_SELL");
     }
 
     /// A key file inside the data directory is refused. A pause file there is refused when the data
