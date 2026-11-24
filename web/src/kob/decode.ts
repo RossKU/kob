@@ -66,7 +66,7 @@ import type {
 import type { NodeInputFacts } from './node-verify';
 import { outpointKey, ownPlainInputs } from './node-verify';
 import { CODEC_OF_PROGRAM, isTokenProgram } from './programs.generated';
-import { KCC20_SCHEME_COVID, KCC20_SCHEME_P2SH, PLAIN_BORROW, borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf, programOfHash } from './token-state';
+import { KCC20_SCHEME_COVID, KCC20_SCHEME_P2SH, PLAIN_BORROW, acceptsAsSellCustody, borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf, programOfHash } from './token-state';
 import { recoverSweeps, type RecoveredSweep } from './sweep';
 import type { KobWasm } from './wasm';
 
@@ -2002,10 +2002,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const isCustody = (t: DecodedInput): boolean => {
         const plan = built.plans[t.index]!;
         const ps = (plan as { state?: unknown }).state as Record<string, unknown> | undefined;
-        if (!ps || big(String(ps.amount ?? '-1')) !== c.amount || ps.owner !== cov) return false;
+        if (!ps) return false;
         if (zero ? t.outpoint.txid.toLowerCase() !== d.outpoint.txid.toLowerCase() : t.token!.ref.covenantId !== c.token) return false;
-        if (family === 'kron') return true;
-        return isKcc20State(ps as never) && ps.owner_scheme === KCC20_SCHEME_COVID && borrowKeyOf(ps as never) === PLAIN_BORROW && (ext === null || ps.extension_commitment === ext);
+        // what the contracts accept as the custody (the borrow guard ignored): token-state.ts
+        return acceptsAsSellCustody(ps, { owner: cov, amount: c.amount, ext: family === 'kron' ? null : ext });
       };
       if (continues) {
         const spent = owned.filter(isCustody).length;

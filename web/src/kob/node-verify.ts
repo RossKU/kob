@@ -13,6 +13,7 @@
 // transaction. They are not read before signing, so a node that cannot be reached never stops a
 // spend of them.
 import type { NodeApi } from '../data/node';
+import { acceptsAsSellCustody } from './token-state';
 import type { OrderSnapshot } from './cancel';
 import { SnapshotError, ownTokenFacts, unboundCustodyToken } from './cancel';
 import { curveFactsOf, custodiesOf } from './order-facts';
@@ -228,7 +229,12 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
   };
   const custodyState0 = snap.custody ? expectedCustody(0) : null;
   const prefundState = snap.prefund && prefundToken ? expectedCustody(1) : null;
-  const custodySpk = custodyState0 ? tokenSpk(kob, tplOf(custodyToken), custodyState0) : null;
+  // The custody the contracts accept (token-state.ts acceptsAsSellCustody): the exact state, or the
+  // claimed one when it differs from it only in what the contracts ignore (the borrow guard). Its
+  // script is then that state's, and the node confirms it.
+  const claimedCustody = snap.custody && custodyState0 && acceptsAsSellCustody(snap.custody.state, { owner: snap.covenantId, amount: BigInt((custodyState0 as { amount: string }).amount), ext: (custodyState0 as { extension_commitment?: Hex }).extension_commitment ?? null }) ? (snap.custody.state as TokenState) : null;
+  const custodyHeld = claimedCustody ?? custodyState0;
+  const custodySpk = custodyHeld ? tokenSpk(kob, tplOf(custodyToken), custodyHeld) : null;
   const prefundSpk = prefundState ? tokenSpk(kob, tplOf(prefundToken), prefundState) : null;
   // The order's covenant id may own strays of any of its own tokens, A and B for a pair order.
   // Each is checked against its token's program.
@@ -274,7 +280,7 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
     if (snap.custody) {
       const cf = confirmed(snap.custody, custodySpk, custodyToken);
       if (!cf) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its custody token UTXO is not on the node with the claimed script and token covenant id`);
-      custody = { ...snap.custody, amount: cf.amount.toString(), covenantId: custodyToken, state: custodyState0! };
+      custody = { ...snap.custody, amount: cf.amount.toString(), covenantId: custodyToken, state: custodyHeld! };
     }
     let prefund: TokenUtxo | null = null;
     if (snap.prefund) {
