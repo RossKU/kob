@@ -1063,10 +1063,7 @@ pub fn held_custodies(s: &AnyState, order_cov: [u8; 32]) -> Result<Vec<HeldCusto
 pub fn check_releases_held(s: &AnyState, order_cov: [u8; 32], inputs: &[TokenUtxo]) -> Result<()> {
     let mut used = vec![false; inputs.len()];
     for h in held_custodies(s, order_cov)? {
-        let hit = inputs
-            .iter()
-            .enumerate()
-            .find(|(k, t)| !used[*k] && t.utxo.covenant_id == Some(h.token.covenant_id) && t.state == h.state);
+        let hit = inputs.iter().enumerate().find(|(k, t)| !used[*k] && covenant_accepts_as(&h, t));
         match hit {
             Some((k, _)) => used[k] = true,
             None => {
@@ -1081,6 +1078,43 @@ pub fn check_releases_held(s: &AnyState, order_cov: [u8; 32], inputs: &[TokenUtx
         }
     }
     Ok(())
+}
+
+/// Whether the order's covenant accepts `t` as the held custody `h` (R9FA-1).
+///
+/// A sell custody is checked by every order covenant on its token, owner, owner scheme 0x04,
+/// borrowing disabled, extension commitment and amount, but never on its borrow guard, which it
+/// copies to the rest (`KobAsk.sil:190-200`, `KobPair.sil:230-238` and the same in every ask
+/// side). With borrowing disabled the guard is inert in the token program: no borrow path, the
+/// owner covenant moves the unit as any other. So a unit that differs from the custody in its
+/// guard alone is, for the covenant, that custody. A bought-custody is pinned exactly, zero guard
+/// included (`KobBid.sil:207-211`), and KRON states have no guard.
+///
+/// The rules built on it: a spend that keeps an order alive takes no such unit; a spend that ends
+/// it releases one for each held custody; a fill still uses only the exact, zero-guard custody.
+pub fn covenant_accepts_as(h: &HeldCustody, t: &TokenUtxo) -> bool {
+    if t.utxo.covenant_id != Some(h.token.covenant_id) {
+        return false;
+    }
+    match (&t.state, &h.state) {
+        (TokenState::Kcc20(a), TokenState::Kcc20(b)) if !h.bought => {
+            a.borrow_scheme == 0 && Kcc20State { borrow_guard: b.borrow_guard, ..a.clone() } == *b
+        }
+        _ => t.state == h.state,
+    }
+}
+
+/// The custody a spend that ends the order releases: [`check_custody`] with the borrow guard
+/// ignored, as the covenant ignores it ([`covenant_accepts_as`]). A guarded unit the covenant
+/// treats as the custody (left by a hand-built fill) can then still be returned by its cancel.
+fn check_ending_custody(c: &TokenUtxo, order_cov: Option<[u8; 32]>, token: Token, amount: i64, ext: [u8; 32]) -> Result<()> {
+    match &c.state {
+        TokenState::Kcc20(k) if k.borrow_scheme == 0 && k.borrow_guard != [0; 32] => {
+            let unguarded = TokenUtxo { state: TokenState::Kcc20(Kcc20State { borrow_guard: [0; 32], ..k.clone() }), ..c.clone() };
+            check_custody(&unguarded, order_cov, token, amount, ext)
+        }
+        _ => check_custody(c, order_cov, token, amount, ext),
+    }
 }
 
 /// The extension commitment an order pins for its custody of `token` ([`AnyState::custody_ext`]).
@@ -1441,7 +1475,7 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, request: CancelParts<'_>, bu
         return invalid("token-holding order: custody token UTXO required");
     }
     for (c, (tok, amount, ext)) in given.into_iter().zip(&custodies) {
-        check_custody(c, Some(order_cov), *tok, *amount, *ext)?;
+        check_ending_custody(c, Some(order_cov), *tok, *amount, *ext)?;
         put(&mut groups, c, "custody")?;
         draft.add_token_input(c, *tok, Witness::CovenantId)?;
     }
@@ -1817,7 +1851,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
             return invalid("token-holding order: custody token UTXO required");
         }
         for (c, (tok, amount, ext)) in given.iter().zip(&custodies) {
-            check_custody(c, Some(cov), *tok, *amount, *ext)?;
+            check_ending_custody(c, Some(cov), *tok, *amount, *ext)?;
         }
         for t in given.into_iter().chain(&it.strays) {
             let tok = tokens.iter().copied().find(|x| t.utxo.covenant_id == Some(x.0)).unwrap_or(tokens[0]);
@@ -1885,7 +1919,8 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     // cannot be told from the caller's word, and a cancel takes every one of them anyway. Without
     // this, the order could live on with no custody, which no KOB tool could fill, refund or cancel.
     for h in held_custodies(&order.state, order_cov)?.iter().filter(|h| !h.bought) {
-        if r.strays.iter().any(|t| t.utxo.covenant_id == Some(h.token.covenant_id) && t.state == h.state) {
+        // the covenant's comparison, the borrow guard ignored as it ignores it (R9FA-1)
+        if r.strays.iter().any(|t| covenant_accepts_as(h, t)) {
             return invalid(format!(
                 "a sweep never moves a unit of exactly the state the order pins for its custody ({} base units): it stays with the order, and its cancel takes it",
                 h.state.amount()
@@ -2100,7 +2135,7 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
             let c = r.custody.as_ref().ok_or_else(|| Error::Invalid("token-holding order: custody token UTXO required".into()))?;
             let ext = pinned_ext(&order.state, token.0)
                 .ok_or_else(|| Error::Invalid("the order's state pins no extension commitment for its custody".into()))?;
-            check_custody(c, Some(order_cov), token, amount, ext)?;
+            check_ending_custody(c, Some(order_cov), token, amount, ext)?;
             draft.add_token_input(c, token, Witness::CovenantId)?;
             for f in &r.funding {
                 draft.add_p2pk(f);
@@ -2169,7 +2204,7 @@ fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx
         return invalid("a pair order without a custody is cancel-only");
     }
     for (c, (tok, amount, ext)) in given.iter().zip(&custodies) {
-        check_custody(c, Some(order_cov), *tok, *amount, *ext)?;
+        check_ending_custody(c, Some(order_cov), *tok, *amount, *ext)?;
         draft.add_token_input(c, *tok, Witness::CovenantId)?;
     }
     for f in &request.funding {
