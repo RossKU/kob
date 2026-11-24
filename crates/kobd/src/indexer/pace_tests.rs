@@ -186,3 +186,60 @@ async fn a_halted_network_under_a_public_pair_costs_only_handovers() {
     assert!(age().is_some_and(|a| a <= 400), "fresh again: {:?}", age());
     assert!(took <= Duration::from_millis(1_200 + 400 + 3_000), "fresh {took:?} after blocks came again");
 }
+
+/// R7C1-M2, R7DF-1: a wait of another kind than the authority's that ends in the middle, given up by the rule (the
+/// abort of a step) or dropped, leaves no label behind: the next wait is the authority's time again. Before, the label
+/// stayed on "own" or "other" for good after an abort inside a parse, a proof check or the cross-checking node's
+/// copies, and a dropped database task left the follower's own work counted for good, so the authority's period never
+/// ran again until a restart.
+#[tokio::test]
+async fn a_wait_ended_in_the_middle_leaves_the_next_wait_the_authoritys() {
+    let node = MockNode::new("testnet-10");
+    node.push_empty(3);
+    let ingest =
+        Arc::new(Mutex::new(Ingest::new(crate::indexer::db::open_memory("testnet-10").unwrap(), crate::testkit::processor(), None)));
+    let health = Arc::new(HealthState::new("testnet-10"));
+    let (events, _) = broadcast::channel(8);
+    let cfg = FollowerConfig::from_indexer(&crate::config::IndexerConfig { network: "testnet-10".into(), ..Default::default() });
+    let f = Follower::new(node.clone(), ingest, cfg, health, events);
+    // The running time a wait on nobody in particular adds: the authority's, all of it.
+    let charged = || async {
+        f.tick();
+        let r0 = f.rule().run_ms;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        f.tick();
+        f.rule().run_ms - r0
+    };
+    assert!(charged().await >= 350, "the authority's time to begin with");
+    let fail = |on: bool| f.rule().failed = on.then(|| "the test's failed period".to_string());
+    // The cross-checking node's copies (`confirm_bodies`), given up by the rule.
+    fail(true);
+    let r = f.ticked(true, f.waiting_on(WAIT_OTHER, tokio::time::sleep(Duration::from_secs(5)))).await;
+    fail(false);
+    assert!(r.is_none(), "given up");
+    let c = charged().await;
+    assert!(c >= 350, "after the cross-checking node's wait was given up: {c} ms of 400 charged");
+    // The parse and the proof check (kobd's own CPU on the blocking pool): given up, or let run to their end.
+    for what in ["the parse", "the proof check"] {
+        fail(true);
+        let _ = f
+            .ticked(
+                true,
+                f.waiting_on(WAIT_OWN, tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1_500)))),
+            )
+            .await;
+        fail(false);
+        let c = charged().await;
+        assert!(c >= 350, "after {what}: {c} ms of 400 charged");
+    }
+    // A database task whose wait is dropped (a step given up, a shutdown).
+    let dropped = tokio::time::timeout(
+        Duration::from_millis(200),
+        f.blocking(|_| std::thread::sleep(Duration::from_millis(600))),
+    )
+    .await;
+    assert!(dropped.is_err(), "dropped");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let c = charged().await;
+    assert!(c >= 350, "after a dropped database wait: {c} ms of 400 charged");
+}

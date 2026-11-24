@@ -107,6 +107,10 @@ struct Node {
     call_ms: AtomicU64,
     /// Claims every window asked with a size limit is larger than the limit (R6C1-L3).
     oversize: AtomicBool,
+    /// Answers three of every four sink calls with an error whose text reads like kobd's own database failure
+    /// (R7C1-M1); the count of those calls.
+    db_text: AtomicBool,
+    sink_calls: AtomicU64,
 }
 
 impl Node {
@@ -119,6 +123,8 @@ impl Node {
             swing: Mutex::new(None),
             call_ms: AtomicU64::new(0),
             oversize: AtomicBool::new(false),
+            db_text: AtomicBool::new(false),
+            sink_calls: AtomicU64::new(0),
         })
     }
 
@@ -185,6 +191,9 @@ impl ChainSource for Node {
     }
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
         self.miner.mine();
+        if self.db_text.load(Ordering::Relaxed) && self.sink_calls.fetch_add(1, Ordering::Relaxed) % 4 != 3 {
+            return Err(RpcError::Node("the store: database: disk I/O error".into()));
+        }
         self.chain().sink_blue_score().await
     }
     async fn block_blue_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
@@ -408,6 +417,37 @@ async fn a_drip_at_100_s_is_handed_over_and_one_at_60_s_is_not() {
             assert_eq!(health.snapshot().authority_pace.map(|p| p.state), Some(PaceState::KeepingUp));
         }
     }
+}
+
+/// R7C1-M1: the drip at 100 s, and three of every four sink calls answered with an error whose text reads like kobd's
+/// own database failure (`…: database: …`), so that a batch is applied only every few steps. Before, the text made the
+/// backoff after each such error kobd's own time: the authority's period ran only for its few answers and it held the
+/// index for many periods. Every answer of an authority call is its own now, whatever its text: it is handed over
+/// within one ordinary period of the lag passing the tolerance, as the plain drip is.
+#[tokio::test(start_paused = true)]
+async fn a_drip_whose_errors_read_like_a_database_failure_is_handed_over_within_a_period() {
+    let _g = serial().await;
+    let clock = Clock::new();
+    let miner = Miner::new(&clock, 5_000, 1_000);
+    let (a, b) = (Node::new(&miner), Node::new(&miner));
+    *a.hold_ms.lock().unwrap() = Some(100_000);
+    a.db_text.store(true, Ordering::Relaxed);
+    let source = pair(&a, &b, 30);
+    let (f, health) = follower(&source, config(miner.first(), Duration::from_secs(1)), &clock);
+    let mut at = None;
+    let mut most = 0;
+    drive(&f, |s| {
+        most = most.max(lag_secs(&health, &clock).unwrap_or(0));
+        if at.is_none() && source.board().authority() != 0 {
+            at = Some(s);
+        }
+        s < 1_800 && at.is_none()
+    })
+    .await;
+    // the lag passes 90 s about 85 s in, then one period of 180 s
+    let at = at.expect("handed over");
+    assert!((150..=300).contains(&at), "handed over after {at} s (the lag reached {most} s)");
+    assert!(a.sink_calls.load(Ordering::Relaxed) > 10, "the errors were answered");
 }
 
 /// A lone authority that holds the index 40 minutes behind has nothing to hand over to: the rule drives the health. One
