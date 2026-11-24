@@ -1418,7 +1418,11 @@ impl<S: ChainSource> Follower<S> {
         }
         let info = self.source.server_info().await.map_err(|e| StepOutcome::Retry(format!("getServerInfo: {e}")))?;
         if info.network_id != self.cfg.network {
-            return Err(StepOutcome::Gap(format!("node is on `{}`, configured `{}`", info.network_id, self.cfg.network)));
+            // The node's word, so no state only the operator leaves: the node is unavailable and asked
+            // again, another node may serve (R8C1-M1).
+            let msg = format!("node is on `{}`, configured `{}`", info.network_id, self.cfg.network);
+            self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+            return Err(StepOutcome::Retry(msg));
         }
         if !info.is_synced {
             return Err(StepOutcome::Retry("node is not synced yet".into()));
@@ -2006,7 +2010,7 @@ impl<S: ChainSource> Follower<S> {
                 // failure: blamed, and the batch asked again (another node, or the same later).
                 let horizon = pruning_horizon_ms(&self.cfg.network);
                 let age = self.cursor_age_ms();
-                if !age.is_some_and(|a| a > horizon) {
+                if age.is_none_or(|a| a <= horizon) {
                     let msg = format!(
                         "chain proof refused: the node says the cursor is too deep ({why}), but the cursor block is {} old by its verified time, within the network's pruning depth of {} h",
                         age.map_or("of an unknown age".to_string(), |a| format!("{} s", a / 1_000)),
