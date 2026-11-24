@@ -78,6 +78,18 @@ impl Retirement {
         }
     }
 
+    /// The state layout the orders of this retirement were placed with, for a kind `kind`.
+    ///
+    /// Every retirement so far is of templates placed before the delivery block (bid-delivery-spec
+    /// §2): [`StateLayout::Legacy`]. A retirement of templates that already carry the block (the
+    /// generation retired by the pre-mainnet re-pin) returns the kind's layout when it was retired,
+    /// so each row's span is read in the layout its orders have, not one fixed layout (TPLGEN step 1).
+    pub fn layout(self, _kind: TemplateId) -> StateLayout {
+        match self {
+            Retirement::BidRefund | Retirement::F1 | Retirement::BidDelivery | Retirement::BidMinFill => StateLayout::Legacy,
+        }
+    }
+
     /// The last commit that carries the templates (their artifacts and sources).
     pub fn last_release(self) -> &'static str {
         match self {
@@ -328,24 +340,9 @@ fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
             return Err(format!("{name}: {} is not an order kind", kind.name()));
         }
         // today's kind: the state span at the same place (the order kinds have no compiler-owned
-        // context fields), of the kind's legacy layout: every template retired so far was placed
-        // before the delivery block (bid-delivery-spec §2), so a kind with the block has a longer
-        // span today
-        let layout = StateLayout::Legacy;
-        let len = state_len_in(*kind, layout).ok_or_else(|| format!("{name}: {} has no legacy layout", kind.name()))?;
-        if layout_of_len(*kind, len) != Some(layout) {
-            return Err(format!("{name}: a {len}-byte span is not the legacy layout of {}", kind.name()));
-        }
-        let offset = cur.prefix.len();
-        if bytes.len() < offset + len {
-            return Err(format!("{name}: {} bytes cannot hold a state span {offset}+{len}", bytes.len()));
-        }
-        let prefix = bytes[..offset].to_vec();
-        let suffix = bytes[offset + len..].to_vec();
-        let computed = silverscript_abi::template_hash(&prefix, &suffix);
-        if computed != hash {
-            return Err(format!("{name}: the bytes hash to {}, not {full}", to_hex(&computed)));
-        }
+        // context fields), in the layout of the row's retirement
+        let layout = retirement.layout(*kind);
+        let (prefix, suffix, len) = span_split(*kind, layout, cur.prefix.len(), bytes, &hash).map_err(|e| format!("{name}: {e}"))?;
         if PINNED.iter().any(|(_, h)| *h == full) {
             return Err(format!("{name}: {full} is a pinned template, not a retired one"));
         }
@@ -366,6 +363,31 @@ fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
         out.push(RetiredTemplate { kind: *kind, hash, retirement: *retirement, prefix, suffix, state_len: len, layout });
     }
     Ok(out)
+}
+
+/// The prefix, suffix and state length of a template's bytes `bytes` of the kind `kind` whose orders
+/// have `layout`, with the state span at `offset`, checked against its template hash `hash`.
+fn span_split(
+    kind: TemplateId,
+    layout: StateLayout,
+    offset: usize,
+    bytes: &[u8],
+    hash: &[u8; 32],
+) -> std::result::Result<(Vec<u8>, Vec<u8>, usize), String> {
+    let len = state_len_in(kind, layout).ok_or_else(|| format!("{} has no {layout:?} layout", kind.name()))?;
+    if layout_of_len(kind, len) != Some(layout) {
+        return Err(format!("a {len}-byte span is not the {layout:?} layout of {}", kind.name()));
+    }
+    if bytes.len() < offset + len {
+        return Err(format!("{} bytes cannot hold a state span {offset}+{len}", bytes.len()));
+    }
+    let prefix = bytes[..offset].to_vec();
+    let suffix = bytes[offset + len..].to_vec();
+    let computed = silverscript_abi::template_hash(&prefix, &suffix);
+    if computed != *hash {
+        return Err(format!("the bytes hash to {}, not {}", to_hex(&computed), to_hex(hash)));
+    }
+    Ok((prefix, suffix, len))
 }
 
 /// Every retired template of the cancel-only table.
@@ -415,6 +437,29 @@ pub fn retired_infos() -> Vec<RetiredInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TPLGEN step 1: a row's span is read in its retirement's layout. Today's delivery-block kinds, retired at the
+    /// re-pin, keep the block: their bytes (today's artifacts, as the next retirement's files will be) split at the
+    /// state with the delivery layout and hash to their template, and the legacy layout does not fit them.
+    #[test]
+    fn a_retired_row_is_read_in_its_retirements_layout() {
+        use crate::state::{delivery_block, pinned_layout};
+        let mut delivering = 0;
+        for (id, _) in PINNED.iter() {
+            let id = *id;
+            let t = template(id);
+            let bytes = [t.prefix.as_slice(), &vec![0u8; t.state_len], t.suffix.as_slice()].concat();
+            let layout = pinned_layout(id);
+            let (p, s, len) = span_split(id, layout, t.prefix.len(), &bytes, &t.hash).unwrap_or_else(|e| panic!("{}: {e}", id.name()));
+            assert_eq!((p.len(), s.len(), len), (t.prefix.len(), t.suffix.len(), t.state_len), "{}", id.name());
+            if delivery_block(id).is_some() {
+                assert_eq!(layout, StateLayout::Delivery, "{}", id.name());
+                assert!(span_split(id, StateLayout::Legacy, t.prefix.len(), &bytes, &t.hash).is_err(), "{}", id.name());
+                delivering += 1;
+            }
+        }
+        assert!(delivering >= 6, "the delivery-block kinds: {delivering}");
+    }
 
     #[test]
     fn the_table_loads_and_is_not_pinned() {

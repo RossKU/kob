@@ -1104,12 +1104,27 @@ pub fn covenant_accepts_as(h: &HeldCustody, t: &TokenUtxo) -> bool {
     }
 }
 
-/// The custody a spend that ends the order releases: [`check_custody`] with the borrow guard
-/// ignored, as the covenant ignores it ([`covenant_accepts_as`]). A guarded unit the covenant
-/// treats as the custody (left by a hand-built fill) can then still be returned by its cancel.
-fn check_ending_custody(c: &TokenUtxo, order_cov: Option<[u8; 32]>, token: Token, amount: i64, ext: [u8; 32]) -> Result<()> {
+/// Whether the order templates this build pins check that a sell custody has a zero borrow guard
+/// (TPLGEN row 2). It turns true with the generation whose sell-custody checks compare the guard;
+/// the templates it retires (cancel-only) and every earlier one do not, so a guarded unit can stand
+/// in for their custody (R9FA-1), and their ending spends must accept it.
+pub const PINNED_CHECKS_GUARD: bool = false;
+
+/// The custody a spend that ends the order releases: [`check_custody`], with the borrow guard
+/// ignored when the order's template ignores it (`tolerant`: a retired template, or a pinned one
+/// before [`PINNED_CHECKS_GUARD`]), as that covenant does ([`covenant_accepts_as`]). A guarded unit
+/// such a covenant treats as the custody (left by a hand-built fill) can then still be returned by
+/// its cancel. A template that checks the guard never had such a custody, and gets the exact check.
+fn check_ending_custody(
+    c: &TokenUtxo,
+    order_cov: Option<[u8; 32]>,
+    token: Token,
+    amount: i64,
+    ext: [u8; 32],
+    tolerant: bool,
+) -> Result<()> {
     match &c.state {
-        TokenState::Kcc20(k) if k.borrow_scheme == 0 && k.borrow_guard != [0; 32] => {
+        TokenState::Kcc20(k) if tolerant && k.borrow_scheme == 0 && k.borrow_guard != [0; 32] => {
             let unguarded = TokenUtxo { state: TokenState::Kcc20(Kcc20State { borrow_guard: [0; 32], ..k.clone() }), ..c.clone() };
             check_custody(&unguarded, order_cov, token, amount, ext)
         }
@@ -1447,6 +1462,8 @@ struct CancelSubject {
 /// the maker.
 fn cancel_with(subject: CancelSubject, utxo: &Utxo, request: CancelParts<'_>, budgets: BudgetFn) -> Result<BuiltTx> {
     let CancelSubject { maker, tokens, custodies, plan, role } = subject;
+    // a retired template ignores the borrow guard of its custody, as did every one before TPLGEN row 2
+    let tolerant = matches!(plan, SigPlan::RetiredCancel { .. }) || !PINNED_CHECKS_GUARD;
     let mut draft = Draft::new(request.lock_time, request.fee, Some(request.change.unwrap_or(maker)))?;
     let order_input = draft.add_input(utxo, plan, role, 0);
     let order_cov = utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
@@ -1475,7 +1492,7 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, request: CancelParts<'_>, bu
         return invalid("token-holding order: custody token UTXO required");
     }
     for (c, (tok, amount, ext)) in given.into_iter().zip(&custodies) {
-        check_ending_custody(c, Some(order_cov), *tok, *amount, *ext)?;
+        check_ending_custody(c, Some(order_cov), *tok, *amount, *ext, tolerant)?;
         put(&mut groups, c, "custody")?;
         draft.add_token_input(c, *tok, Witness::CovenantId)?;
     }
@@ -1851,7 +1868,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
             return invalid("token-holding order: custody token UTXO required");
         }
         for (c, (tok, amount, ext)) in given.iter().zip(&custodies) {
-            check_ending_custody(c, Some(cov), *tok, *amount, *ext)?;
+            check_ending_custody(c, Some(cov), *tok, *amount, *ext, !PINNED_CHECKS_GUARD)?;
         }
         for t in given.into_iter().chain(&it.strays) {
             let tok = tokens.iter().copied().find(|x| t.utxo.covenant_id == Some(x.0)).unwrap_or(tokens[0]);
@@ -2135,7 +2152,7 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
             let c = r.custody.as_ref().ok_or_else(|| Error::Invalid("token-holding order: custody token UTXO required".into()))?;
             let ext = pinned_ext(&order.state, token.0)
                 .ok_or_else(|| Error::Invalid("the order's state pins no extension commitment for its custody".into()))?;
-            check_ending_custody(c, Some(order_cov), token, amount, ext)?;
+            check_ending_custody(c, Some(order_cov), token, amount, ext, !PINNED_CHECKS_GUARD)?;
             draft.add_token_input(c, token, Witness::CovenantId)?;
             for f in &r.funding {
                 draft.add_p2pk(f);
@@ -2204,7 +2221,7 @@ fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx
         return invalid("a pair order without a custody is cancel-only");
     }
     for (c, (tok, amount, ext)) in given.iter().zip(&custodies) {
-        check_ending_custody(c, Some(order_cov), *tok, *amount, *ext)?;
+        check_ending_custody(c, Some(order_cov), *tok, *amount, *ext, !PINNED_CHECKS_GUARD)?;
         draft.add_token_input(c, *tok, Witness::CovenantId)?;
     }
     for f in &request.funding {

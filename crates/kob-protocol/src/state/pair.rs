@@ -888,7 +888,8 @@ impl CondPairState {
             if self.tp_price > 0 {
                 k = k.min((self.tp_price as i128 - 1 - s as i128).div_euclid(step as i128));
             }
-            k
+            // never past the largest stop the covenant fills (TPLGEN row 4)
+            k.min((crate::state::MAX_STOP_PRICE as i128 - s as i128).div_euclid(step as i128))
         } else {
             // a <= floor(x * b / sB)  <=>  x * b >= a * sB  <=>  x >= ceil(a * sB / b),
             // where x = s - k * step - gap >= 0
@@ -923,6 +924,11 @@ impl CondPairState {
                 }
                 cap = ns.checked_add(step).is_none_or(|v| v >= self.tp_price);
             }
+            // TPLGEN row 4: the stop stays at or below MAX_STOP, and a step past it ends the trail
+            if ns > crate::state::MAX_STOP_PRICE {
+                return false;
+            }
+            cap = cap || ns.checked_add(step).is_none_or(|v| v > crate::state::MAX_STOP_PRICE);
             let Some(x) = ns.checked_add(gap) else { return false };
             if implied_ge(a, b, x, sb) != Some(true) {
                 return false;

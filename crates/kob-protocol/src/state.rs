@@ -1886,6 +1886,8 @@ impl CondAskState {
         if self.tp_price > 0 {
             steps = steps.min(self.tp_price.saturating_sub(1).saturating_sub(self.stop_price).div_euclid(self.trail_step));
         }
+        // never past the largest stop the covenant fills (TPLGEN row 4): a sell trail above it would kill its stop leg
+        steps = steps.min(MAX_STOP_PRICE.saturating_sub(self.stop_price).div_euclid(self.trail_step));
         steps.max(0)
     }
 }
