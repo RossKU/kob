@@ -128,3 +128,28 @@ describe('R9FB2-8: a pair order is checked against the decimals the frame shows 
     expect(summarize(kob, b, MAKER.pk, [wrong(order.quote.covId, order.quote.scale)]).problemCodes).toContain('token-scale');
   });
 });
+
+describe('a sale curve placed at its token creation, before its first sale, in the frame', () => {
+  it('its cancel is refused there (its custody names no token the frame could check), and passes the app path', async () => {
+    const { issueRaw } = await import('../kob/issue');
+    const { curveTable } = await import('../kob/curve');
+    const { planCancel } = await import('../kob/cancel');
+    const { snapshotOfRecovered } = await import('../testing/chain-fixtures');
+    const S = 100_000_000n;
+    const t = curveTable(kob, { amount: 900n * S, levels: 10, total: 100n * S, multipleMilli: 5000n, scale: S });
+    const plan = issueRaw(kob, {
+      name: 'Curve Token', ticker: 'CRV', decimals: 8, supply: (1000n * S).toString(),
+      holders: [{ owner: '00'.repeat(32), ownerScheme: 4, amount: (900n * S).toString() }, { owner: MAKER.pk, ownerScheme: 0, amount: (100n * S).toString() }],
+      funding: [{ transactionId: '07'.repeat(32), index: 1, amount: (500n * S).toString(), blockDaaScore: '5000', pubkey: MAKER.pk }],
+      network: 'testnet-10',
+      curve: { custody: 0, levelSize: t.levelSize.toString(), table: t.table.map(String), minFill: '1' },
+    } as never);
+    const rec = kob.recoverOrders(plan.built.tx)[0]!;
+    const snap = snapshotOfRecovered(rec, 6000n);
+    const c = planCancel({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10_000_000_000n, 201)], tokenUtxos: [], clock: { daa: 78_000_000n } }, snap);
+    expect(c.ok, JSON.stringify(c.issues)).toBe(true);
+    const s = frame(c.built!);
+    expect(s.problems).toBeGreaterThan(0);
+    expect(s.problemCodes).toContain('custody-unreleased');
+  });
+});

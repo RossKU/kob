@@ -918,6 +918,9 @@ export function IssueView() {
                     />
                   )}
                 </div>
+                {/* the private-key signer cannot judge a curve placed at creation before its first sale (its
+                    custody names no token yet): it refuses to cancel or change it until then (R9FB2 frame shapes) */}
+                {wallet.adapter?.id === 'local-key' ? <p class="muted" data-testid="sale-curve-signer-note">{t('issue.sale.privateKeyNote')}</p> : null}
                 {sale?.curveError ? <p class="field-error" data-testid="sale-curve-error">{curveErrorKey(sale.curveError) ? t(curveErrorKey(sale.curveError)!) : friendlyErrorText(sale.curveError)}</p> : null}
                 {sale?.curve && n ? (
                   <div class="issue-curve" data-testid="sale-curve">
