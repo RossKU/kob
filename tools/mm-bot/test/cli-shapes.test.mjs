@@ -111,3 +111,17 @@ test('the bot reads each sample of the real CLI (R8T-2)', async () => {
   assert.deepEqual([m.ok, m.txids, m.fee], [true, [H('aa')], 500000]);
 });
 
+// R8T-3: an answer that does not read is never a pass, and never "nothing sent".
+test('an unreadable dry run is no pass; an unreadable --yes with exit 0 may have been sent (R8T-3)', async () => {
+  const bad = '{"action": "place limit sell", "x": "\\u{202e}"}';
+  const r = await cli(bad).kob.place(H('01'), 'sell', 150e6, 4e9);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /plan unreadable/);
+  assert.equal(r.sentFee, undefined, 'nothing was signed');
+  // No preflight: the --yes itself answers unreadably.
+  const { kob } = cli(bad);
+  kob.cfg = { ...kob.cfg, cli: { ...kob.cfg.cli, preflight: false } };
+  const y = await kob.place(H('01'), 'sell', 150e6, 4e9);
+  assert.equal(y.ok, false);
+  assert.ok(y.sentFee > 0, 'counted as possibly sent');
+});
