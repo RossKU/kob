@@ -110,12 +110,15 @@ async fn nothing_known_or_no_retention_root_is_a_gap_and_halts() {
     assert!(matches!(out, StepOutcome::Gap(_)), "{out:?}");
 }
 
+/// A node that says it is on another network is the node's word: unavailable and asked again (another node may serve),
+/// never a gap that only a restart leaves (R8C1-M1).
 #[tokio::test]
-async fn wrong_network_is_a_gap_at_start() {
+async fn wrong_network_at_start_is_node_unavailable_not_a_gap() {
     let node = MockNode::new("mainnet");
     let hs = Harness::with_node(node, open_memory("testnet-10").unwrap(), None, wide_window());
     let out = hs.follower.step().await;
-    assert!(matches!(&out, StepOutcome::Gap(m) if m.contains("mainnet")), "{out:?}");
+    assert!(matches!(&out, StepOutcome::Retry(m) if m.contains("mainnet")), "{out:?}");
+    assert_eq!(hs.health.snapshot().state, kobd::indexer::status::FollowerState::NodeUnavailable);
 }
 
 #[tokio::test]

@@ -1271,8 +1271,11 @@ impl<S: ChainSource> Follower<S> {
             return;
         }
         let snap = self.health.snapshot();
-        // The cursor block's verified age, never the node's claimed position (R8C1-L4).
-        if snap.lag_seconds(self.wall_ms()).is_none_or(|s| s.saturating_mul(10) > LEAN_MAX_LAG_DAA) {
+        // Behind by the cursor block's verified age, or by the node's claim: either only pauses the
+        // pruning, and the retention is counted from the cursor below, so a claim can make it delete
+        // nothing a correct claim keeps (R8C1-L4).
+        let far = |d: u64| d > LEAN_MAX_LAG_DAA;
+        if snap.lag_seconds(self.wall_ms()).is_some_and(|s| far(s.saturating_mul(10))) || snap.lag_daa().is_some_and(far) {
             *self.lean_next.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + LEAN_BUSY_EVERY);
             return;
         }

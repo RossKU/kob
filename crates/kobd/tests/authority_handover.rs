@@ -532,8 +532,8 @@ fn paced(c: &mut FollowerConfig) {
 }
 
 /// R4C1-M1: a chain authority that gives the chain slower than real time from an old cursor is handed over, whatever it
-/// says of its own position: one chain block a poll with its sink claimed just past the cursor (`following`, an unbounded
-/// request), exactly 100 a poll the same way, and one a poll with a sink and a virtual DAA claimed far ahead
+/// says of its own position: one chain block a poll with its sink claimed just past the cursor (an unbounded request;
+/// `catching_up` all the same, R8C1-L4), exactly 100 a poll the same way, and one a poll with a sink and a virtual DAA claimed far ahead
 /// (`catching_up`, bounded windows). Each answer applies, but none is progress, so after the stall (3 minutes in
 /// production, 300 ms here) the other node leads and catches up to the tip. `/v1/health` reports the lag by the cursor
 /// block's age, whatever the authority claims.
@@ -567,8 +567,9 @@ async fn an_authority_that_gives_the_chain_slower_than_real_time_is_handed_over(
         .await;
         let took = t0.elapsed();
         let states = states.into_inner().unwrap();
-        let want = if far { FollowerState::CatchingUp } else { FollowerState::Following };
-        assert!(states.contains(&want), "case {k}: the authority kept the follower in {want:?}: {states:?}");
+        // Whatever it claims of its position, the follower is `catching_up`: the cursor block's verified age decides
+        // (R8C1-L4). Before, a sink claimed just past the cursor kept it `following`.
+        assert!(states.contains(&FollowerState::CatchingUp) && !states.contains(&FollowerState::Following), "case {k}: {states:?}");
         assert!(took < Duration::from_secs(10), "case {k}: {took:?}");
         let h = r.health.snapshot();
         assert!(h.blocks_applied_total >= blocks as u64, "case {k}: its answers applied");
