@@ -35,6 +35,7 @@ if (args[0] === 'cancel' && args.includes('--view')) {
         if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; }
         c.kasFree += o.value - 427000;
         c.ended[v.covenant_id] = 'cancelled';
+        (c.outputs ??= []).push({ txid: tx, index: 0, amount: o.value - 427000 });
         delete c.orders[v.covenant_id];
         writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify(c));
       }
@@ -107,6 +108,20 @@ function chain() {
     const o = c.orders[id];
     if (!o) { process.stderr.write('error: unknown order'); process.exit(1); }
     const np = args.includes('--price') ? Number(val('--price').replace('sompi', '')) : o.price;
+    // FAKE_KOB_REPLACE_NEW: a cancel-replace (strays on the order); `lost`: a fill of 1,500,007
+    // lands first and the replace never confirms (R6T-2). No change comes back: it rides on the
+    // replacement.
+    const how = process.env.FAKE_KOB_REPLACE_NEW;
+    if (how) {
+      const nid = ('d' + (c.n + 1).toString(16)).padStart(64, '0');
+      submit({ ids: [nid], plan: { inPlace: false, current: stateOf(o.side, o.price, o.amount), states: [stateOf(o.side, np, o.amount)], value: String(o.value - fee) }, apply: () => {
+        if (how === 'lost') { o.amount -= 1_500_007; return; }
+        c.orders[nid] = { ...o, price: np, txid, expiresAt: gtd(), value: o.value - fee };
+        c.ended[id] = 'cancelled';
+        delete c.orders[id];
+        c.kasFree += fee;
+      } });
+    }
     submit({ plan: { inPlace: true, current: stateOf(o.side, o.price, o.amount), replacement: stateOf(o.side, np, o.amount), value: String(o.value - fee) }, apply:() => { if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
   }
   if (args[0] === 'cancel') {
@@ -115,7 +130,7 @@ function chain() {
     if (!o) { process.stderr.write('error: the order is not live'); process.exit(1); }
     // An order someone else made under the bot's key, with no custody (R3T-2).
     if (o.foreign) { process.stderr.write('error: custody not found on the node: not cancelled; nothing signed\n'); process.exit(1); }
-    submit({ apply: () => { if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; } c.kasFree += o.value; c.ended[id] = 'cancelled'; delete c.orders[id]; } });
+    submit({ apply: () => { if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; } c.kasFree += o.value; c.ended[id] = 'cancelled'; (c.outputs ??= []).push({ txid, index: 0, amount: o.value - fee }); delete c.orders[id]; } });
   }
   if (args[0] === 'recover') recover(c, fee);
   if (args[0] === 'merge') {
@@ -168,8 +183,14 @@ function recover(c, fee) {
       if (process.env.FAKE_KOB_CANCEL_FAIL) { e.cancel = { status: 'failed', reason: 'submit: orphan' }; code = 1; continue; }
       const o = c.orders[e.covenant_id];
       const txid = (c.n + 1).toString(16).padStart(64, '0');
-      if (args.includes('--yes')) {
+      // FAKE_KOB_CANCEL_LOST=n: the cancel is submitted, but a fill of n base units lands first and
+      // the cancel never confirms (R6T-2): the ask moves to amount - n, no output comes back.
+      if (args.includes('--yes') && process.env.FAKE_KOB_CANCEL_LOST && o.side === 1) {
         c.n += 1;
+        o.amount -= Number(process.env.FAKE_KOB_CANCEL_LOST);
+      } else if (args.includes('--yes')) {
+        c.n += 1;
+        (c.outputs ??= []).push({ txid, index: 0, amount: o.value - fee });
         if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; }
         c.kasFree += o.value - fee;
         c.ended[e.covenant_id] = 'cancelled';

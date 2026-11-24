@@ -110,6 +110,9 @@ function setup(safety = {}) {
   bot.log.quiet = true;
   bot.kob = new Kob(cfg, { prefixArgs: [fileURLToPath(new URL('./fake-kob.mjs', import.meta.url))] });
   const chain = () => JSON.parse(readFileSync(chainFile, 'utf8'));
+  // A test's node read also shows what the chain paid the bot back (a cancel's carrier, R6T-2).
+  let outs = null;
+  Object.defineProperty(bot, 'nodeOutputs', { configurable: true, get: () => outs, set: (f) => { outs = f && (async (...a) => [...(chain().outputs ?? []), ...(await f(...a))]); } });
   const calls = () => readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((a) => a.includes('--yes'));
   return { bot, chain, calls, dir };
 }
@@ -1441,3 +1444,99 @@ test('a STOP with 60 proven asks that are gone ends within the bounded number of
     reset();
   }
 });
+
+// R6T-2: an order ends on its cancel only once the node shows the cancel's own transaction (an
+// output of it to the bot's address), never because the cancel was submitted.
+const age = (bot) => { for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000; };
+
+test('a_cancel_that_never_confirmed_does_not_end_a_hidden_ask (R6T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const a = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    const left = c.orders[a].amount - 1_500_007;
+    // The indexer hides live ask A; the bot finds it on the node and cancels it. The cancel is
+    // submitted, but a fill of an odd amount lands first: A is live at amount - 1,500,007, and
+    // no output of the cancel ever shows. The indexer reports no fill.
+    hiddenIds = new Set([a]);
+    bot.kob.env.FAKE_KOB_CANCEL_LOST = '1500007';
+    await bot.cycle();
+    assert.ok(bot.state.orders[a].cancelSentAt, 'the cancel went out');
+    assert.equal(chain().orders[a].amount, left, 'and a fill landed instead');
+    delete bot.kob.env.FAKE_KOB_CANCEL_LOST;
+    for (let i = 0; i < 2; i++) {
+      age(bot);
+      await bot.cycle();
+    }
+    assert.ok(bot.state.orders[a], 'A is still tracked');
+    assert.equal(bot.state.orders[a].unconfirmed, true, 'unresolved, looked up each cycle');
+    assert.ok(chain().orders[a], 'and live on chain');
+    assert.ok(!bot.state.recent[a], 'not ended');
+  } finally {
+    reset();
+  }
+});
+
+test('a cancel that confirms on the node ends the ask (R6T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const a = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    hiddenIds = new Set([a]);
+    await bot.cycle();
+    const tx = bot.state.orders[a].cancelTxids.at(-1);
+    assert.equal(chain().ended[a], 'cancelled');
+    age(bot);
+    await bot.cycle();
+    assert.equal(bot.state.orders[a], undefined, 'ended');
+    assert.ok(bot.state.recent[a]);
+    assert.ok(Object.values(bot.state.payments).some((p) => p.txid === tx), 'on the output of its cancel');
+    assert.match(readFileSync(paths(bot.cfg.dataDir).log, 'utf8'), /ended: cancelled \(its cancel shows on the node\)/);
+  } finally {
+    reset();
+  }
+});
+
+test('a cancel-replaced order is kept until the node shows the replace; one a fill displaced stays tracked (R6T-2)', { timeout: 120_000 }, async () => {
+  for (const how of ['ok', 'lost']) {
+    reset();
+    const { bot, chain } = setup();
+    try {
+      bot.nodeOutputs = async () => [];
+      for (let i = 0; i < 3; i++) await bot.cycle();
+      const before = new Set(Object.keys(chain().orders));
+      const asks = [...before].filter((k) => chain().orders[k].side === 1);
+      // A move amends every quote; the CLI does it as a cancel-replace (strays on the orders).
+      bot.kob.env.FAKE_KOB_REPLACE_NEW = how;
+      kasUsd = 0.025 / 1.004;
+      await bot.cycle();
+      delete bot.kob.env.FAKE_KOB_REPLACE_NEW;
+      for (const a of asks) assert.ok(bot.state.orders[a]?.replacedBy, `${a} kept, as replaced`);
+      for (let i = 0; i < 2; i++) {
+        age(bot);
+        await bot.cycle();
+      }
+      if (how === 'ok') {
+        for (const a of asks) assert.equal(bot.state.orders[a], undefined, 'ended once the node holds its replacement');
+      } else {
+        for (const a of asks) {
+          assert.ok(chain().orders[a], 'live on chain, filled in part');
+          assert.ok(bot.state.orders[a], 'still tracked');
+          assert.equal(bot.state.orders[a].replacedBy, null);
+        }
+        const ghosts = Object.keys(bot.state.orders).filter((k) => !before.has(k) && !chain().orders[k]);
+        assert.deepEqual(ghosts, [], 'the replacements that never went out end');
+      }
+    } finally {
+      delete bot.kob.env.FAKE_KOB_REPLACE_NEW;
+      reset();
+    }
+  }
+});
+

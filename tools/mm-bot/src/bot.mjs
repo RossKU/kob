@@ -34,6 +34,7 @@ const PAYMENTS_KEEP = 2000; // payments to the bot's address no longer shown on 
 const PAYMENT_KEEP_MS = 7 * 86_400_000; // ... for a week after the node last showed them
 const FILLS_KEEP = 200; // fill events kept per order
 const HINTS_MAX = 32; // amounts left passed to kob recover per ask
+const CANCEL_TXIDS_KEEP = 8; // txids of the cancels sent per order, any of which may confirm (R6T-2)
 // A paid ask is kept as proven (R5T-1): its level and cap share are free, it is still looked up.
 export const PROVEN_MAX = 200; // proven records kept; past it a proof frees nothing
 // Lookups of proven records a cycle, in rotation: each costs up to 200 candidate scripts in the
@@ -84,14 +85,15 @@ function modeMessage(mode, prev, snap, c, feesSompi) {
  */
 const committed = (orders, blind, scale) => ({
   // A proven ask (R5T-1) no longer counts: the wallet's token balance bounds what can be placed.
-  askTokens: orders.filter((o) => o.side === 'sell' && !o.proven).reduce((a, o) => a + o.amountLeft, 0) + blind.filter((b) => b.side === 'sell').reduce((a, b) => a + b.tokens, 0),
-  bidKas: orders.filter((o) => o.side === 'buy').reduce((a, o) => a + bidCost(o.amountLeft, o.price, scale), 0) + blind.filter((b) => b.side === 'buy').reduce((a, b) => a + b.cost, 0),
+  // A cancel-replaced order whose replacement is tracked counts as that replacement (R6T-2).
+  askTokens: orders.filter((o) => o.side === 'sell' && !o.proven && !o.replaced).reduce((a, o) => a + o.amountLeft, 0) + blind.filter((b) => b.side === 'sell').reduce((a, b) => a + b.tokens, 0),
+  bidKas: orders.filter((o) => o.side === 'buy' && !o.replaced).reduce((a, o) => a + bidCost(o.amountLeft, o.price, scale), 0) + blind.filter((b) => b.side === 'buy').reduce((a, b) => a + b.cost, 0),
 });
 
 /** What the bot's own orders hold: tokens in asks (base units), KAS escrow in bids (sompi). */
 const holdings = (orders) => ({
-  askTokens: orders.filter((o) => o.side === 'sell' && !o.proven).reduce((a, o) => a + o.amountLeft, 0),
-  bidKas: orders.filter((o) => o.side === 'buy').reduce((a, o) => a + o.value, 0),
+  askTokens: orders.filter((o) => o.side === 'sell' && !o.proven && !o.replaced).reduce((a, o) => a + o.amountLeft, 0),
+  bidKas: orders.filter((o) => o.side === 'buy' && !o.replaced).reduce((a, o) => a + o.value, 0),
 });
 
 export class Bot {
@@ -133,7 +135,7 @@ export class Bot {
     const c = this.cfg;
     const m = this.state.mode;
     this.log.info(`start: ${c.network}, token ${c.token.label ?? ''} ${c.token.covenantId}, indexer ${indexerUrl(c)}, node ${c.node ? shownUrl(c.node) : '(CLI default)'}${this.dryRun ? ', DRY RUN (nothing is signed)' : ''}`);
-    if (!this.nodeOutputs) this.log.info('WARNING: node: a JSON wRPC node (ws://host:18110, testnet-10 18210) is needed to prove a fully filled ask paid; without one it stays unresolved and holds its share of the ask cap (README, tracking)');
+    if (!this.nodeOutputs) this.log.info('WARNING: node: a JSON wRPC node (ws://host:18110, testnet-10 18210) is needed to prove a fully filled ask paid (without one it stays unresolved and holds its share of the ask cap) and that a cancel confirmed (without one an ask ends once its cancel went out, with no proof that it confirmed) (README, tracking)');
     this.log.info(`mode ${m.mode}${m.reason ? `/${m.reason}` : ''}${m.reason === 'cooldown' ? `: quoting starts once the reference has been fresh and steady for ${c.safety.resumeAfterSec} s` : ''}`);
     for (;;) {
       let ok = false;
@@ -319,7 +321,7 @@ export class Bot {
       if (this.dryRun) continue;
       this.ownTx(r.txid);
       if (r.fee) addFee(this.state, 'cancel', r.fee);
-      Object.assign(this.state.orders[id], { pending: { kind: 'cancel', since: now, txid: r.txid ?? null }, cancelSentAt: now });
+      this.noteCancel(this.state.orders[id], r.txid, now);
     }
     this.log.action({ type: 'blind-cancel', reason: why, ids: sent, txids: sent.map((id) => res.get(id).txid), errors: due.filter((id) => !sent.includes(id)).map((id) => res.get(id)?.error ?? 'no record') });
     const left = due.length - sent.length;
@@ -467,6 +469,36 @@ export class Bot {
     return [...new Set(all.filter((n) => Number.isSafeInteger(n) && n > 0))].slice(0, HINTS_MAX);
   }
 
+  /**
+   * Records a cancel of `s` that went out: pending until seen, with its txid kept beside
+   * cancelSentAt, so that the order ends only once the node shows that transaction (R6T-2).
+   */
+  noteCancel(s, txid, now) {
+    s.pending = { kind: 'cancel', since: now, txid: txid ?? null };
+    s.cancelSentAt = now;
+    if (/^[0-9a-f]{64}$/.test(txid ?? '')) s.cancelTxids = [...(s.cancelTxids ?? []), txid].slice(-CANCEL_TXIDS_KEEP);
+  }
+
+  /**
+   * Whether the node showed that a cancel of `s` the bot sent confirmed (R6T-2): an output of the
+   * cancel's own transaction to the bot's address (the order's carrier comes back as change), or,
+   * for a cancel-replace, the replacement live on the node. A submitted cancel is no proof: a fill
+   * that lands first leaves the ask live at an amount the search may not reach. Without a JSON
+   * wRPC node (testnet-10 only) the bot cannot see its outputs, and the cancel going out is taken.
+   */
+  cancelConfirmed(s) {
+    if (s.pending?.kind !== 'cancel' && s.cancelSentAt == null) return false;
+    if (!this.nodeOutputs || s.replaceSeen) return true;
+    const txs = new Set([...(s.cancelTxids ?? []), s.pending?.kind === 'cancel' ? s.pending.txid : null].filter(Boolean));
+    return Object.values(this.state.payments).some((p) => txs.has(p.txid));
+  }
+
+  /** Whether the node showed an output of a placement of unknown outcome: it went out (R6T-2). */
+  wentOut(s) {
+    const t = s.pending?.kind === 'place' ? s.pending.txid : null;
+    return !!t && !!this.nodeOutputs && Object.values(this.state.payments).some((p) => p.txid === t);
+  }
+
   /** One cancel through the node from the bot's record only (kob recover --cancel). */
   async cancelNode(id) {
     const r = (await this.cancelMany([id])).get(id);
@@ -530,7 +562,7 @@ export class Bot {
           if (r.ok && !this.dryRun) {
             this.ownTx(r.txid);
             if (r.fee) addFee(this.state, 'cancel', r.fee);
-            Object.assign(s, { pending: { kind: 'cancel', since: now, txid: r.txid ?? null }, cancelSentAt: now });
+            this.noteCancel(s, r.txid, now);
           }
         } else if (r?.live === false) {
           pass.looked++;
@@ -664,8 +696,13 @@ export class Bot {
       const one = Object.entries(this.state.orders).find(([id, s]) => s.own?.state?.kind === kind && !s.proven && !check.includes(id));
       if (one) check.push(one[0]);
     }
+    // A cancel-replaced record due for its check: its replacement is looked up too, and live on
+    // the node it proves that the replace confirmed (R6T-2).
+    const replaced = check.filter((id) => this.state.orders[this.state.orders[id]?.replacedBy]);
+    for (const id of replaced) if (!check.includes(this.state.orders[id].replacedBy)) check.push(this.state.orders[id].replacedBy);
     if (check.length) {
       const res = await this.nodeCheck(check, hints);
+      for (const id of replaced) if (res.get(this.state.orders[id].replacedBy)?.status === 'live') this.state.orders[id].replaceSeen = true;
       for (const id of check) if (this.state.orders[id]) await this.settle(id, res.get(id), byId.get(id), now);
     }
     for (const [id, r] of Object.entries(this.state.recent)) if (now - r.endedAt > 3_600_000) delete this.state.recent[id];
@@ -733,6 +770,15 @@ export class Bot {
       }
       if (s.fate) this.log.info(`${tag}: the placement whose outcome was unknown is on chain`);
       s.fate = null;
+      s.cancelUnseen = false;
+      if (s.replacedBy) {
+        // Its cancel-replace never landed (it spends this very output): the replacement record is
+        // a placement that may not have gone out, and this order is tracked again (R6T-2).
+        const n = this.state.orders[s.replacedBy];
+        this.log.info(`${tag}: its cancel-replace ${s.pending?.txid ?? ''} did not land: the order is live at ${r.txid}`);
+        if (n) n.fate = 'unknown';
+        s.replacedBy = null;
+      }
       s.unconfirmed = false;
       if (s.pending?.kind === 'cancel' ? now - s.pending.since > timeout : s.pending) s.pending = null; // an unseen cancel is sent again
       // A proven ask the node holds live (R5T-1: a proof the indexer forged, or a fill it named
@@ -757,16 +803,33 @@ export class Bot {
       return;
     }
     if (r.status === 'gone' || r.status === 'foreign') {
-      const cancelled = s.pending?.kind === 'cancel' || s.cancelSentAt != null;
+      const sent = s.pending?.kind === 'cancel' || s.cancelSentAt != null;
+      let cancelled = this.cancelConfirmed(s);
+      // The cancel may have confirmed after this cycle's read of the payments: one more read a
+      // cycle, after the lookup, so that a cancel the lookup saw land is not taken for a lost one.
+      if (!cancelled && sent && r.status === 'gone' && r.verified && !r.spent && this.nodeOutputs && this.paymentsReread !== now) {
+        this.paymentsReread = now;
+        if (await this.seePayments(now)) cancelled = this.cancelConfirmed(s);
+      }
+      // A placement of unknown fate whose transaction shows an output on the node went out: from
+      // now on it is an order like any other (R6T-2).
+      if (s.fate && this.wentOut(s)) {
+        this.log.info(`${tag}: the placement whose outcome was unknown went out (the node shows an output of ${s.pending.txid})`);
+        s.fate = null;
+      }
       // Proof that it ended: no output at a script that never changes (a bid), the bot's own
-      // cancel, or a placement of unknown fate that neither the node nor the indexer shows. An ask
-      // the node does not find may sit at an amount the search did not reach (a fill of any
-      // amount), so that alone is no proof: it is kept as unresolved (R3T-3).
-      // An ask also ends once the fills of its whole amount are paid in outputs to the bot that
-      // the node showed: a lying indexer would need a real payment to make the bot forget it.
+      // cancel confirmed on the node (R6T-2), or a placement of unknown fate that neither the node
+      // nor the indexer shows. An ask the node does not find may sit at an amount the search did
+      // not reach (a fill of any amount), so that alone is no proof: it is kept as unresolved
+      // (R3T-3). So is one whose cancel went out but never showed on the node: a fill that landed
+      // first leaves it live (R6T-2); it is looked up, and cancelled again once found.
       const ended = r.status === 'gone' && r.verified && (r.spent || cancelled || (s.fate && !o));
+      if (!ended && sent && !s.cancelUnseen && r.status === 'gone' && r.verified) {
+        s.cancelUnseen = true;
+        this.log.info(`${tag}: not found on the node, but no cancel the bot sent (${(s.cancelTxids ?? []).map(short).join(', ') || '-'}) shows on it: not taken as cancelled (a fill may have landed first)`);
+      }
       if (ended) {
-        const status = s.fate ? 'the placement never went out' : cancelled ? 'cancelled' : 'spent on the node (filled or ended)';
+        const status = s.fate ? 'the placement never went out' : cancelled ? 'cancelled (its cancel shows on the node)' : 'spent on the node (filled or ended)';
         this.log.info(`${tag} ended: ${status}`);
         this.log.action({ type: 'ended', id, side: s.side, level: s.level, status });
         this.state.recent[id] = { side: s.side, level: s.level, endedAt: now };
@@ -800,7 +863,7 @@ export class Bot {
       }
       if (!s.unconfirmed) {
         const what = r.status === 'foreign' ? 'names another maker' : !r.verified ? 'is not found under a template not yet proven on the node'
-          : `is not found at any state the bot can follow (a fill by an amount the search does not reach, or a full fill)${o ? ', though the indexer lists it' : ''}`;
+          : `is not found at any state the bot can follow (a fill by an amount the search does not reach, or a full fill)${o ? ', though the indexer lists it' : ''}${sent ? ', and no cancel the bot sent shows on the node' : ''}`;
         this.alert('error', 'node-unconfirmed', `Order ${tag} ${what}: it is kept as unresolved (it counts toward the capital cap, its level is not quoted again, and pulls and STOP wait for it); each cycle the bot looks it up on the node with every amount it knows and cancels it once found. Check it by hand (kob recover --from ${this.p.check} --amount-left ${id}=<amount left>); once it has ended, stop the bot and drop it (mm-bot drop --config FILE --id ${id}), which asks the node first.`);
       }
       s.unconfirmed = true;
@@ -824,7 +887,9 @@ export class Bot {
     return Object.entries(this.state.orders).map(([id, s]) => ({
       // A parked ask (past its expiry, unresolved) gives its level back but stays counted; a proven
       // one (paid, R5T-1) gives both back until the node finds it live.
-      id, side: s.side, level: s.parked || s.proven ? 1000 + s.level : s.level, price: s.price, quotedFair: s.quotedFair, amountLeft: s.amountLeft ?? s.amount, value: s.value ?? 0,
+      // A cancel-replaced order (R6T-2) is kept until the node shows the replace; its replacement holds the level.
+      id, side: s.side, level: s.parked || s.proven || s.replacedBy ? 1000 + s.level : s.level,
+      replaced: !!(s.replacedBy && this.state.orders[s.replacedBy]), price: s.price, quotedFair: s.quotedFair, amountLeft: s.amountLeft ?? s.amount, value: s.value ?? 0,
       proven: !!s.proven && !s.proven.liveAt,
       // An unresolved order (R3T-3) holds its level and is never amended; a pull still cancels it.
       pending: !!s.pending || !!s.unconfirmed || (!!s.proven && !s.proven.liveAt),
@@ -1171,16 +1236,18 @@ export class Bot {
           pending: { kind: 'amend', since: now, txid: r.txid } });
       }
       else {
-        // A cancel-replace: the order has a new id.
-        delete this.state.orders[a.id];
-        this.state.recent[a.id] = { side: a.side, level: a.level, endedAt: now };
+        // A cancel-replace: the order has a new id. The old record stays, as cancelled, until the
+        // node shows the replace (an output of it, or the replacement live): a fill that lands
+        // first leaves the old order live (R6T-2).
         const id = r.newIds[0];
         if (id) this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
-        this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}`);
+        s.replacedBy = id ?? null;
+        this.noteCancel(s, r.txid, now);
+        this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}; the old record is kept until the node shows the replace`);
       }
     } else if (a.kind === 'cancel') {
       const s = this.state.orders[a.id];
-      if (s) Object.assign(s, { pending: { kind: 'cancel', since: now, txid: r.txid }, cancelSentAt: now });
+      if (s) this.noteCancel(s, r.txid, now);
     }
     this.save();
     return r;

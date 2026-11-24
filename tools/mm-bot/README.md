@@ -46,8 +46,13 @@ On testnet-10 it is a warning.
   by its bounded search (`amountLeft - k x minFill`); a fill of another amount is not followed. Cancels go through the
   node from the record too (`kob recover --cancel`); `kob cancel <id>` is the fallback for an order the record cannot
   find. An order leaves the state file only on proof that it ended, under an order template the node has proven (an
-  order found live under it): a bid has no unspent output at its script (a bid's script never changes), the bot's own
-  cancel of it went out, or a placement of unknown outcome is shown by neither the node nor the indexer. An ask the node
+  order found live under it): a bid has no unspent output at its script (a bid's script never changes), the node shows
+  the bot's own cancel of it confirmed (an output of the cancel's transaction to the bot's address: the order's carrier
+  comes back as change; for a cancel-replace, its replacement live on the node), or a placement of unknown outcome is
+  shown by neither the node nor the indexer (and the node shows no output of its transaction). A cancel that was only
+  submitted is no proof: a fill that lands first leaves the ask live at an amount the search may not reach, so the ask
+  stays unresolved, is looked up each cycle and cancelled again once found. Without a JSON wRPC node (testnet-10 only)
+  the bot cannot see its outputs, and an ask ends once its cancel went out, as before (the start log warns). An ask the node
   does not find is not proof (it may sit at an amount the search did not reach): it is kept as unresolved, with one
   error alert. Until an order leaves, it counts toward the side caps, its level is not quoted again, it is never
   amended, every pull and STOP try to cancel it, and each cycle it is looked up again.
@@ -301,7 +306,8 @@ days (about 0.07 KAS with a merge). Replayed over the soak's real market, where 
 - KOB, the CLI and this bot are pre-release and unaudited, and the CLI's JSON may change: pin the CLI version and dry-run
   after every upgrade.
 - The key is a hot key that signs without asking; keep on it only what the bot needs.
-- A cancel can lose a race with a fill.
+- A cancel can lose a race with a fill. The bot then keeps the order (it ends only once the node shows the cancel's own
+  transaction), looks it up and cancels it again once found.
 - The trust in the services the bot reads: the indexer (`indexer`) says which orders and fills exist, and
   `node` is the one node the bot and every CLI call it makes then trust (without `node` the CLI asks two public nodes
   that must agree). A lying node alone cannot end an ask (the fills come from the indexer), but a lying node and a
