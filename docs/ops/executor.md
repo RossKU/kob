@@ -3414,8 +3414,7 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   not keeping up; `/v1/health` `chain_proofs_off: true`, `kob_indexer_chain_proofs_off` 1, `chain proofs OFF` on the
   status line, and a warning at the start. Chain the cross-checking node reports past the authority's answer decides
   nothing and costs nobody anything (R4C1-M2). A node other than the authority that claims a window is larger than the
-  size it was asked for fails that window (a strike, benched for windows after three: 60 s, doubling up to 15 minutes),
-  and the window goes to the next node; only the authority's own answer that is too large splits a window, so another
+  size it was asked for loses that window: it goes to the next node (the authority last), and the node backs off; only the authority's own answer that is too large splits a window, so another
   node cannot shrink the windows of a catch-up the authority is judged by (R6C1-L3).
   **A window from another node whose KOB transactions differ from the authority's copy** (R4C1-L1): when the authority
   is a public node, its copy is only vouched for by ids, so the referee (or a third cross-checking node) decides before

@@ -626,8 +626,8 @@ async fn a_disk_full_for_ten_minutes_neither_deposes_nor_strikes_an_honest_autho
 
 /// R6C1-L3: during a catch-up the cross-checking node claims that every window asked of it with a size limit is larger
 /// than the limit. Taken as the window's size, that shrank every later window to one chain block and slowed the
-/// catch-up below real time, which failed the honest authority's period. Now it is the node's failure: it is struck and
-/// benched for windows (60 s, doubling), the windows go to the authority, and the catch-up goes on at its pace.
+/// catch-up below real time, which failed the honest authority's period. Now the window goes to the next node (the authority
+/// last) and the claiming node backs off; only the authority's own answer splits a window, and the catch-up goes on.
 #[tokio::test(start_paused = true)]
 async fn a_cross_node_that_claims_oversized_windows_does_not_get_the_authority_deposed() {
     let _g = serial().await;
@@ -655,6 +655,6 @@ async fn a_cross_node_that_claims_oversized_windows_does_not_get_the_authority_d
     assert_eq!(source.board().authority(), 0, "never handed over");
     assert_eq!(failing, 0, "never failing");
     assert!(lag_secs(&health, &clock).is_some_and(|l| l <= 5), "caught up: {:?}", lag_secs(&health, &clock));
-    // each claim is the node's failure: it backs off (and after three strikes in a row it is benched for windows)
-    assert!(h.nodes[1].windows_failed >= 1 && h.nodes[1].windows_ok == 0, "the claiming node pays for it: {:?}", h.nodes[1]);
+    // each claim sends the window to the next node and backs the claiming node off
+    assert!(h.nodes[1].out_of_sync >= 1 && h.nodes[1].windows_ok == 0, "the claiming node pays for it: {:?}", h.nodes[1]);
 }

@@ -736,7 +736,7 @@ impl<S: ChainSource> Follower<S> {
         if let Some(skew) = jumped {
             tracing::info!(secs = skew / 1_000, "the wall clock moved against the monotonic clock (a host suspend or a clock step): the progress rule's period starts again");
         }
-        self.judge();
+        self.judge(true);
     }
 
     /// `f`, with the running time ticking (and the progress rule judging) every second while it
@@ -766,7 +766,7 @@ impl<S: ChainSource> Follower<S> {
     /// ([`Follower::judge`]).
     async fn pace(&self, cursor: Hash32) -> PaceState {
         self.learn_cursor_time(cursor).await;
-        self.judge()
+        self.judge(false)
     }
 
     /// The progress rule now (module documentation, *Progress*), at every tick and at the end of
@@ -774,13 +774,19 @@ impl<S: ChainSource> Follower<S> {
     /// committed, so a lag that rises above the tolerance inside a long step is seen while it is
     /// there (R6C1-M1). The verdict is published in `/v1/health` (`authority_pace`); a confirmed
     /// deposal is told the source ([`ChainSource::deposal_confirmed`]). A period that failed is
-    /// left for [`Follower::hand_over`].
-    fn judge(&self) -> PaceState {
+    /// left for [`Follower::hand_over`]. With `at_tick`, a cursor whose time is not known is left
+    /// for the end of the step, after its header was asked for.
+    fn judge(&self, at_tick: bool) -> PaceState {
         let Some(cursor) = *self.cursor_seen.lock().unwrap_or_else(|e| e.into_inner()) else {
             return PaceState::Unknown;
         };
         let ts = self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == cursor).map(|(_, t)| t);
         let lag = ts.map(|t| self.wall_ms() as i64 - t as i64);
+        // A cursor whose time is not known yet (a start, a rewind, a header that did not hash) is
+        // judged at the end of a step, after its header was asked for, not by the ticks before.
+        if at_tick && lag.is_none() {
+            return PaceState::Unknown;
+        }
         let key = self.source.authority_node();
         let tol = self.cfg.authority_lag_tolerance.as_millis() as i64;
         let stall = self.cfg.authority_stall.as_millis() as u64;
