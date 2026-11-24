@@ -251,6 +251,8 @@ export class KobService {
       }
       case 'kob_cancel':
         return { argv: ['cancel', need(RE.id, a.id, 'id').toLowerCase()] };
+      case 'kob_sweep':
+        return { argv: ['sweep', need(RE.id, a.id, 'id').toLowerCase()] };
       case 'kob_take': {
         if ((a.max_price == null) === (a.min_price == null)) {
           throw new Refusal('PRICE_BOUND_REQUIRED: give exactly one of max_price (you buy from a sell order) or min_price (you sell into a buy order)');

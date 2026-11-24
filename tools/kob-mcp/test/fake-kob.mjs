@@ -91,9 +91,18 @@ switch (args[0]) {
     sign(`amend in place ${args[1]}`, -FEE, plan, [], () => { o.price = price; o.tip = tip; });
     break;
   }
+  case 'sweep': {
+    // The strays come back to the wallet; the order stays (R8T-5).
+    const o = c.orders[args[1]];
+    if (!o) { process.stderr.write('error: the order is not live\n'); process.exit(1); }
+    sign(`sweep ${args[1]}`, -FEE, { action: 'sweep', covenant_id: args[1] }, [], () => { o.strays = 0; });
+    break;
+  }
   case 'cancel': {
     const o = c.orders[args[1]];
     if (!o) { process.stderr.write('error: the order is not live\n'); process.exit(1); }
+    // Strays the cancel cannot take make it refuse, as kob cancel does (R8F3c-4).
+    if (o.strays) { process.stderr.write(`error: the order owns ${o.strays} stray UTXO(s) a cancel cannot take: run \`kob sweep ${args[1]}\` first: nothing signed\n`); process.exit(1); }
     sign(`cancel ${args[1]}`, o.value - FEE, { action: 'cancel', covenant_id: args[1] }, [], () => { delete c.orders[args[1]]; });
     break;
   }

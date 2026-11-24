@@ -36,7 +36,7 @@ export const TOOLS = [
   ['kob_order', 'Order details', 'One order as the indexer sees it (terms, status, custody, children), optionally with its events.',
     { id, events: z.boolean().optional() }, 'read'],
   ['kob_fee_estimate', 'Fee estimate', 'A dry run of a write tool: the fee, the KAS that would leave the wallet and whether the limits pass. Signs nothing.',
-    { tool: z.enum(['kob_place_limit', 'kob_replace', 'kob_cancel', 'kob_take', 'kob_merge', 'kob_claim', 'kob_send', 'kob_token_create']),
+    { tool: z.enum(['kob_place_limit', 'kob_replace', 'kob_cancel', 'kob_sweep', 'kob_take', 'kob_merge', 'kob_claim', 'kob_send', 'kob_token_create']),
       args: z.record(z.string(), z.any()).describe('the arguments of that tool, without confirm') }, 'read'],
   ['kob_place_limit', 'Place a limit order', `A resting limit order to buy or sell a token for KAS. A buy locks price x amount in KAS; every order holds a 1 KAS carrier.${WRITE_NOTE}`,
     { token, side: z.enum(['buy', 'sell']), amount: tokenAmount, price: kasAmount.describe('KAS per whole token, all-in: "0.25KAS"'),
@@ -47,6 +47,9 @@ export const TOOLS = [
   ['kob_replace', 'Amend an order', `Amend a live order: price, amount, tip or renew (in place where it can, else cancel-replace in one transaction).${WRITE_NOTE}`,
     { id, price: kasAmount.optional(), amount: tokenAmount.optional(), tip: kasAmount.optional(), renew: z.boolean().optional(), confirm }, 'write'],
   ['kob_cancel', 'Cancel an order', `Cancel one of your live orders; its tokens and KAS come back to the wallet.${WRITE_NOTE}`, { id, confirm }, 'write'],
+  // Anyone can send token UTXOs to an order's covenant id; such strays make kob cancel and kob
+  // replace refuse until they are swept (R8T-5).
+  ['kob_sweep', 'Sweep an order\'s strays', `Return the stray token UTXOs that one of your live orders owns to the wallet; the order stays live at its terms. Use it when kob_cancel or kob_replace says to run kob sweep first.${WRITE_NOTE}`, { id, confirm }, 'write'],
   ['kob_take', 'Take an order', `Fill a resting order yourself. A price bound is required: max_price when you buy from a sell order, min_price when you sell into a buy order; a worse price is refused before signing.${WRITE_NOTE}`,
     { id, token: z.string().regex(/^[0-9a-fA-F]{64}$/).describe('the covenant id of the token you mean to trade; an order of another token is refused'),
       amount: tokenAmount, max_price: kasAmount.optional(), min_price: kasAmount.optional(), confirm }, 'write'],

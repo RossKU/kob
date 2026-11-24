@@ -31,7 +31,8 @@ Config: [config.example.json](config.example.json) (defaults in [src/config.mjs]
 
 - Read: `kob_status`, `kob_tokens`, `kob_book`, `kob_stats`, `kob_candles`, `kob_balances`, `kob_orders`, `kob_order`,
   `kob_fee_estimate`.
-- Write: `kob_place_limit`, `kob_replace`, `kob_cancel`, `kob_take` (token id and price bound required), `kob_merge`, `kob_claim`,
+- Write: `kob_place_limit`, `kob_replace`, `kob_cancel`, `kob_sweep` (returns the strays an order owns, which make `kob_cancel` and
+  `kob_replace` refuse until swept), `kob_take` (token id and price bound required), `kob_merge`, `kob_claim`,
   `kob_token_create` (`sell: "curve"` puts the new supply on a sell curve in the genesis, `keep_percent` of it kept; `lock_until: "+90d"` locks the kept share on chain until then, without a sale `keep_percent` of the supply, default all; `lock_until` is `+N` days, hours or minutes, a UTC date, or unix time in milliseconds, exactly 13 digits, at most 10 years ahead), `kob_send`.
 
 A write first returns its dry-run plan and a `planId`; it is sent only when the same call comes back with

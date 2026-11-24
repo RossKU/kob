@@ -155,6 +155,10 @@ On testnet-10 it is a warning. They also refuse until `quotes.askPartialFills` i
   The bot reads the maker list for its token only, newest first, at most 1,000 orders (10 pages of 100). When that cap
   is reached with more left (anyone can post orders under the bot's key), an order the list leaves out may only be
   older: it is not taken as hidden and not cancelled for it, and the bot goes on from its own record and the node.
+- **A refused amend.** When the CLI refuses an order's amend twice in a row (for example: anyone can send a stray token
+  UTXO to an order, and `kob replace` then refuses until it is swept), the bot cancels the order through the node
+  (`kob recover --cancel`, which strays do not block), raises one `amend-refused` alert with the CLI's reason, and places
+  the level again.
 - **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels through the node from its
   records, with no indexer. While the reads fail, the quotes are also pulled this way once fair has moved more than half
   the spread from the fair they were set at, and the 1-minute jump compares with the newest reading at least a minute
@@ -240,7 +244,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 |---|---|---|
 | `network` | `mainnet` | `mainnet` or `testnet-10` |
 | `node` | `null` | wRPC URL; `null`: `KOB_NODE_WRPC`, else the CLI's two public nodes. Mainnet needs a JSON wRPC URL (`check`, `run` and `once` refuse without one). The bot passes it to every CLI call too, so it then trusts that one node instead of the CLI's two public nodes that must agree: run your own |
-| `indexer` | `null` | KOB indexer URL; `null`: the network's public one |
+| `indexer` | `null` | KOB indexer URL (https:// on mainnet); `null`: the network's public one |
 | `kobCli` | `kob` | path of the CLI |
 | `keyFile` | `null` | key file; `null`: `KOB_KEY` |
 | `dataDir` | `./run` | state, logs, STOP |

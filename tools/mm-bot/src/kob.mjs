@@ -95,6 +95,8 @@ export class Kob {
       if (plan.code !== 0 || errs.length) {
         return { ok: false, error: `plan refused (exit ${plan.code}): ${errs.map((i) => `${i.code} ${i.message}`).join('; ') || plan.stderr || 'no output'}`, doc: plan.json };
       }
+      // A dry run whose answer does not read is no pass (R8T-3): nothing was signed.
+      if (!plan.json) return { ok: false, error: `plan unreadable (exit 0, no JSON document): ${plan.stderr || 'no output'}`, doc: null };
       plannedFee = Number(plan.json?.transaction?.fee ?? plan.json?.fee ?? 0);
       planDoc = plan.json;
       if (this.dryRun) {
@@ -114,6 +116,9 @@ export class Kob {
       const links = doc.links.filter((l) => l.status === 'submitted');
       return { ok: true, txid: links.map((l) => l.txid).join(','), txids: links.map((l) => l.txid), fee: Number(doc.fee ?? 0), newIds: [], doc };
     }
+    // Exit 0 with an answer that does not read may have been sent (R8T-3): it counts as sent, its
+    // outcome unknown, with the dry run's document (the in-flight rules decide).
+    if (!doc) return { ok: false, error: `unreadable answer after --yes (exit 0): ${r.stderr || 'no output'}`, doc: planDoc, sentFee: plannedFee || 1 };
     if (doc?.result?.status !== 'submitted') return { ok: false, error: `not submitted: ${r.stderr || 'no result'}`, doc, sentFee };
     return { ok: true, txid: doc.result.txid, fee: Number(doc.result.fee ?? doc.transaction?.fee ?? 0), newIds: doc.new_covenant_ids ?? [], doc };
   }
