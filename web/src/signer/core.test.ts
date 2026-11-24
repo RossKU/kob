@@ -383,15 +383,16 @@ describe('signer core: the ids it answers with (R9FB2-5, R9FB2-9)', () => {
     a.core.importKey(MAKER_SK);
     expect(a.send(mk(plan.prep, plan.built))).not.toBeNull();
     expect(a.core.approve('c1')).toBe(true);
-    // the request names an id for the preparation that is not the one signed, and the genesis
-    // spends that id: the summary agrees with itself, the signature step refuses it
-    const fake = 'cd'.repeat(32);
-    const prep = { ...plan.prep, tx: { ...plan.prep.tx, id: fake } };
-    const built = JSON.parse(JSON.stringify(plan.built)) as BuiltTx;
-    for (const i of built.tx.inputs) if (i.transactionId === plan.prep.tx.id) i.transactionId = fake;
+    // Another preparation (another declaration of the same size, so the same output 0) sent under
+    // the id of the first, with the first's genesis, whose digests are honest: summary and finalize
+    // both accept it, and only the id of the preparation actually signed tells it apart.
+    const other = planIssue(kob, { ...emptyIssueForm(), name: 'Curve Cain', ticker: 'CURV', decimals: 8, supply: '1000000', sale: { ...defaultSaleForm(), mode: 'keep' } } as never, { funding: [utxo], maker: MAKER_PK, network: 'testnet-10' });
+    expect(other.prep.tx.id).not.toBe(plan.prep.tx.id);
+    expect(other.prep.tx.outputs[0]).toEqual(plan.prep.tx.outputs[0]);
+    const swapped = { ...other.prep, tx: { ...other.prep.tx, id: plan.prep.tx.id } } as BuiltTx;
     const b = setup();
     b.core.importKey(MAKER_SK);
-    expect(b.send(mk(prep as BuiltTx, built))).not.toBeNull();
+    expect(b.send(mk(swapped, plan.built))).not.toBeNull();
     expect(b.core.approve('c1')).toBe(false);
   });
 });
