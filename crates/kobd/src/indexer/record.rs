@@ -764,6 +764,15 @@ pub struct PreTx {
     pub placements: HashMap<Vec<u8>, Result<Vec<payload::RecoveredOrder>, String>>,
 }
 
+/// Whether `tx` is on the coinbase lane (subnetwork id `[1, 0, ...]`): a block's coinbase.
+///
+/// KOB never reads one. Its payload is the block's blue score and miner data, chosen by consensus, so it may start
+/// with any bytes, `KOB1` included (blue score 826,429,259, R9C1-M1); it has no inputs and no covenant outputs, so it
+/// can place, amend or sweep nothing.
+pub fn is_coinbase(tx: &Tx) -> bool {
+    tx.subnetwork_id.as_ref().is_some_and(|s| s.0.as_slice() == kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE.as_bytes())
+}
+
 /// Pure results of a batch, by transaction id.
 pub type PreBatch = HashMap<Hash32, PreTx>;
 
@@ -772,6 +781,9 @@ impl PreTx {
     ///
     /// It is `None` for a transaction without a KOB1 payload or covenant input / output.
     pub fn compute(tx: &Tx) -> Option<PreTx> {
+        if is_coinbase(tx) {
+            return None;
+        }
         let has_kob1 = tx.payload.0.starts_with(payload::MAGIC);
         let any_cov_in = tx.inputs.iter().any(|i| spent_of(i).is_some_and(|u| u.covenant_id.is_some()));
         let any_cov_out = tx.outputs.iter().any(|o| o.covenant.is_some());
@@ -856,6 +868,7 @@ pub fn precompute(blocks: &[&[Tx]], threads: usize) -> PreBatch {
     let txs: Vec<&Tx> = blocks
         .iter()
         .flat_map(|b| b.iter())
+        .filter(|t| !is_coinbase(t))
         .filter(|t| {
             t.payload.0.starts_with(payload::MAGIC)
                 || t.outputs.iter().any(|o| o.covenant.is_some())
@@ -988,6 +1001,10 @@ impl Extractor<'_> {
     ///
     /// Without it, everything is computed here.
     pub fn extract_with(&self, tx: &Tx, pos: u32, pre: Option<&PreTx>) -> DbResult<Option<TxRecord>> {
+        // A coinbase is never read (R9C1-M1).
+        if is_coinbase(tx) {
+            return Ok(None);
+        }
         let reveal_of = |i: usize, inp: &TxInput, spk: &[u8]| -> Option<Reveal> {
             match pre.and_then(|p| p.reveals.get(&(i as u32))) {
                 Some(r) => r.clone(),
@@ -1399,6 +1416,42 @@ mod tests {
         assert!(ex.extract(&tx(crate::script::spk_bytes(&other)), 0).unwrap().is_none());
         let look_alike = TokenState::Kcc20(holder.clone()).spk_with(token_template(TemplateId::Kcc20Ref));
         assert!(ex.extract(&tx(crate::script::spk_bytes(&look_alike)), 0).unwrap().is_none());
+    }
+
+    /// R9C1-M1: a coinbase is never read: its payload may start with `KOB1` (the blue score 826,429,259 little-endian)
+    /// and it writes no row, has no pure work and places nothing; the same payload on another lane is read.
+    #[test]
+    fn a_coinbase_whose_payload_reads_kob1_is_never_read() {
+        use crate::rpc::types::*;
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let ex = Extractor { conn: &conn };
+        let mut payload = 826_429_259u64.to_le_bytes().to_vec();
+        payload.extend_from_slice(&[0u8; 24]);
+        assert!(payload.starts_with(payload::MAGIC));
+        let tx = |sub: [u8; 20]| Tx {
+            inputs: vec![],
+            outputs: vec![TxOutput {
+                value: 1_000_000_000,
+                script_public_key: crate::hex::HexBytes(vec![0, 0, 0x20, 1, 0xac]),
+                covenant: None,
+            }],
+            payload: crate::hex::HexBytes(payload.clone()),
+            verbose_data: TxVerbose { transaction_id: Hash32([2; 32]), block_time: 0, block_hash: None },
+            version: Some(0),
+            lock_time: Some(0),
+            subnetwork_id: Some(crate::hex::HexBytes(sub.to_vec())),
+            gas: None,
+        };
+        let mut coinbase = [0u8; 20];
+        coinbase[0] = 1;
+        let cb = tx(coinbase);
+        assert!(is_coinbase(&cb));
+        assert!(PreTx::compute(&cb).is_none());
+        assert!(ex.extract(&cb, 0).unwrap().is_none(), "a coinbase writes no row");
+        assert!(precompute(&[std::slice::from_ref(&cb)], 1).is_empty());
+        let native = tx([0u8; 20]);
+        assert!(!is_coinbase(&native));
+        assert!(PreTx::compute(&native).is_some(), "the same payload on the native lane is a KOB1 payload");
     }
 
     /// A token genesis names the states of its outputs in its payload (`genesis_states`).

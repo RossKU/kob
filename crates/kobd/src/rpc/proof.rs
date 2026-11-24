@@ -649,9 +649,11 @@ impl ChainProof {
                     None => return refuse(format!("transaction {id} has no 20-byte subnetwork id")),
                 };
                 if &sub == coinbase {
-                    let kob = t.payload.0.starts_with(kob_protocol::payload::MAGIC);
-                    if !t.inputs.is_empty() || t.outputs.iter().any(|o| o.covenant.is_some()) || kob {
-                        return refuse(format!("coinbase-lane transaction {id} has inputs, covenant outputs or a KOB payload"));
+                    // Not proven, so it must carry nothing KOB reads: no inputs, no covenant outputs. Its payload is
+                    // consensus's (the blue score first), may start with any bytes, and KOB never reads a coinbase
+                    // (`indexer::record::is_coinbase`, R9C1-M1).
+                    if !t.inputs.is_empty() || t.outputs.iter().any(|o| o.covenant.is_some()) {
+                        return refuse(format!("coinbase-lane transaction {id} has inputs or covenant outputs"));
                     }
                     continue;
                 }
@@ -1314,14 +1316,33 @@ pub(crate) mod tests {
         }
     }
 
-    /// A coinbase-lane transaction is not proven, so it may carry nothing KOB reads.
+    /// R9C1-M1: a coinbase's payload is the block's blue score first (little-endian), so at blue score 826,429,259 it
+    /// starts with `KOB1`. Such a real coinbase is proven (KOB never reads a coinbase, `indexer::record::is_coinbase`).
+    /// Before, the coinbase-lane rule refused it, and every kobd stopped at that chain block.
     #[test]
-    fn a_coinbase_lane_transaction_with_kob_data_is_refused() {
+    fn a_real_coinbase_at_the_kob1_blue_score_is_proven() {
         for fx in both() {
             let mut raw = fx.raw();
             let t = &mut raw.chain_block_accepted_transactions[0].accepted_transactions[0];
             assert_eq!(t.subnetwork_id.as_ref().unwrap().0[0], 1, "the first is the coinbase");
-            t.payload.0 = kob_protocol::payload::MAGIC.to_vec();
+            assert!(t.payload.0.len() >= 8);
+            t.payload.0[..8].copy_from_slice(&826_429_259u64.to_le_bytes());
+            assert!(t.payload.0.starts_with(kob_protocol::payload::MAGIC));
+            reid(t);
+            let r = fx.run(&mut fx.checker(), &raw);
+            assert!(r.is_ok(), "{}: {r:?}", fx.network);
+        }
+    }
+
+    /// A coinbase-lane transaction is not proven, so it may carry nothing KOB could read: one with an input is refused.
+    #[test]
+    fn a_coinbase_lane_transaction_with_an_input_is_refused() {
+        for fx in both() {
+            let mut raw = fx.raw();
+            let (b, k) = native_tx(&raw);
+            let input = raw.chain_block_accepted_transactions[b].accepted_transactions[k].inputs[0].clone();
+            let t = &mut raw.chain_block_accepted_transactions[0].accepted_transactions[0];
+            t.inputs.push(input);
             reid(t);
             refused(fx.run(&mut fx.checker(), &raw), "coinbase-lane");
         }

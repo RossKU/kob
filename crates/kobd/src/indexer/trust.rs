@@ -151,7 +151,9 @@ impl TrustContext {
 fn places(t: &crate::rpc::types::Tx) -> bool {
     use kob_protocol::payload::{decode, MAGIC};
     let payload = &t.payload.0;
-    payload.starts_with(MAGIC)
+    // a coinbase is never read (R9C1-M1)
+    !super::record::is_coinbase(t)
+        && payload.starts_with(MAGIC)
         && decode(payload).ok().flatten().is_some_and(|p| p.records.iter().any(|r| super::record::places_order(t, r)))
 }
 
