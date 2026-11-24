@@ -98,6 +98,9 @@ pub struct View {
     pub bought: Option<TokenView>,
     /// Live strays.
     pub strays: Vec<TokenView>,
+    /// How many live strays the indexer counts (`strays_total`), when it says: more than `strays`
+    /// means it listed only part of them (it lists at most 100, R9FC-5).
+    pub strays_total: Option<usize>,
 }
 
 impl View {
@@ -402,6 +405,7 @@ fn view(v: &Value, source: &str) -> Result<View, String> {
         custody,
         custody_b,
         bought,
+        strays_total: o.get("strays_total").and_then(Value::as_u64).map(|n| n as usize),
         strays,
     })
 }

@@ -77,7 +77,7 @@ pub(super) fn default_book() -> Book {
     }
 }
 
-pub(super) const CLOCK: Clock = Clock { daa: 1_000_000, unix: 1_790_694_000, rate_milli: 10_000 };
+pub(super) const CLOCK: Clock = Clock { daa: 1_000_000, unix: 1_790_694_000, rate_milli: 10_000, disputed: false };
 
 pub(super) fn env(m: &TokenMarket) -> Env {
     Env {
@@ -683,6 +683,7 @@ fn a_stop_only_sell_with_a_tip_can_be_amended() {
         bought: None,
         strays: vec![],
         foreign: 0,
+        unlisted: 0,
         deadline: None,
         genesis_daa: None,
     };
@@ -844,4 +845,66 @@ fn a_sell_from_a_borrow_enabled_holding_spends_one_setting() {
     let e = Env { token_utxos: us, ..env(&m) };
     let p = plan_order(&e, &Intent::Limit(limit(Side::Sell, 70 * TOK, 300_000_000)));
     assert!(!p.ok && codes(&p).contains(&"TOKEN_UTXOS_MIXED_BORROW"));
+}
+
+/// R9FC2-1: a limit that crossed at placement rests as an auction (start in `price`, the limit in `price_end`).
+/// `kob replace --price` must make it trade at exactly the new price from then on, not at the old limit; a TWAP whose
+/// slices are auctions is refused.
+#[test]
+fn an_amended_auction_trades_at_the_new_price() {
+    let m = market(TemplateId::Kcc20Ref);
+    let e = env(&m);
+    for (side, limit_price, new_price) in [(Side::Sell, 240_000_000, 300_000_000), (Side::Buy, 255_000_000, 200_000_000)] {
+        let p = valid(&e, Intent::Limit(limit(side, 10 * TOK, limit_price)));
+        let st = p.states[0].clone();
+        let (slope, end) = match &st {
+            AnyState::KobAsk(x) => (x.slope, x.price_end),
+            AnyState::KobBid(x) => (x.slope, x.price_end),
+            _ => unreachable!(),
+        };
+        assert!(slope != 0 && end == limit_price, "{side:?}: placed as an auction to its limit");
+        let live = super::data::Live {
+            cov: [0xa1; 32],
+            order: kob_protocol::tx::OrderUtxo {
+                utxo: Utxo {
+                    transaction_id: txid(9),
+                    index: 0,
+                    amount: 100 * C as u64,
+                    block_daa_score: CLOCK.daa as u64,
+                    covenant_id: Some([0xa1; 32]),
+                },
+                state: st,
+            },
+            custody: None,
+            prefund: None,
+            bought: None,
+            strays: vec![],
+            foreign: 0,
+            unlisted: 0,
+            deadline: None,
+            genesis_daa: None,
+        };
+        let later = CLOCK.daa + 10_000;
+        let input = super::actions::AmendInput { price: Some(new_price), ..Default::default() };
+        let (rep, _, notes) = super::actions::replacement(&live, &input, later, 1).unwrap();
+        // the old code kept `price_end` and the slope: this was the old limit
+        assert_eq!(super::actions::trades_at(&rep, later + 1_000, later), Some((new_price, false)), "{side:?}");
+        assert!(notes.iter().any(|n| n.contains("fixed-price")), "{notes:?}");
+        // the same schedule as a freshly placed limit that does not cross
+        let fresh = valid(&e, Intent::Limit(limit(side, 10 * TOK, if side == Side::Sell { 300_000_000 } else { 200_000_000 })));
+        let sched = |s: &AnyState| match s {
+            AnyState::KobAsk(x) => (x.price, x.slope, x.price_end, x.decay_step, x.interval, x.active_from),
+            AnyState::KobBid(x) => (x.price, x.slope, x.price_end, x.decay_step, x.interval, x.active_from),
+            _ => unreachable!(),
+        };
+        assert_eq!(sched(&rep), sched(&fresh.states[0]), "{side:?}");
+        // a TWAP whose slices are auctions is refused
+        let mut twap = live.clone();
+        match &mut twap.order.state {
+            AnyState::KobAsk(x) => x.interval = 600,
+            AnyState::KobBid(x) => x.interval = 600,
+            _ => unreachable!(),
+        }
+        assert!(super::actions::replacement(&twap, &input, later, 1).unwrap_err().contains("TWAP"), "{side:?}");
+    }
 }

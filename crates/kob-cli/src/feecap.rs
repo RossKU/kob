@@ -14,6 +14,33 @@ use serde_json::Value;
 
 /// How many times the reference fee a plan may pay without `--allow-high-fee`.
 pub const FACTOR: u64 = 4;
+/// The most any transaction may pay in fees, whatever a node's estimate says (R9FC-2): 0.5 KAS, the web's
+/// `FEE_ABSOLUTE_MAX`. Only `--max-fee` changes it; `--allow-high-fee` lifts the relative ceiling, not this one.
+pub const FEE_ABSOLUTE_MAX: u64 = 50_000_000;
+/// The issue code of a plan above the absolute ceiling.
+pub const CODE_ABSOLUTE: &str = "FEE_ABOVE_MAXIMUM";
+
+thread_local! {
+    static MAX_FEE: std::cell::Cell<u64> = const { std::cell::Cell::new(FEE_ABSOLUTE_MAX) };
+}
+
+/// Sets the absolute ceiling of this run (`--max-fee`).
+pub fn set_max_fee(sompi: u64) {
+    MAX_FEE.with(|m| m.set(sompi));
+}
+
+/// The absolute ceiling of this run.
+pub fn max_fee() -> u64 {
+    MAX_FEE.with(|m| m.get())
+}
+
+/// Reads `--max-fee KAS` (a KAS amount, above zero) and sets it.
+pub fn max_fee_arg(v: Option<&str>) -> Result<(), String> {
+    if let Some(v) = v {
+        set_max_fee(crate::trade::units::parse_kas(v, "--max-fee", false)?);
+    }
+    Ok(())
+}
 /// The issue code of a plan refused by the ceiling.
 pub const CODE: &str = "FEE_ABOVE_CEILING";
 
@@ -53,6 +80,13 @@ impl Ceiling {
 
     /// The finding when `fee` for `mass` is above the ceiling (none with `--allow-high-fee`).
     pub fn violation(&self, fee: u64, mass: u64) -> Option<String> {
+        if fee > max_fee() {
+            return Some(format!(
+                "the fee {fee} sompi ({} KAS) is above the most any transaction may pay, {} KAS ({CODE_ABSOLUTE}; no node estimate raises it): pass --max-fee to allow more",
+                crate::common::kas(fee),
+                crate::common::kas(max_fee()),
+            ));
+        }
         let limit = self.limit(mass);
         if self.allow || fee <= limit {
             return None;
@@ -110,8 +144,14 @@ mod tests {
     #[test]
     fn allow_high_fee_lifts_it() {
         let c = Ceiling::from_answer(None, true);
-        assert!(c.violation(u64::MAX, 1).is_none());
+        assert!(c.violation(FEE_ABSOLUTE_MAX, 1).is_none());
         // And asks no node.
-        assert!(Ceiling::read("ws://127.0.0.1:1", true).violation(u64::MAX, 1).is_none());
+        assert!(Ceiling::read("ws://127.0.0.1:1", true).violation(FEE_ABSOLUTE_MAX, 1).is_none());
+        // It never lifts the absolute ceiling (R9FC-2): only --max-fee moves that.
+        let e = c.violation(FEE_ABSOLUTE_MAX + 1, 1).unwrap();
+        assert!(e.contains("--max-fee") && e.contains(CODE_ABSOLUTE), "{e}");
+        set_max_fee(2 * FEE_ABSOLUTE_MAX);
+        assert!(c.violation(FEE_ABSOLUTE_MAX + 1, 1).is_none());
+        set_max_fee(FEE_ABSOLUTE_MAX);
     }
 }

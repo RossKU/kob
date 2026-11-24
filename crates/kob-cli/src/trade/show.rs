@@ -192,8 +192,41 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
         };
         d.outputs.push(line);
     }
+    // The price each placed or amended plain order trades at, from its recorded state: a fixed price, or an auction
+    // with its start and its limit, never the `price` field alone (R9FC2-1).
+    let placed =
+        kob_protocol::payload::recover_orders(&built.tx).map(|v| v.into_iter().map(|r| (r.output, r.order)).collect::<Vec<_>>());
+    let amended = kob_protocol::payload::recover_amends_planned(&built.tx, &built.plans)
+        .map(|v| v.into_iter().map(|r| (r.output, r.order)).collect::<Vec<_>>());
+    for (o, st) in placed.unwrap_or_default().into_iter().chain(amended.unwrap_or_default()) {
+        if let (Some(line), Some(t)) = (price_text(&st, units), d.outputs.get_mut(o as usize)) {
+            t.push_str(&format!("; {line}"));
+        }
+    }
     d.token_net.retain(|_, v| *v != 0);
     d
+}
+
+/// How a plain order prices (R9FC2-1): `trades at P (fixed)`, or an auction from its start to its limit.
+fn price_text(s: &kob_protocol::state::AnyState, units: &Units) -> Option<String> {
+    use kob_protocol::state::AnyState;
+    let (x_price, slope, end, step, from, interval, scale, cov) = match s {
+        AnyState::KobAsk(x) | AnyState::KobAskKron(x) => {
+            (x.price, x.slope, x.price_end, x.decay_step, x.active_from, x.interval, x.scale, x.token_cov_id)
+        }
+        AnyState::KobBid(x) | AnyState::KobBidKron(x) => {
+            (x.price, x.slope, x.price_end, x.decay_step, x.active_from, x.interval, x.scale, x.token_cov_id)
+        }
+        _ => return None,
+    };
+    let u = units.get(&cov).cloned().unwrap_or(TokenUnit { ticker: String::new(), decimals: 0 });
+    let px = |p: i64| super::units::price_per_whole(p, &u, scale, super::units::KAS_DECIMALS, "KAS");
+    let slices = if interval > 0 { format!(", in slices every {interval} DAA") } else { String::new() };
+    Some(if slope == 0 {
+        format!("trades at {} (a fixed price{slices})", px(x_price))
+    } else {
+        format!("an auction from {} to its limit {} ({} per {step} DAA from DAA {from}{slices})", px(x_price), px(end), px(slope))
+    })
 }
 
 fn token_in(d: &mut Decoded, i: usize, st: &TokenState, cov: [u8; 32], value: i128, me: &[u8; 32], units: &Units) -> String {
@@ -266,7 +299,7 @@ pub fn json_of(d: &Decoded, built: &BuiltTx) -> Value {
 /// Every other entry (settle, fill, refund, update) is held by its covenant. Each string is one
 /// broken rule; empty means the transaction keeps them.
 pub fn custody_issues(built: &BuiltTx) -> Vec<String> {
-    use kob_protocol::build::{check_releases_held, curve_bound, held_custodies};
+    use kob_protocol::build::{check_releases_held, covenant_accepts_as, curve_bound, held_custodies};
     use kob_protocol::state::AnyState;
     use kob_protocol::tx::{TokenUtxo, Utxo};
     let tokens: Vec<TokenUtxo> = built
@@ -318,13 +351,32 @@ pub fn custody_issues(built: &BuiltTx) -> Vec<String> {
                 continue;
             }
         };
-        let continues = built.tx.outputs.iter().any(|o| o.covenant.as_ref().is_some_and(|c| c.covenant_id == cov));
+        // continued only by an output bound to the id from this very input, and not a genesis on chain (R9FB2-1)
+        let continues = built.tx.outputs.iter().enumerate().any(|(k, o)| {
+            o.covenant.as_ref().is_some_and(|c| c.covenant_id == cov && c.authorizing_input as usize == i)
+                && kob_protocol::payload::check_continues(&built.tx, k, cov).is_ok()
+        });
         if continues {
-            for h in held.iter().filter(|h| !h.bought) {
-                if owned.iter().any(|t| t.utxo.covenant_id == Some(h.token.covenant_id) && t.state == h.state) {
+            for h in &held {
+                // the covenant's comparison, the borrow guard of a sell custody ignored (R9FA-1)
+                if !owned.iter().any(|t| covenant_accepts_as(h, t)) {
+                    continue;
+                }
+                // a claim moves the bought-custody, and only with a continuation that holds none (R9FC-4)
+                let claimed = h.bought
+                    && state.with_bought(0).is_some_and(|after| {
+                        let spk = spk_to_string(&after.spk());
+                        built
+                            .tx
+                            .outputs
+                            .iter()
+                            .any(|o| o.script_public_key == spk && o.covenant.as_ref().is_some_and(|c| c.covenant_id == cov))
+                    });
+                if !claimed {
                     issues.push(format!(
-                        "input {i}: order {} stays live but this transaction spends a unit of exactly its custody's state: the order would be left without its custody",
-                        show_id(&cov, "")
+                        "input {i}: order {} stays live but this transaction spends a unit its covenant takes as its {}: the order would be left without it",
+                        show_id(&cov, ""),
+                        if h.bought { "bought-custody" } else { "custody" }
                     ));
                 }
             }

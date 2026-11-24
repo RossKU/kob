@@ -125,6 +125,17 @@ pub(crate) fn stranded_text(stranded: &[Value], cov: &[u8; 32]) -> String {
     )
 }
 
+/// A KCC-20 state with borrowing disabled, its borrow guard zeroed: how the order covenants compare a sell custody
+/// (R9FA-1). `None` for a state the covenant never takes as a custody (borrowing enabled) and for KRON.
+fn unguarded(t: &TokenState) -> Option<TokenState> {
+    match t {
+        TokenState::Kcc20(k) if k.borrow_scheme == 0 => {
+            Some(TokenState::Kcc20(kob_protocol::state::Kcc20State { borrow_guard: [0; 32], ..k.clone() }))
+        }
+        _ => None,
+    }
+}
+
 /// Said once when a sweep saw units of exactly a custody's state: they stay with the order.
 fn twins_note(n: usize) -> String {
     if n == 0 {
@@ -311,6 +322,18 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
         targets.iter().enumerate().map(|(k, t)| (t, if k == 0 { v.custody.as_ref() } else { v.custody_b.as_ref() }, false));
     for ((st, spk, token), named_view, is_bought) in all_targets.chain(bought_target.iter().map(|t| (t, v.bought.as_ref(), true))) {
         let mut all = all_at(&at, spk, *token, named_view);
+        if all.is_empty() && a.op == Op::Cancel && !is_bought {
+            // A unit the covenant takes as this custody although its borrow guard differs (a hand-built fill can leave
+            // one, R9FA-1): released by the cancel as the custody, when the view names it and the node holds it.
+            let found = cands
+                .iter()
+                .filter(|(s, _, cst, _)| s.token == *token && unguarded(cst).as_ref() == Some(st))
+                .find_map(|(s, _, cst, cspk)| on_node(&at, cspk, s).map(|u| TokenUtxo { utxo: u, state: cst.clone() }));
+            if let Some(u) = found {
+                held.push(u);
+                continue;
+            }
+        }
         if all.is_empty() {
             if a.op == Op::Sweep {
                 continue;
@@ -333,7 +356,7 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
     let taken: Vec<([u8; 32], u32)> = held.iter().chain(twins.iter()).map(|t| (t.utxo.transaction_id, t.utxo.index)).collect();
     // A sweep never moves a unit of exactly a custody's state, a twin included: it stays with the
     // order, and the cancel takes it (R8FX2-2). A cancel takes every twin as a stray of its token.
-    let twins_left = if a.op == Op::Sweep { std::mem::take(&mut twins).len() } else { 0 };
+    let mut twins_left = if a.op == Op::Sweep { std::mem::take(&mut twins).len() } else { 0 };
     let (custody, prefund, bought) = match a.op {
         Op::Cancel => {
             let n = targets.len();
@@ -357,6 +380,14 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
                 left.push(json!({"outpoint": outpoint_str(&s.txid, s.index), "token": to_hex(&s.token), "reason": "not on the node"}))
             }
         }
+    }
+    // A sweep also leaves a unit the covenant would take as a custody although its guard differs (R9FA-1).
+    if a.op == Op::Sweep {
+        let before = confirmed.len();
+        confirmed.retain(|s| {
+            !targets.iter().any(|(st, _, tok)| s.utxo.utxo.covenant_id == Some(*tok) && unguarded(&s.utxo.state).as_ref() == Some(st))
+        });
+        twins_left += before - confirmed.len();
     }
     for t in twins {
         let program = if t.utxo.covenant_id == Some(own) { own_program } else { b_token.map(|b| b.1).unwrap_or(own_program) };
@@ -413,6 +444,12 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
     }
     // After a cancel the order's covenant id is gone, and nothing can ever spend a token it owns
     // (R8F3c-4): a cancel that cannot take every one the node shows is not built.
+    // A stray list the indexer cut (it lists at most 100, R9FC-5). A cancel would strand the ones not listed, so it is
+    // refused as for strays it cannot take (or goes on with --abandon-strays); a sweep sweeps the ones listed and says so.
+    let unlisted = v.strays_total.map_or(0, |n| n.saturating_sub(v.strays.len()));
+    if unlisted > 0 && a.op == Op::Cancel {
+        stranded.push(json!({"outpoint": "(not listed)", "token": "", "reason": format!("the indexer counts {unlisted} more stray{} than it lists", if unlisted == 1 { "" } else { "s" })}));
+    }
     if !stranded.is_empty() && !a.abandon_strays {
         let mut o = refuse(stranded_text(&stranded, &cov));
         o.json["left_behind"] = json!(stranded);
@@ -509,7 +546,8 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
                 "sweep {covh}: returns {} to the maker; the order continues unchanged (same covenant id, same script{}) and its 90-day idle window restarts with this transaction; fee paid by {paid_by}",
                 describe(&returned),
                 if state.custody_amount().is_some_and(|x| x > 0) { ", custody untouched" } else { "" }
-            ) + &twins_note(twins_left),
+            ) + &twins_note(twins_left)
+                + &if unlisted > 0 { format!("; the indexer listed only part of the strays ({unlisted} more): sweep again for the rest") } else { String::new() },
         ),
         Op::Cancel => (
             format!("{covh}.cancel.json"),

@@ -17,9 +17,10 @@ pub const KEY_ENV: &str = "KOB_KEY";
 
 /// Flags that every trading command takes with a value.
 pub const COMMON_VALUE_FLAGS: &[&str] =
-    &["--network", "--node", "--indexer", "--key-file", "--key-env", "--fee-rate", "--out-dir", "--registry", "--key"];
+    &["--network", "--node", "--indexer", "--key-file", "--key-env", "--fee-rate", "--out-dir", "--registry", "--key", "--max-fee"];
 /// Flags that every trading command takes without a value.
-pub const COMMON_BOOL_FLAGS: &[&str] = &["--yes", "-y", "--dry-run", "--json", "--priority-fee", "--allow-high-fee"];
+pub const COMMON_BOOL_FLAGS: &[&str] =
+    &["--yes", "-y", "--dry-run", "--json", "--priority-fee", "--allow-high-fee", "--ack-registry-file"];
 
 /// The help text of the shared options.
 pub const COMMON_HELP: &str = "\
@@ -34,12 +35,16 @@ COMMON OPTIONS
   --key-file PATH   the signing key: a file holding the 64-hex secret
   --key-env NAME    ... or the environment variable holding it (default KOB_KEY)
                     (--key was removed: a key on the command line is visible to other users, ps and shell history)
-  --registry FILE   token registry (default: the one this build embeds, when its network matches)
+  --registry FILE   token registry (default: the one this build embeds, when its network matches). Its review status,
+                    decimals, class and genesis check replace the build's: every signing screen says so, and on mainnet
+                    signing needs --ack-registry-file
   --fee-rate N      sompi per gram (default: the relay floor, 100)
   --priority-fee    also pay for the storage mass (KIP-9), as the web app's \"Pay the priority fee\" does: a higher fee, worth it
                     only when blocks are contended (the fee is charged at --fee-rate, default 100, on the storage-inclusive mass)
   --allow-high-fee  pay a fee above the ceiling (default: a plan whose fee is more than 4 times the node's fee estimate,
                     on the transaction's mass, is refused: issue FEE_ABOVE_CEILING, exit 1)
+  --max-fee KAS     the most any transaction may pay in fees (default 0.5KAS); no node's estimate and no
+                    --allow-high-fee raises it
   --dry-run         show the plan and stop: nothing is signed
   --yes, -y         sign and submit without asking (otherwise a terminal asks; without a terminal, refused)
   --json            print the plan and the result as one JSON document (the result is in its `result` key)
@@ -134,6 +139,8 @@ pub struct Common {
     pub out_dir: Option<PathBuf>,
     /// The registry file.
     pub registry: Option<PathBuf>,
+    /// `--ack-registry-file`: on mainnet, sign with token facts from a registry file (R9FC2-3).
+    pub ack_registry_file: bool,
     key_file: Option<PathBuf>,
     key_env: String,
 }
@@ -160,6 +167,7 @@ impl Common {
                 Some(r)
             }
         };
+        crate::feecap::max_fee_arg(p.get("--max-fee"))?;
         let node = crate::wrpc::node_for(p.get("--node").map(str::to_owned), &network);
         let indexer = super::http::indexer_arg(p.get("--indexer").map(str::to_owned), &network);
         Ok(Common {
@@ -174,6 +182,7 @@ impl Common {
             json: p.has("--json"),
             out_dir: p.get("--out-dir").map(PathBuf::from),
             registry: p.get("--registry").map(PathBuf::from),
+            ack_registry_file: p.has("--ack-registry-file"),
             key_file: p.get("--key-file").map(PathBuf::from),
             key_env: p.get("--key-env").unwrap_or(KEY_ENV).to_string(),
         })
@@ -226,9 +235,7 @@ impl Common {
         let hex = raw.trim().to_ascii_lowercase();
         let bytes = kob_protocol::json::hex32(&hex).map_err(|_| "the signing key is not 64 hex characters".to_string())?;
         let pubkey = pubkey_of(&bytes).map_err(|_| "the signing key is not a valid secret key".to_string())?;
-        if argv.iter().any(|a| a.to_ascii_lowercase().contains(&hex)) {
-            return Err("the signing key appears on the command line: refused (it is visible to other users); keep it in a file or the environment".into());
-        }
+        crate::token::refuse_key_in_argv(&hex, argv)?;
         Ok(Signer { secret: bytes, pubkey })
     }
 }

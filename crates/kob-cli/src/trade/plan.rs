@@ -182,6 +182,18 @@ pub struct Clock {
     pub unix: i64,
     /// DAA rate, milli-DAA per second (10 000 nominal; clamped to 9 500..10 500).
     pub rate_milli: i64,
+    /// A witness (the indexer's cursor plus lag) disagrees with the node's present: a timed order
+    /// is refused, a cancel never is (R9FC-1).
+    pub disputed: bool,
+}
+
+impl Clock {
+    /// The present is never below a DAA score the plan has already read from the chain (a coin
+    /// or an order UTXO): a node that reports an older present is overruled by its own answers
+    /// (R9FC-1).
+    pub fn at_least(self, seen: impl IntoIterator<Item = i64>) -> Clock {
+        Clock { daa: seen.into_iter().fold(self.daa, i64::max), ..self }
+    }
 }
 
 /// One price level of the visible book (price as posted, per whole token; base units).
@@ -822,6 +834,12 @@ pub(crate) fn activation_daa(c: &Clock, a: Option<Activation>) -> Option<i64> {
 }
 
 pub(crate) fn resolve_lifetime(c: &Clock, lt: Lifetime, pre: &mut Vec<Issue>) -> Expiry {
+    if c.disputed && lt != Lifetime::Gtc {
+        pre.push(error(
+            "CLOCK_DISPUTED",
+            "the node's and the indexer's view of the chain's time disagree: a timed order is not placed (try again, or place it good-till-cancelled)",
+        ));
+    }
     match lt {
         Lifetime::Gtc => Expiry { kind: "gtc", daa: c.daa + MAX_IDLE_DAA, deadline: None },
         Lifetime::GtdUnix(at) => Expiry { kind: "gtd", daa: unix_to_daa_bound(c, at, true), deadline: None },
@@ -1544,6 +1562,21 @@ pub(crate) struct Draft {
     notes: Vec<&'static str>,
 }
 
+/// The schedule of a plain fixed-price order: no decay or rise, no slices, so it trades at its `price` whenever it
+/// trades. A limit that does not cross is placed with it ([`blank`]), and `kob replace --price` writes it into the
+/// amended state (R9FC2-1), so a placed and an amended limit cannot differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FixedSchedule {
+    pub slope: i64,
+    pub price_end: i64,
+    pub decay_step: i64,
+    pub interval: i64,
+    pub max_fill: i64,
+}
+
+/// See [`FixedSchedule`].
+pub(crate) const FIXED_PRICE: FixedSchedule = FixedSchedule { slope: 0, price_end: 0, decay_step: 1, interval: 0, max_fill: 0 };
+
 pub(crate) fn blank(side: Side, amount: i64, price: i64, tip: i64, min_fill: Option<i64>) -> Draft {
     Draft {
         side,
@@ -1556,11 +1589,11 @@ pub(crate) fn blank(side: Side, amount: i64, price: i64, tip: i64, min_fill: Opt
         active_from: 0,
         requested_active_from: None,
         expiry_daa: 0,
-        interval: 0,
-        max_fill: 0,
-        slope: 0,
-        price_end: 0,
-        decay_step: 1,
+        interval: FIXED_PRICE.interval,
+        max_fill: FIXED_PRICE.max_fill,
+        slope: FIXED_PRICE.slope,
+        price_end: FIXED_PRICE.price_end,
+        decay_step: FIXED_PRICE.decay_step,
         deadline: None,
         fills: Some(1),
         fills_requested: None,

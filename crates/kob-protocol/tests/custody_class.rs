@@ -276,3 +276,91 @@ fn a_spend_that_keeps_the_order_never_takes_its_custody() {
     let built = build_amend_order(&r, &kob_protocol::budget::lookup).unwrap();
     assert!(built.tx.inputs.iter().all(|i| i.utxo.covenant_id.is_none_or(|c| c == O)), "an amend spends no token input");
 }
+
+/// The unit `c` with a non-zero borrow guard and borrowing disabled: for the order covenants the same custody (R9FA-1).
+fn guarded(c: &TokenUtxo, tag: u8) -> TokenUtxo {
+    let mut d = c.clone();
+    d.utxo.transaction_id = [tag; 32];
+    if let TokenState::Kcc20(k) = &mut d.state {
+        k.borrow_guard = [0x5a; 32];
+    }
+    d
+}
+
+/// R9FA-1: the order covenants compare a sell custody without its borrow guard, so the tools use that comparison where
+/// it keeps value safe. A sweep never takes a unit that differs from the custody in its guard alone (the covenant would
+/// take it as the custody). A cancel releases such a unit: as a stray next to the custody, or as the custody itself when it
+/// is the only one left (an order a hand-built fill left with a guarded custody can still be cancelled). A fill by KOB's
+/// builders still uses only the exact, zero-guard custody. A bought-custody is pinned exactly, guard included.
+#[test]
+fn a_custody_is_what_the_covenant_accepts_whatever_its_guard() {
+    let t = TemplateId::Kcc20Ref8x8;
+    for (name, s, value) in holding(t) {
+        let label = format!("{name}@{}", t.name());
+        let o = order(70, value, O, 1_000, s.clone());
+        let good = real(t, &s);
+        let d = guarded(&good[0], 0x5d);
+        let e = build_sweep_order(&sweep_of(o.clone(), vec![d.clone()]), &kob_protocol::budget::lookup).expect_err(&label).to_string();
+        assert!(e.contains("never moves a unit of exactly the state the order pins"), "{label}: {e}");
+        // the cancel takes the guarded look-alike along with the custody, or as the custody when it is all there is
+        build_cancel_order(&cancel(o.clone(), &good, vec![d.clone()]), &kob_protocol::budget::lookup)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let mut only = good.clone();
+        only[0] = d.clone();
+        let built = build_cancel_order(&cancel(o.clone(), &only, vec![]), &kob_protocol::budget::lookup)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        engine(&built, &label);
+        assert!(check_releases_held(&s, O, &only).is_ok(), "{label}");
+        // R9FA2-1: everything comes back to the maker. The order's KAS (an if-done ask's prefund with it) is in no
+        // covenant output, and every token unit, the guarded one included, leaves as a plain unit of the maker.
+        let maker = kob_protocol::tx::spk_to_string(&kob_protocol::script::p2pk_spk(&pk(MAKER_A)));
+        assert!(built.tx.outputs.iter().all(|x| x.covenant.as_ref().is_none_or(|c| c.covenant_id != O)), "{label}: the order ends");
+        let kas_back: u64 =
+            built.tx.outputs.iter().filter(|x| x.covenant.is_none() && x.script_public_key == maker).map(|x| x.value).sum();
+        assert!(kas_back + built.fee.fee >= value, "{label}: the order's KAS returns to the maker ({kas_back} of {value})");
+        // a keeper's refund at expiry ends the order with the guarded custody too
+        if s.refund_due(0).is_some() {
+            let r = RefundOrder {
+                prefund: only.get(1).cloned(),
+                bought_custody: None,
+                order: o.clone(),
+                custody: only.first().cloned(),
+                foreign: vec![],
+                lock_time: EXPIRY as u64,
+                funding: vec![key_utxo(4, KEEPER, 5 * KAS)],
+                change: Some(pk(KEEPER)),
+                fee: fee(),
+            };
+            let built = build_refund_order(&r, &kob_protocol::budget::lookup).unwrap_or_else(|e| panic!("{label}: refund: {e}"));
+            engine(&built, &format!("{label} refund"));
+        }
+    }
+    // a fill never takes a guarded custody
+    let mut leg = ev_ask(P250, 1, t);
+    if let kob_protocol::build::Leg::Ask { custody, .. } = &mut leg {
+        *custody = guarded(custody, 0x5e);
+    }
+    let b = Batch {
+        lock_time: NOW,
+        legs: vec![leg],
+        updates: vec![],
+        taker_tokens: vec![],
+        taker: Some(pk(MAKER_B)),
+        taker_token_carrier: CARRIER,
+        keep_surplus: vec![],
+        keep_carrier: None,
+        receivers: vec![],
+        payments: vec![],
+        funding: vec![key_utxo(3, MAKER_B, 100 * KAS)],
+        change: None,
+        records: vec![],
+        fee: fee(),
+    };
+    let e = build_batch(&b, &kob_protocol::budget::lookup).unwrap_err().to_string();
+    assert!(e.contains("guard") || e.contains("custody"), "{e}");
+    // a bought-custody with a guard is not the bought-custody
+    let bs = BidState { mode: MODE_ACCUMULATE, bought: 4 * WHOLE, ..bid(MAKER_A, P245, t) };
+    let s = AnyState::KobBid(bs);
+    let bc = tutxo(t, TOKEN_COV, 72, 4 * WHOLE, O, true);
+    assert!(check_releases_held(&s, O, &[guarded(&bc, 0x5f)]).is_err());
+}

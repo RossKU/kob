@@ -776,7 +776,10 @@ fn a_fee_above_the_ceiling_is_refused_and_allowed_with_the_flag() {
     assert_eq!(run_op(order::Op::Sweep, &url, &file, "--dry-run --fee-rate 4000"), 1, "a dry run shows the refusal too");
     assert!(node.lock().unwrap().submitted.is_empty() && !out.exists());
     // With the flag it is paid.
-    assert_eq!(run_op(order::Op::Sweep, &url, &file, &format!("--yes --fee-rate 4000 --allow-high-fee {out_arg}")), 0);
+    assert_eq!(
+        run_op(order::Op::Sweep, &url, &file, &format!("--yes --fee-rate 4000 --allow-high-fee --max-fee 100KAS {out_arg}")),
+        0
+    );
     assert_eq!(node.lock().unwrap().submitted.len(), 1);
     let s = signed_from(out.join(format!("{}.sweep.json", to_hex(&A2))).to_str().unwrap());
     assert_eq!(s.fee.fee_rate, 4000);

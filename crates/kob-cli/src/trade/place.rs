@@ -832,6 +832,9 @@ pub fn env_sized(
     let funding = data::funding(&node, &c.network, &maker)?;
     let mut guards = vec![];
     let token_utxos = if needs.a { data::token_utxos(&indexer, &node, &c.network, a, &maker)? } else { vec![] };
+    // the present is never below a coin the plan read, and the indexer witnesses it (R9FC-1)
+    let seen = funding.iter().map(|k| k.utxo.block_daa_score).chain(token_utxos.iter().map(|t| t.utxo.block_daa_score));
+    let clock = data::indexer_witness(&indexer, clock.at_least(seen.map(|d| d.min(i64::MAX as u64) as i64)));
     // The extension commitment of an unlisted KCC-20 token is the one of the indexer. The own
     // holdings of the wallet for the token, with their states confirmed on the node, are a
     // reference without the indexer, and a holding of another commitment blocks, as the web app's

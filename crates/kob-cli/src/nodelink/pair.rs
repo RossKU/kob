@@ -136,6 +136,28 @@ pub fn network(io: &Io, timeout: Duration) -> Result<String, WrpcError> {
     }
 }
 
+/// One call to each of the two nodes, for a read whose answers are compared by the caller (the
+/// chain's time, the fee estimate: R9FC-1, R9FC-2). An unreachable node is replaced, as for
+/// [`utxos`]; any other failure of either node is the error.
+pub fn call_both(io: &Io, method: &str, params: Value, timeout: Duration) -> Result<[Value; 2], WrpcError> {
+    let mut replaced = 0;
+    loop {
+        let [a, b] = (io.nodes)().map_err(WrpcError::Resolve)?;
+        match ((io.call)(&a, method, params.clone(), timeout), (io.call)(&b, method, params.clone(), timeout)) {
+            (Ok(x), Ok(y)) => return Ok([x, y]),
+            (Err(e), _) if unreachable_(&e) && replaced < REPLACE_TRIES => {
+                (io.replace)(&a);
+                replaced += 1;
+            }
+            (_, Err(e)) if unreachable_(&e) && replaced < REPLACE_TRIES => {
+                (io.replace)(&b);
+                replaced += 1;
+            }
+            (Err(e), _) | (_, Err(e)) => return Err(e),
+        }
+    }
+}
+
 /// One call to the first node that answers.
 ///
 /// It is for reads that are not signed from, such as the DAA score for a clock.

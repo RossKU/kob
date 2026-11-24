@@ -416,7 +416,7 @@ mod tests {
         let (mut s, pk) = spec(1_000_000, 2);
         let sale = apply(&mut s, &args(Some("price"), Some("50")), pk).unwrap().unwrap();
         let plan = build_creation(&s).unwrap();
-        let clock = Clock { daa: 1_000_000, unix: 1_800_000_000, rate_milli: 10_000 };
+        let clock = Clock { daa: 1_000_000, unix: 1_800_000_000, rate_milli: 10_000, disputed: false };
         let (m, p) = plan_ask(&plan, &sale, pk, &[], clock, 100).unwrap();
         let built = ask_built(&p).unwrap();
         assert_eq!(m.cov, plan.genesis.covenant_id.as_bytes());

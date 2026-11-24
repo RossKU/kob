@@ -108,6 +108,8 @@ TRANSACTION
   --fee-rate            sompi per mass unit (default 100)
   --allow-high-fee      pay a fee above the ceiling (default: a transaction paying more than 4 times the node's fee
                         estimate on its mass is refused: [FEE_ABOVE_CEILING], exit 1; a dry run checks at the relay floor)
+  --max-fee             the most any one transaction may pay in fees, in KAS (default 0.5KAS; no node estimate
+                        and no --allow-high-fee raises it)
   --change-to           address or 64-hex pubkey for the change (default: the funding key)
   --key-file PATH       the signing key: a file holding the 64-hex secret
   --key-env NAME        ... or the environment variable holding it (default $KOB_KEY when the run signs)
@@ -326,6 +328,15 @@ pub fn parse_fund(s: &str) -> Result<FundArg, String> {
 /// The usage error of the removed `--key`: it names what replaces it and never quotes the key.
 pub(crate) const KEY_FLAG_REMOVED: &str = "--key was removed: a key on the command line is visible to other users (ps, shell history); use --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY";
 
+/// The one check that a signing key (64 hex, lower case) does not appear on the command line, for every command that
+/// reads a key: the trading commands, `token create` and `recover` (R9FC-7). A key there is visible to other users.
+pub(crate) fn refuse_key_in_argv(hex: &str, argv: &[String]) -> Result<(), String> {
+    if argv.iter().any(|a| a.to_ascii_lowercase().contains(hex)) {
+        return Err("the signing key appears on the command line: refused (it is visible to other users); keep it in a file or the environment".into());
+    }
+    Ok(())
+}
+
 /// Whether `flag` is the removed `--key` (also `--key=VALUE`).
 pub(crate) fn is_removed_key_flag(flag: &str) -> bool {
     flag == "--key" || flag.starts_with("--key=")
@@ -416,6 +427,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
             "--carrier" => a.carrier = parse_u64(&val("--carrier")?, "--carrier")?,
             "--fee" => a.fee = Some(parse_u64(&val("--fee")?, "--fee")?),
             "--fee-rate" => a.fee_rate = parse_u64(&val("--fee-rate")?, "--fee-rate")?,
+            "--max-fee" => crate::feecap::max_fee_arg(Some(&val("--max-fee")?))?,
             "--extension-commitment" => {
                 a.extension_commitment = hex_array(&val("--extension-commitment")?).map_err(|e| e.to_string())?
             }
@@ -512,6 +524,7 @@ pub(crate) fn read_key(src: &KeySource) -> Result<SecretKey, String> {
     };
     // A fixed message: the text may be a secret with one stray character, so it is never quoted.
     let bytes: [u8; 32] = hex_array(raw.trim()).map_err(|_| "signing key is not 64 hex characters".to_string())?;
+    refuse_key_in_argv(&raw.trim().to_ascii_lowercase(), &std::env::args().collect::<Vec<_>>())?;
     SecretKey::from_slice(&bytes).map_err(|_| "signing key is not a valid secret key".to_string())
 }
 

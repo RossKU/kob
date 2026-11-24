@@ -1535,7 +1535,7 @@ impl Draft {
     ///
     /// | Caller | Bound |
     /// |---|---|
-    /// | `kob`, every signing command | `kob-cli/src/feecap.rs:70` `Ceiling::violation_of` (4x the node's estimate), applied in `trade/flow.rs:80`, `recover.rs:980`, `trade/merge.rs:336`, `token.rs:783`, `token_lock.rs:381`, `:561` |
+    /// | `kob`, every signing command | `kob-cli/src/feecap.rs` `Ceiling::violation`: an absolute ceiling no node can raise (`FEE_ABSOLUTE_MAX`, 0.5 KAS, or `--max-fee`), and 4x the lower of the two nodes' estimates (R9FC-2); applied by `violation_of` in `trade/flow.rs:80`, `recover.rs:980`, `trade/merge.rs:336`, `token.rs:783`, `token_lock.rs:381`, `:561` |
     /// | web app, through kob-wasm | `web/src/kob/decode.ts:89` `FEE_ABSOLUTE_MAX` (0.5 KAS), enforced at `:2058` |
     /// | kobd matcher | its profit gate `kobd/src/matcher/batch.rs:1032`, `:2330` (`min_profit`) and the inventory fee cap `matcher/planner.rs:361` (`max_fee`); and `check_fee_bound` in `matcher/engine.rs` (the cap also holds at the floor rate) |
     /// | kobd keepers (refund, kill, close, sweep, replace-by-fee) | `kobd/src/fee.rs` `check_fee_bound`, called before signing in `keepers/mod.rs` (every job, at every fee rate; R8FX2-1) |
@@ -1876,8 +1876,18 @@ impl Draft {
                 });
             }
         }
+        let tx = TxJson::from_tx(&unsigned, &entries);
+        // R9FB2-1: a bound output that is not a genesis this draft creates continues its authorising input's covenant
+        // id. When that id (the node's word) is the genesis id of the output's group, the output would start a new
+        // covenant on chain and end the order: refused, for every builder.
+        let created: std::collections::BTreeSet<u32> = self.covenants.iter().flat_map(|c| c.outputs.iter().copied()).collect();
+        for (o, out) in tx.outputs.iter().enumerate() {
+            if let Some(c) = out.covenant.as_ref().filter(|_| !created.contains(&(o as u32))) {
+                crate::payload::check_continues(&tx, o, c.covenant_id).map_err(|e| Error::Invalid(e.to_string()))?;
+            }
+        }
         Ok(BuiltTx {
-            tx: TxJson::from_tx(&unsigned, &entries),
+            tx,
             plans,
             roles,
             sign,

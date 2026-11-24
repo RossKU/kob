@@ -43,9 +43,16 @@ pub fn note(node: &str, fee_rate: Option<u64>, priority_fee: bool) -> Option<Str
     note_from(answer(node).as_ref(), fee_rate, priority_fee)
 }
 
-/// What `getFeeEstimate` of `node` answers, or none when it does not answer in time.
+/// What `getFeeEstimate` answers, or none when no node answers in time.
+///
+/// The default pair: both nodes are asked (one small call each) and the answer with the LOWER
+/// reference rate is kept, so one node cannot raise the fee ceiling (R9FC-2); the absolute
+/// ceiling (`feecap::FEE_ABSOLUTE_MAX`, `--max-fee`) bounds it whatever both say. A node the user
+/// names is asked alone.
 pub fn answer(node: &str) -> Option<Value> {
-    crate::wrpc::call(node, "getFeeEstimate", json!({}), ESTIMATE_TIMEOUT).ok()
+    let all = crate::wrpc::call_each(node, "getFeeEstimate", json!({}), ESTIMATE_TIMEOUT).ok()?;
+    let rate = |a: &Value| FeeEstimate::parse(a).map(|e| e.priority.max(e.normal)).unwrap_or(f64::INFINITY);
+    all.into_iter().min_by(|a, b| rate(a).total_cmp(&rate(b)))
 }
 
 /// [`note`] from an answer that was read already.

@@ -78,6 +78,11 @@ pub fn parse_reply(buf: &[u8]) -> Result<Reply<'_>, String> {
 ///
 /// RPC errors of the node travel as its `Text` variant.
 pub fn server_error_text(body: &[u8]) -> String {
+    // the node's words: through the one sanitiser, line breaks included, bounded (R9FC-3)
+    crate::text::clean_long(&server_error_raw(body), 400)
+}
+
+fn server_error_raw(body: &[u8]) -> String {
     const UNIT: [&str; 10] = [
         "connection is closed",
         "RPC call timed out",

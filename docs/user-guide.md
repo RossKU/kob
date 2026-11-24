@@ -306,7 +306,11 @@ Status words: open, partly filled, filled, cancelled, refunded, expired (IOC/FOK
 * **Cancel.** Press **Cancel** on an order. It costs a small network fee. Your tokens or KAS, the carriers and any stray tokens
   return to your wallet. "Cancel all (n)" cancels every order, grouped into as few transactions as possible; you sign each in
   turn. "A fill confirmed before your cancel wins; the cancel then fails and nothing is lost." Only you can cancel your order.
-* **Amend.** **Amend** changes price, amount and so on as one cancel-and-replace transaction.
+* **Amend.** **Amend** changes price, amount and so on as one cancel-and-replace transaction. After an amend with a new price,
+  the order trades at exactly that price from then on. An order that was resting as an auction (a limit that crossed the book
+  when it was placed, a Dutch sell, a rising buy) becomes a fixed-price order at the new price, and the screen shows the price
+  it trades at before and after. In `kob replace`, a new price that crosses the book is refused (`--crossing limit` keeps it
+  and fills at your price).
 * **Refund.** An order that has expired ("expired: refund pending") can be refunded by anyone to its maker, who gets the escrow
   back (the refund tip goes to whoever sends the refund). Press **Refund** yourself, or tick "Refund my expired orders
   automatically while the app is open (no signature; you keep the refund tip)". An order whose escrow no longer covers one

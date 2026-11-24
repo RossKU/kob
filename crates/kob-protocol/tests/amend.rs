@@ -734,3 +734,148 @@ fn claim_refusals() {
     r.place.as_mut().unwrap().value = min;
     engine("a placed sell-first entry", &try_claim(&r).unwrap());
 }
+
+/// R9FC2-1: an order stored as an auction (a limit that crossed at placement: start in `price`, the
+/// user's limit in `priceEnd`, a slope from an origin long past) amended with a new `price` alone
+/// keeps trading at its OLD limit. The engine accepts that fill; the amend rule now refuses that
+/// state, and the fixed-price amend trades at the new price: a fill at the old limit fails.
+#[test]
+fn an_amended_auction_trades_at_the_new_price_not_its_old_limit() {
+    let p = TemplateId::Kcc20Ref;
+    let a = scenario(p, "amend.ask");
+    let r = amend_req(&a).clone();
+    let base = ask_of(&r.order.state).clone();
+    let limit = base.price;
+    let auction = AskState { price: 2 * limit, price_end: limit, slope: limit, decay_step: 1, active_from: 0, ..base.clone() };
+    let order = OrderUtxo { utxo: r.order.utxo.clone(), state: AnyState::KobAsk(auction.clone()) };
+    let Action::Batch(fill) = scenario(p, "take.ask.partial") else { panic!() };
+    let Leg::Ask { custody, .. } = &fill.legs[0] else { panic!() };
+    let next = |s: &SignedTx| Utxo {
+        transaction_id: s.tx.id,
+        index: 0,
+        amount: s.tx.outputs[0].value,
+        block_daa_score: 2_000,
+        covenant_id: Some(A_ID),
+    };
+    let fill_of = |utxo: Utxo, st: AskState| {
+        let mut f = fill.clone();
+        f.legs[0] = Leg::Ask { order: OrderUtxo { utxo, state: st }, custody: custody.clone(), amount: 4 * WHOLE, t: None };
+        Action::Batch(f)
+    };
+    let maker_paid = |t: &SignedTx| -> u64 {
+        let spk = spk_to_string(&kob_protocol::script::p2pk_spk(&base.maker));
+        t.tx.outputs.iter().filter(|o| o.script_public_key == spk && o.covenant.is_none()).map(|o| o.value).sum()
+    };
+
+    // The bug, as `kob replace --price` built it: a new start, the old end and origin. It trades at once at the old
+    // limit, and the engine takes that fill.
+    let kept = AskState { price: 3 * limit, ..auction.clone() };
+    assert_eq!(kept.price_at(2_000, 2_000), Some(limit), "the kept schedule trades at the old limit");
+    let at_old = kept.proceeds_at(4 * WHOLE, limit).unwrap() as u64;
+    let s_old = {
+        let mut req = r.clone();
+        req.order = order.clone();
+        req.amended = AnyState::KobAsk(kept.clone());
+        let e = build(&Action::AmendOrder(req.clone())).unwrap_err();
+        assert!(e.to_string().contains("priceEnd"), "{e}");
+        payload::check_amend_terms(&req.order.state, &req.amended).unwrap_err();
+        // the same continuation, as a pre-fix amend left it on chain: it fills at the old limit
+        let (_, f) =
+            signed("fill of the kept schedule", &fill_of(Utxo { block_daa_score: 2_000, ..r.order.utxo.clone() }, kept.clone()));
+        f
+    };
+    assert_eq!(maker_paid(&s_old), at_old, "the pre-fix amend fills at the old limit");
+
+    // The fix: a fixed-price order at the new price (no slope, no end, no origin).
+    let fixed = AskState { price: 3 * limit, slope: 0, price_end: 0, decay_step: 1, active_from: 0, ..auction.clone() };
+    let mut req = r.clone();
+    req.order = order;
+    req.amended = AnyState::KobAsk(fixed.clone());
+    let (_, s) = signed("amend to a fixed price", &Action::AmendOrder(req));
+    let built = build(&fill_of(next(&s), fixed.clone())).unwrap();
+    let sigs = sign_locally(&built, &keys()).unwrap();
+    let f = finalize(&built, &sigs, FinalizeOptions::default()).unwrap();
+    validate_signed(&f).unwrap();
+    let at_new = fixed.proceeds_at(4 * WHOLE, 3 * limit).unwrap() as u64;
+    assert_eq!(maker_paid(&f), at_new, "the fixed-price order fills at the new price");
+    // a fill that pays the maker only the old limit is refused by the covenant
+    let (mut tx, entries) = f.tx.to_tx().unwrap();
+    let spk = spk_to_string(&kob_protocol::script::p2pk_spk(&base.maker));
+    let o = f.tx.outputs.iter().position(|o| o.script_public_key == spk && o.covenant.is_none() && o.value == at_new).unwrap();
+    tx.outputs[o].value = at_old;
+    let out = kob_protocol::verify::execute(&tx, &entries, true).unwrap();
+    assert!(out[0].is_err(), "a fill at the old limit must fail");
+
+    // The bid side: a rising bid (start below its limit) given a lower price keeps buying at the old limit; refused.
+    let ab = scenario(p, "amend.bid");
+    let bid = bid_of(&amend_req(&ab).order.state).clone();
+    let rising =
+        BidState { price: bid.price / 2, price_end: bid.price, slope: bid.price, decay_step: 1, active_from: 0, ..bid.clone() };
+    let lowered = BidState { price: bid.price / 3, ..rising.clone() };
+    assert_eq!(lowered.price_at(2_000, 2_000), Some(bid.price), "the kept schedule buys at the old limit");
+    let e = payload::check_amend_terms(&AnyState::KobBid(rising.clone()), &AnyState::KobBid(lowered)).unwrap_err();
+    assert!(e.to_string().contains("priceEnd"), "{e}");
+    let fixed = BidState { price: bid.price / 3, slope: 0, price_end: 0, decay_step: 1, active_from: 0, ..rising.clone() };
+    payload::check_amend_terms(&AnyState::KobBid(rising), &AnyState::KobBid(fixed)).unwrap();
+}
+
+/// Rebinds output `o` of `built` to the genesis id of its group, recomputed from the authorising input's outpoint, and
+/// makes the input claim that id (no signature covers it): the R9FB2-1 forgery. The digests are recomputed so the
+/// maker's signatures fit. Returns the genesis id.
+pub fn forge_genesis(built: &mut BuiltTx, o: usize) -> [u8; 32] {
+    let c = built.tx.outputs[o].covenant.clone().unwrap();
+    let auth = c.authorizing_input as usize;
+    let group: Vec<(u32, u64, String)> = built
+        .tx
+        .outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| x.covenant.as_ref() == Some(&c))
+        .map(|(k, x)| (k as u32, x.value, x.script_public_key.clone()))
+        .collect();
+    let inp = &built.tx.inputs[auth];
+    let g = payload::genesis_covenant_id(inp.transaction_id, inp.index, &group).unwrap();
+    for x in built.tx.outputs.iter_mut().filter(|x| x.covenant.as_ref() == Some(&c)) {
+        x.covenant = Some(CovenantJson { authorizing_input: c.authorizing_input, covenant_id: g });
+    }
+    built.tx.inputs[auth].utxo.covenant_id = Some(g);
+    resign(built);
+    g
+}
+
+/// Recomputes every stored digest of `built` from its transaction.
+pub fn resign(built: &mut BuiltTx) {
+    let (tx, entries) = built.tx.to_tx().unwrap();
+    for r in built.sign.iter_mut() {
+        r.sighash = kob_protocol::tx::sighash(&tx, &entries, r.input_index);
+    }
+}
+
+/// R9FB2-1: an amend whose order input claims the genesis id of the continuation's group, with the output bound to
+/// it, is on chain a GENESIS: the order's covenant id ends and its custody is locked. The engine accepts it (that is the
+/// finding); `verify_amend` now refuses it, and the builder refuses a UTXO whose claimed id would make its
+/// continuation a genesis.
+#[test]
+fn a_genesis_bound_to_the_claimed_id_is_no_amend() {
+    let a = scenario(TemplateId::Kcc20Ref, "amend.ask");
+    let r = amend_req(&a).clone();
+    let mut built = build(&a).unwrap();
+    let real = built.tx.inputs[0].utxo.covenant_id.unwrap();
+    let g = forge_genesis(&mut built, 0);
+    assert_ne!(g, real);
+    let rec = decode(&built.tx.payload).unwrap().unwrap().records[0].clone();
+    let e = verify_amend(&built.tx, &rec, &r.order.state, "cancel").unwrap_err();
+    assert!(e.to_string().contains("would start a new covenant"), "{e}");
+    assert!(recover_amends(&built.tx).is_err());
+    // on chain the input carries its real id: the output is a valid genesis of `g`, the engine takes it
+    built.tx.inputs[0].utxo.covenant_id = Some(real);
+    resign(&mut built);
+    let sigs = sign_locally(&built, &keys()).unwrap();
+    let s = finalize(&built, &sigs, FinalizeOptions::default()).unwrap();
+    validate_signed(&s).expect("the engine accepts the forged amend as a genesis");
+    // the builder, handed the claimed id, refuses to bind a continuation that is a genesis
+    let mut req = r.clone();
+    req.order.utxo.covenant_id = Some(g);
+    let e = build(&Action::AmendOrder(req)).unwrap_err();
+    assert!(e.to_string().contains("would start a new covenant"), "{e}");
+}

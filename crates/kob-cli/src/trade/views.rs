@@ -800,32 +800,43 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
         let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
         let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
         let open = market::OpenToken { remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
+        let mut cut_any = false;
         for t in tokens {
             let declared = declared_ticker(indexer, &t, &reg, &idx);
             let u = unit_of(&t, &reg, &idx, declared.as_deref());
             // Free tokens are confirmed on the node when the market of the token is known, else the
             // figure of the indexer is used.
             let resolved: Option<TokenMarket> = market::resolve_with(&to_hex(&t), &reg, &idx, Some(&open)).ok();
-            let (free, verified, utxos) = match &resolved {
+            // A holdings list an outsider lengthened with dust is cut, not an error: the sum of what was read is a lower
+            // bound, and the row says so (R9T-1).
+            let (free, verified, utxos, cut) = match &resolved {
                 Some(m) => {
+                    let _ = data::take_cut_lists();
                     let us = data::token_utxos(indexer, node, &c.network, m, &maker)?;
+                    let cut = data::take_cut_lists().into_iter().next().map(|c| c.1);
                     let usable = super::plan::usable_token_utxos(m, &maker, &us);
-                    (usable.iter().map(|x| x.state.amount() as i128).sum::<i128>(), true, usable.len())
+                    (usable.iter().map(|x| x.state.amount() as i128).sum::<i128>(), true, usable.len(), cut)
                 }
-                None => listed.get(&t).map(|x| (x.0, false, x.1)).unwrap_or((0, false, 0)),
+                None => listed.get(&t).map(|x| (x.0, false, x.1, None)).unwrap_or((0, false, 0, None)),
             };
+            cut_any |= cut.is_some();
             let e = held.get(&t).cloned().unwrap_or_default();
             locked += e.kas_escrow + e.kas_carriers;
             rows.push(json!({
                 "token": to_hex(&t), "ticker": unit_of(&t, &reg, &idx, None).0.ticker, "declared_ticker": declared.clone(),
                 "decimals": u.1.then_some(u.0.decimals),
                 "free": free.to_string(), "free_utxos": utxos, "free_verified": verified,
+                "free_complete": cut.is_none(), "free_incomplete_reason": cut.clone(),
                 "in_orders": e.custody.to_string(), "bought": e.bought.to_string(), "strays": e.strays.to_string(),
                 "kas_escrow": e.kas_escrow.to_string(), "kas_carriers": e.kas_carriers.to_string(),
                 "kas_locked": (e.kas_escrow + e.kas_carriers).to_string(), "orders": e.orders,
                 "text": {
                     "name": view_name(&t, &u.0.ticker, declared.as_deref()),
-                    "free": amount_text(free, &u), "in_orders": amount_text(e.custody, &u), "bought": amount_text(e.bought, &u),
+                    "free": match &cut {
+                        Some(why) => format!("at least {} (your token UTXOs were read only in part: {why})", amount_text(free, &u)),
+                        None => amount_text(free, &u),
+                    },
+                    "in_orders": amount_text(e.custody, &u), "bought": amount_text(e.bought, &u),
                     "strays": amount_text(e.strays, &u),
                     "kas_locked": units::kas(e.kas_escrow + e.kas_carriers),
                 },
@@ -836,7 +847,7 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
             "kas": {"free": free_kas.to_string(), "locked": locked.to_string(), "total": (free_kas + locked).to_string()},
             "tokens": rows.clone(),
             "skipped": skipped.iter().map(|(c, r)| json!({"covenant_id": c, "reason": r})).collect::<Vec<_>>(),
-            "incomplete": incomplete.is_some(),
+            "incomplete": incomplete.is_some() || cut_any,
             "incomplete_reason": incomplete.clone(),
         });
         let mut lines = vec![

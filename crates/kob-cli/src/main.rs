@@ -89,7 +89,8 @@ TRADE (a key: --key-file PATH or --key-env NAME, else $KOB_KEY; --key was remove
   kob merge <TOKEN>            merge the key's own UTXOs of a token into one (a chain of transfers to itself)
   The trading commands show the plan and sign only with --yes or a terminal's confirmation; --dry-run stops before
   signing; --json prints one JSON document. A plan whose fee is above 4 times the node's fee estimate is refused
-  (FEE_ABOVE_CEILING, exit 1) unless --allow-high-fee is given; this holds for every command that signs.
+  (FEE_ABOVE_CEILING, exit 1) unless --allow-high-fee is given, and no transaction pays more than 0.5 KAS in fees
+  unless --max-fee says more; this holds for every command that signs.
 
 TOKENS AND REGISTRY
   kob token create [OPTIONS]   create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis (`kob token create --help`);
@@ -113,6 +114,7 @@ GLOBAL OPTIONS (`kob <command> --help` lists the ones a command takes)
   --indexer URL        the indexer API (default $KOB_INDEXER_URL, else the deployment record's); read and trade commands
   --node URL           the node's wRPC endpoint (default $KOB_NODE_WRPC, else the public nodes); trade, token, recover
   --allow-high-fee     pay a fee above the ceiling (4 times the node's fee estimate); every command that signs
+  --max-fee KAS        the most any transaction may pay in fees (default 0.5KAS); every command that signs
   --key-file PATH      the file holding the signing key (64 hex), or
   --key-env NAME       the environment variable holding it (default $KOB_KEY); every command that signs
   --json               one JSON document (watch: one per line); read and trade commands

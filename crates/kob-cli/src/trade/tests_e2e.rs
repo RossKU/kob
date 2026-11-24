@@ -1058,7 +1058,7 @@ fn planned(intent: crate::trade::plan::Intent, pair: bool) -> (AnyState, u64) {
     let env = Env {
         market: a.clone(),
         maker: pk(0x11),
-        clock: Clock { daa: 1_000_000, unix: 1_790_694_000, rate_milli: 10_000 },
+        clock: Clock { daa: 1_000_000, unix: 1_790_694_000, rate_milli: 10_000, disputed: false },
         book: Book::default(),
         own: vec![],
         guards_unavailable: vec![],
@@ -1757,7 +1757,7 @@ fn every_trading_command_refuses_a_fee_above_the_ceiling_unless_allowed() {
         assert_eq!(run(f, w.args(key, &format!("{args} {high} --yes"))), 1, "{name}: refused");
         assert_eq!(run(f, w.args(key, &format!("{args} {high} --dry-run"))), 1, "{name}: a dry run shows the refusal");
         assert_eq!(w.submitted(), before, "{name}: nothing sent");
-        assert_eq!(run(f, w.args(key, &format!("{args} {high} --allow-high-fee --yes"))), 0, "{name}: allowed");
+        assert_eq!(run(f, w.args(key, &format!("{args} {high} --allow-high-fee --max-fee 100KAS --yes"))), 0, "{name}: allowed");
         assert_eq!(w.submitted(), before + 1, "{name}: sent");
         assert_eq!(w.signed(suffix).fee.fee_rate, 5000, "{name}: the fee that was asked for");
     }
@@ -1977,4 +1977,36 @@ fn an_unfinished_order_list_is_marked_incomplete() {
     let (code, all) = crate::text::capture(|| crate::trade::actions::run_sweep(&a));
     assert_eq!(code, 1, "{all}");
     assert!(all.contains("incomplete"), "{all}");
+}
+
+/// R9T-1: a holdings list an outsider lengthened (here a cursor that never ends) is cut, not an error. `kob balances`
+/// exits 0 with the sum read marked as a lower bound, and a sell plans from the units read, with a warning that says so.
+#[test]
+fn a_long_holdings_list_degrades_and_does_not_stop_the_maker() {
+    let maker = pk(0x11);
+    let cursor = format!("5:{}:7", "ab".repeat(32));
+    let w = world_x("longholdings", &[], |_, routes| {
+        let base = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(&maker), to_hex(&TOKEN));
+        routes.insert(base.clone(), json!({"items": [token_item(0x03, &user_token(maker, 100 * SCALE))], "next_cursor": cursor}));
+        routes.insert(format!("{base}&cursor={cursor}"), json!({"items": [], "next_cursor": cursor}));
+        routes.insert(
+            format!("/v1/token-utxos?owner={}&limit=500", to_hex(&maker)),
+            json!({"items": [token_item(0x03, &user_token(maker, 100 * SCALE))], "next_cursor": null}),
+        );
+        routes
+            .insert(format!("/v1/orders?maker={}&status=active&limit=200", to_hex(&maker)), json!({"items": [], "next_cursor": null}));
+    });
+    let a = w.args(0x11, "--json");
+    let (code, out, err) = crate::text::capture_split(|| crate::trade::views::run_balances(&a));
+    assert_eq!(code, 0, "{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(doc["incomplete"], true, "{doc}");
+    let row = doc["tokens"].as_array().unwrap().iter().find(|r| r["token"] == to_hex(&TOKEN)).cloned().unwrap();
+    assert_eq!((row["free_complete"].as_bool(), row["free"].as_str()), (Some(false), Some("100000")), "{row}");
+    assert!(row["text"]["free"].as_str().unwrap().starts_with("at least"), "{row}");
+    let a = w.args(0x11, "limit --token TST --side sell --amount 1TST --price 3KAS --decimals 3 --dry-run --json");
+    let (code, out, err) = crate::text::capture_split(|| crate::trade::place::run(&a));
+    assert_eq!(code, 0, "{out}{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    assert!(doc["issues"].as_array().unwrap().iter().any(|i| i["code"] == "TOKEN_LIST_INCOMPLETE"), "{doc}");
 }

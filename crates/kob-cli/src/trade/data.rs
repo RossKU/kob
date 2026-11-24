@@ -23,17 +23,76 @@ use crate::inputs;
 /// The timeout of one indexer request.
 pub const INDEXER_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The virtual DAA score of the node and the local UTC clock.
-pub fn clock(node: &str) -> Result<Clock, String> {
-    let p = crate::wrpc::call(node, "getBlockDagInfo", json!({}), NODE_TIMEOUT).map_err(|e| crate::wrpc::node_failure(node, &e))?;
-    let daa = match p.get("virtualDaaScore") {
+/// The chain's blocks per second (10 BPS): the DAA score advances by about this much per second.
+pub const DAA_PER_SEC: i64 = 10;
+
+/// The skew, in seconds, two honest nodes' virtual DAA scores may show when asked one after the
+/// other: block propagation and the two round trips. Their DAA may differ by
+/// [`CLOCK_MARGIN_DAA`] = `DAA_PER_SEC * CLOCK_SKEW_SECS` = 100 (R9FC-1).
+pub const CLOCK_SKEW_SECS: i64 = 10;
+/// See [`CLOCK_SKEW_SECS`].
+pub const CLOCK_MARGIN_DAA: i64 = DAA_PER_SEC * CLOCK_SKEW_SECS;
+/// The indexer's witness (its cursor DAA plus its lag) is a poll old: it may trail by up to a minute.
+pub const INDEXER_CLOCK_MARGIN_DAA: i64 = DAA_PER_SEC * 60;
+/// The node's past median time may trail the wall clock by a few minutes; beyond this the local
+/// clock (or the node) is off and a wall-clock date would be converted wrongly: a warning.
+pub const WALL_CLOCK_SKEW_SECS: i64 = 600;
+
+fn daa_of(node: &str, p: &Value) -> Result<i64, String> {
+    match p.get("virtualDaaScore") {
         Some(Value::Number(n)) => n.as_i64(),
         Some(Value::String(s)) => s.parse().ok(),
         _ => None,
     }
-    .ok_or_else(|| format!("node {}: no virtualDaaScore in getBlockDagInfo", crate::wrpc::shown(node)))?;
+    .ok_or_else(|| format!("node {}: no virtualDaaScore in getBlockDagInfo", crate::wrpc::shown(node)))
+}
+
+/// The chain's present (virtual DAA score) and the local UTC clock (R9FC-1).
+///
+/// The default pair: both nodes are asked (one `getBlockDagInfo` each: no subscription, no
+/// streaming) and must agree within [`CLOCK_MARGIN_DAA`], else "the two nodes disagree about the
+/// chain's time" and nothing is planned. The present is the lower of the two: an expiry counted
+/// from it ends no later than the one asked for, and a time lock from it is never in the future. A
+/// node the user names is trusted for it, under the same bounds that need no other party
+/// ([`Clock::at_least`], and the indexer witness of [`indexer_witness`]). The node's
+/// `pastMedianTime` far from the local clock is a warning, not a refusal: the order's times are
+/// chain times (DAA), and the local clock enters only the conversion of a wall-clock date and the
+/// times shown; refusing would also block cancels.
+pub fn clock(node: &str) -> Result<Clock, String> {
+    let answers =
+        crate::wrpc::call_each(node, "getBlockDagInfo", json!({}), NODE_TIMEOUT).map_err(|e| crate::wrpc::node_failure(node, &e))?;
+    let daas = answers.iter().map(|p| daa_of(node, p)).collect::<Result<Vec<_>, _>>()?;
+    let (lo, hi) = (daas.iter().copied().min().unwrap_or(0), daas.iter().copied().max().unwrap_or(0));
+    if hi - lo > CLOCK_MARGIN_DAA {
+        return Err(format!(
+            "the two nodes disagree about the chain's time (DAA {lo} against {hi}, more than {CLOCK_MARGIN_DAA} apart): nothing \
+             was planned; try again, or name one node you trust with --node"
+        ));
+    }
     let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    Ok(Clock { daa, unix, rate_milli: 10_000 })
+    let median = answers.iter().filter_map(|p| p.get("pastMedianTime").and_then(Value::as_u64)).map(|ms| (ms / 1000) as i64).max();
+    if let Some(m) = median.filter(|m| *m > 0 && (unix - m).abs() > WALL_CLOCK_SKEW_SECS) {
+        eprintln!(
+            "warning: this computer's clock is {} s {} the chain's median time: a date typed as a wall-clock time converts with it",
+            (unix - m).abs(),
+            if unix > m { "ahead of" } else { "behind" }
+        );
+    }
+    Ok(Clock { daa: lo, unix, rate_milli: 10_000, disputed: false })
+}
+
+/// The indexer as a third witness of the chain's time (R9FC-1): its cursor DAA plus its lag
+/// (`/v1/health`), one small read the plan makes anyway of a service it already uses. A present
+/// further than [`INDEXER_CLOCK_MARGIN_DAA`] from it marks the clock `disputed`: a timed order is
+/// refused, a cancel never is. No answer is no witness.
+pub fn indexer_witness(indexer: &str, clock: Clock) -> Clock {
+    let Ok(h) = http::get_ok(indexer, "/v1/health", INDEXER_TIMEOUT) else { return clock };
+    let (Some(cursor), lag) = (h.get("cursor_daa").and_then(Value::as_i64), h.get("lag_daa").and_then(Value::as_i64).unwrap_or(0))
+    else {
+        return clock;
+    };
+    let seen = cursor.saturating_add(lag.max(0));
+    Clock { disputed: clock.disputed || (seen - clock.daa).abs() > INDEXER_CLOCK_MARGIN_DAA, ..clock }
 }
 
 /// The plain KAS UTXOs of the maker.
@@ -116,7 +175,8 @@ pub fn held_program_from(
     owner: &[u8; 32],
 ) -> Result<Option<TemplateId>, String> {
     let items = match indexer {
-        Some(indexer) => owner_token_items(indexer, owner, cov)?,
+        // the program shows in any unit read; a cut list still names it
+        Some(indexer) => owner_token_items(indexer, owner, cov)?.0,
         None => vec![],
     };
     let mut cands: Vec<(TemplateId, TokenState, [u8; 32], u32)> = vec![];
@@ -172,14 +232,27 @@ fn holding_cursor_ok(c: &str) -> bool {
 }
 
 /// Most pages of `GET /v1/token-utxos?owner=&token=` one listing follows.
-const OWNER_TOKEN_PAGES: usize = 20;
+const OWNER_TOKEN_PAGES: usize = 50;
+
+// The holdings lists that were cut in this run: (token, why). An outsider can lengthen a list by
+// sending dust, so a cut list degrades (what was read is used, every unit confirmed on the node)
+// and is said once, never an error (R9T-1). `flow::finish` turns them into a warning.
+thread_local! {
+    static CUT_LISTS: std::cell::RefCell<Vec<([u8; 32], String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The holdings lists cut since the last call, emptied.
+pub fn take_cut_lists() -> Vec<([u8; 32], String)> {
+    CUT_LISTS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
 
 /// The indexer's token UTXOs of `owner` and the token `cov`, following `next_cursor` to its end.
 ///
 /// A page may be short or empty and still carry a cursor: the indexer reads a bounded number of
 /// the owner's rows of every token per page (R5C2-2). A list that has not ended after
-/// [`OWNER_TOKEN_PAGES`] pages is an error, never "nothing held".
-fn owner_token_items(indexer: &str, owner: &[u8; 32], cov: &[u8; 32]) -> Result<Vec<Value>, String> {
+/// [`OWNER_TOKEN_PAGES`] pages, or whose cursor is malformed or repeats, is cut: what was read is
+/// returned with the reason (the indexer lists oldest first, so the units read are the oldest).
+fn owner_token_items(indexer: &str, owner: &[u8; 32], cov: &[u8; 32]) -> Result<(Vec<Value>, Option<String>), String> {
     let base = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(cov));
     let mut items = vec![];
     let mut cursor: Option<String> = None;
@@ -193,13 +266,13 @@ fn owner_token_items(indexer: &str, owner: &[u8; 32], cov: &[u8; 32]) -> Result<
         match page.get("next_cursor").and_then(Value::as_str) {
             // A holdings cursor is `<block>:<txid hex>:<index>`; anything else would put the indexer's
             // text into the request (R6C2b-I5).
-            Some(c) if !holding_cursor_ok(c) => return Err(format!("{}: the indexer sent a malformed cursor", to_hex(cov))),
+            Some(c) if !holding_cursor_ok(c) => return Ok((items, Some("the indexer sent a malformed cursor".into()))),
             Some(c) if Some(c) != cursor.as_deref() => cursor = Some(c.to_string()),
-            Some(_) => return Err(format!("{}: the indexer's list of your token UTXOs does not advance: incomplete", to_hex(cov))),
-            None => return Ok(items),
+            Some(_) => return Ok((items, Some("the indexer's list does not advance".into()))),
+            None => return Ok((items, None)),
         }
     }
-    Err(format!("{}: the indexer's list of your token UTXOs did not end after {OWNER_TOKEN_PAGES} pages: incomplete", to_hex(cov)))
+    Ok((items, Some(format!("the list did not end after {OWNER_TOKEN_PAGES} pages"))))
 }
 
 fn i64_of(v: Option<&Value>) -> Option<i64> {
@@ -231,7 +304,13 @@ pub fn token_utxos_from(
     owner: &[u8; 32],
 ) -> Result<Vec<TokenUtxo>, String> {
     let items = match indexer {
-        Some(indexer) => owner_token_items(indexer, owner, &m.cov)?,
+        Some(indexer) => {
+            let (items, cut) = owner_token_items(indexer, owner, &m.cov)?;
+            if let Some(why) = cut {
+                CUT_LISTS.with(|v| v.borrow_mut().push((m.cov, why)));
+            }
+            items
+        }
         None => vec![],
     };
     let tt = token_template(m.program);
@@ -301,7 +380,8 @@ pub fn book_from_indexer(scale: i64, v: &Value) -> Book {
         if rows.iter().all(|r| r.get("covenant_id").is_some()) && !rows.is_empty() {
             let mut orders = vec![];
             for r in rows.iter().filter(|r| same(r)) {
-                let Some(price) = i64_of(r.get("price")) else { continue };
+                // the price now (`quote`) of an auction, not its start (R9FC2-2)
+                let Some(price) = i64_of(r.get("quote")).or_else(|| i64_of(r.get("price"))) else { continue };
                 orders.push(BookOrder {
                     price,
                     amount: i64_of(r.get("amount_left")).unwrap_or(1),
@@ -540,6 +620,8 @@ pub struct Live {
     ///
     /// They are left where they are, and only `kob cancel` returns them.
     pub foreign: usize,
+    /// Strays the indexer counts but did not list (`strays_total`, R9FC-5).
+    pub unlisted: usize,
     /// The deadline of a day order, from the placement record as the indexer reports it.
     pub deadline: Option<u64>,
     /// The DAA score of the placement of the order, as the indexer reports it.
@@ -588,7 +670,7 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
         format!(
             "the indexer's view of {} is not usable: {}",
             to_hex(cov),
-            parsed.rejected.first().map(|r| r.reason.clone()).unwrap_or_default()
+            parsed.rejected.first().map(|r| crate::text::clean_long(&r.reason, 400)).unwrap_or_default()
         )
     })?;
     if view.covenant_id != *cov {
@@ -706,6 +788,7 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
         bought,
         strays,
         foreign,
+        unlisted: view.strays_total.map_or(0, |n| n.saturating_sub(view.strays.len())),
         deadline: v.get("deadline").and_then(Value::as_u64),
         genesis_daa: v.get("genesis").and_then(|g| i64_of(g.get("daa"))),
     })
@@ -715,8 +798,8 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
 mod tests {
     use super::*;
 
-    /// R5C2-2: the owner's list of one token follows `next_cursor` through short and empty pages to its end, and a list
-    /// that does not advance is an error, not "nothing held".
+    /// R5C2-2, R9T-1: the owner's list of one token follows `next_cursor` through short and empty pages to its end; a list
+    /// that does not advance is cut: what was read is kept, with the reason (never "nothing held", never an error).
     #[test]
     fn the_owners_token_list_follows_the_cursor() {
         let (owner, cov) = ([0x11u8; 32], [0x22u8; 32]);
@@ -726,12 +809,14 @@ mod tests {
         routes.insert(base.clone(), json!({"items": [], "next_cursor": past}));
         routes.insert(format!("{base}&cursor={past}"), json!({"items": [{"txid": "ab"}], "next_cursor": null}));
         let (url, _) = http::mock::start(routes);
-        assert_eq!(owner_token_items(&url, &owner, &cov).unwrap().len(), 1);
+        assert_eq!(owner_token_items(&url, &owner, &cov).unwrap(), (vec![json!({"txid": "ab"})], None));
         let mut routes = BTreeMap::new();
         routes.insert(base.clone(), json!({"items": [], "next_cursor": past}));
         routes.insert(format!("{base}&cursor={past}"), json!({"items": [], "next_cursor": past}));
         let (url, _) = http::mock::start(routes);
-        assert!(owner_token_items(&url, &owner, &cov).unwrap_err().contains("incomplete"));
+        // a list that does not advance is cut, not an error (R9T-1): what was read is kept, with the reason
+        let (items, cut) = owner_token_items(&url, &owner, &cov).unwrap();
+        assert!(items.is_empty() && cut.is_some_and(|w| w.contains("does not advance")));
     }
 
     /// R7DF-2: the live-order list follows the cursor through short and empty pages to its end; a cursor that repeats or
