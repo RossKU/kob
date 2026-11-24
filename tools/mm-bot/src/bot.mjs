@@ -1344,7 +1344,8 @@ export class Bot {
     const hints = isAsk(s) ? [...new Set([...this.hintsOf(id), ...(Number.isSafeInteger(amountLeft) && amountLeft > 0 ? [amountLeft] : [])])] : [];
     const r = (await this.nodeCheck([id], hints.length ? { [id]: hints } : {})).get(id);
     if (r.status === 'live') return { ok: false, node: r, message: `the node holds ${short(id)} live at ${r.txid} (amount left ${r.amountLeft ?? '?'}): not dropped; cancel it (kob cancel ${id})` };
-    if (r.status === 'unknown') return { ok: false, node: r, message: `the node could not be asked about ${short(id)} (${r.why}): not dropped` };
+    // A record with no state of its own (an older state file, R8T-2) can never be asked about: --force drops it.
+    if (r.status === 'unknown' && !(force && !s.own?.state)) return { ok: false, node: r, message: `the node could not be asked about ${short(id)} (${r.why}): not dropped${s.own?.state ? '' : ' (it has no state to look it up by: --force drops it)'}` };
     const what = r.status === 'foreign' ? 'names another maker' : `is not found on the node at the amounts ${hints.join(', ') || '(a bid: its script)'}${isAsk(s) ? ' (the search is not exhaustive)' : ''}`;
     const fills = (s.fills ?? []).filter((f) => f.at == null || s.ownAt == null || f.at > s.ownAt);
     // Without --force an ask is dropped only when the node showed that it ended (its cancel
@@ -1533,12 +1534,10 @@ export class Bot {
     if (a.kind === 'place') {
       const id = r.newIds[0];
       // The order is tracked from the CLI's own result: its state and outpoint (R2-T1).
-      if (id) {
-        this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
-        this.noteInflight(this.state.orders[id], { kind: 'place', txid: r.txid, exact: true, expiresAt });
-      }
+      const rec = this.track(id, a, r.doc, r.txid, now, expiresAt, { ownAt, pending: { kind: 'place', since: now, txid: r.txid } });
+      if (rec) this.noteInflight(rec, { kind: 'place', txid: r.txid, exact: true, expiresAt });
       // The CLI's own plan says whether the ask is whole-fill: one that is not follows the partial-fill rules.
-      if (id && a.side === 'sell' && c.quotes.askPartialFills === false && !this.isWhole(this.state.orders[id])) {
+      if (rec && a.side === 'sell' && c.quotes.askPartialFills === false && !this.isWhole(this.state.orders[id])) {
         this.log.info(`WARNING: ${short(id)}: placed with --min-fill ${a.amount}base, but the CLI's plan names minFill ${this.state.orders[id].own?.state?.state?.minFill ?? '?'}: it is tracked as a partial-fill ask`);
       }
       this.state.placeFails = 0;
@@ -1564,12 +1563,10 @@ export class Bot {
         // node shows the replace (an output of it, or the replacement live): a fill that lands
         // first leaves the old order live (R6T-2).
         const id = r.newIds[0];
-        if (id) {
-          this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
-          // `input`: the old order's outpoint, which the replace spends (R7T-1).
-          this.noteInflight(this.state.orders[id], { kind: 'place', txid: r.txid, exact: true, expiresAt, input: s.own?.txid ?? null });
-        }
-        s.replacedBy = id ?? null;
+        const rec = this.track(id, { ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt, { ownAt, pending: { kind: 'place', since: now, txid: r.txid } });
+        // `input`: the old order's outpoint, which the replace spends (R7T-1).
+        if (rec) this.noteInflight(rec, { kind: 'place', txid: r.txid, exact: true, expiresAt, input: s.own?.txid ?? null });
+        s.replacedBy = rec ? id : null;
         this.noteCancel(s, r.txid, now);
         this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}; the old record is kept until the node shows the replace`);
       }
@@ -1583,11 +1580,27 @@ export class Bot {
 
   /** The state-file record of an order the bot placed, from the CLI's plan of it (R2-T1). */
   placed(a, doc, txid, now, expiresAt) {
-    const st = doc?.plan?.states?.[0];
-    const value = Number(doc?.plan?.request?.value ?? 0) || (a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0);
+    // `kob place` names the state in plan.states, `kob replace` in plan.replacement (also for a
+    // cancel-replace: actions.rs:746, R8T-2).
+    const st = doc?.plan?.states?.[0] ?? doc?.plan?.replacement;
+    const value = Number(doc?.plan?.request?.value ?? doc?.plan?.value ?? 0) || (a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0);
     return { side: a.side, level: a.level, price: a.price, amount: a.amount, ownAmount: a.amount, ownAt: null, quotedFair: a.quotedFair, placedAt: now, expiresAt, amountLeft: a.amount, value,
       // `cli`: the build that placed it, whose templates a whole-fill lookup must be under (wholeGone).
       own: st?.kind ? { state: st, prev: null, txid: txid ?? null, tpl: null, cli: this.cliVersion ?? null } : null };
+  }
+
+  /**
+   * Records order `id` the bot placed, from the CLI's answer. One the answer names no state of
+   * cannot be looked up on the node, so no record is made of it (R8T-2): like a placement of no
+   * known id, it counts toward the caps for a day, with an alert; an order of the bot's key the
+   * indexer lists later is cancelled as one the bot did not place. Returns the record or null.
+   */
+  track(id, a, doc, txid, now, expiresAt, extra) {
+    const rec = this.placed(a, doc, txid, now, expiresAt);
+    if (/^[0-9a-f]{64}$/.test(id ?? '') && rec.own) return (this.state.orders[id] = { ...rec, ...extra });
+    this.state.blind.push({ side: a.side, cost: a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0, tokens: a.side === 'sell' ? a.amount : 0, at: now });
+    this.alert('warn', 'place-unknown', `A placement (${a.side} L${a.level}) may have gone out, but the CLI's answer names ${id ? `no state of order ${short(id)}` : 'no covenant id'}: it counts toward the caps for a day.`);
+    return null;
   }
 
   /**
@@ -1600,12 +1613,11 @@ export class Bot {
     if (r.sentFee) {
       const id = r.doc?.new_covenant_ids?.[0];
       const txid = r.doc?.result?.txid ?? r.doc?.transaction?.txid ?? null;
-      if (id && /^[0-9a-f]{64}$/.test(id)) {
-        this.state.orders[id] = { ...this.placed(a, r.doc, txid, now, null), fate: 'unknown', pending: { kind: 'place', since: now, txid } };
-        // In flight (R7T-1): it ends as "never went out" only once its expiry has passed by 2 h.
-        this.noteInflight(this.state.orders[id], { kind: 'place', txid, exact: false, expiresAt });
-      } else this.state.blind.push({ side: a.side, cost: a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0, tokens: a.side === 'sell' ? a.amount : 0, at: now });
-      this.alert('warn', 'place-unknown', `A placement (${a.side} L${a.level}) may have gone out (${r.error}); it counts toward the caps ${id ? `as order ${short(id)} until the node says` : 'for a day (no covenant id known)'}.`);
+      const rec = this.track(id, a, r.doc, txid, now, null, { fate: 'unknown', pending: { kind: 'place', since: now, txid } });
+      if (!rec) return;
+      // In flight (R7T-1): it ends as "never went out" only once its expiry has passed by 2 h.
+      this.noteInflight(rec, { kind: 'place', txid, exact: false, expiresAt });
+      this.alert('warn', 'place-unknown', `A placement (${a.side} L${a.level}) may have gone out (${r.error}); it counts toward the caps as order ${short(id)} until the node says.`);
       return;
     }
     this.state.placeFails = (this.state.placeFails ?? 0) + 1;
