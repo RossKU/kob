@@ -165,6 +165,17 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 - **Maintenance no longer sells by default.** The operator's own token UTXOs are only merged; `--dust-sell` (also
   `KOB_DUST_SELL`, or `[launch] args = ["--dust-sell"]`) turns the sale on, which accepts that its price floor comes from a
   book anyone can post into. `--no-dust-sell` is still accepted and does nothing.
+- **The indexer judges the node it follows by the clock.** Whether the chain authority keeps up is decided by the cursor
+  block's verified header time against the host clock alone: within 90 s it keeps up; above that its lag must fall by
+  90 s in every 3 minutes, and once it has kept up it may spend at most 5 minutes in an hour above 90 s, or another node
+  takes over (with a single node, `/v1/health` says so). A node deposed for it that held back chain its successor then
+  served is kept away 10 minutes, doubling up to 6 hours. New in `/v1/health`:
+  `authority_pace` (`keeping_up`, `gaining`, `failing`, `unknown`) and `chain_proofs_off`; `ok`, `/v1/health/ready`,
+  `caught_up` and `within_lag_tolerance` are false while the authority is `failing`, and `caught_up` also needs the cursor
+  block within 90 s of the host clock. New metrics `kob_indexer_authority_failing` and `kob_indexer_chain_proofs_off`.
+  **Do:** keep the host clock on NTP (within 30 s); a clock more than 90 s fast makes every node look behind. A network
+  that stops making blocks now makes the indexer change nodes every few minutes until blocks come again; that is
+  expected (`docs/ops/executor.md`, Part C, *Whether the chain authority keeps up*).
 - **Standalone `kobd match` / `kobd keep` take `--state-dir`** (also `KOB_STATE_DIR`) for the in-flight journal and the
   keepers' subsidy window. Without it they keep both in memory only and pay no keeper subsidy. **Do:** add `--state-dir` to
   such units (`kobd --executor` is unchanged: it uses its data directory).

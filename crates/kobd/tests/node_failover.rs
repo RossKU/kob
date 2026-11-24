@@ -61,6 +61,9 @@ impl Tier {
 }
 
 impl ChainSource for Tier {
+    fn simulated_clock_ms(&self) -> Option<u64> {
+        self.node.simulated_clock_ms()
+    }
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         self.gate()?;
         self.node.vspc_v2(req).await

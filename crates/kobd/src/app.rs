@@ -203,6 +203,10 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
 
     let mut launch = LaunchConfig { role, ..LaunchConfig::default() };
     let data_dir = DATA_DIR.to_string();
+    // Made now, so that the umask does not leave it changeable by the group (R5D-2).
+    let data_path = opts.dir.join(DATA_DIR);
+    std::fs::create_dir_all(&data_path).with_context(|| data_path.display().to_string())?;
+    crate::matcher::wallet::no_group_write(&data_path).map_err(anyhow::Error::msg)?;
     let mut address = Value::Null;
     if a.role.has_key() {
         // An existing key file is used, never replaced, unless another account owns it.

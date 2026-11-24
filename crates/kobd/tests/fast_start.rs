@@ -98,6 +98,9 @@ struct Gated {
 }
 
 impl ChainSource for Gated {
+    fn simulated_clock_ms(&self) -> Option<u64> {
+        self.inner.simulated_clock_ms()
+    }
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, ChainError> {
         // a closed gate fails the request after a moment (a node that does not answer), so a follower can be stopped
         let mut open = self.open.clone();

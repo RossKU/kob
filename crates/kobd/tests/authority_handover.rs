@@ -83,6 +83,9 @@ impl Flaky {
 }
 
 impl ChainSource for Flaky {
+    fn simulated_clock_ms(&self) -> Option<u64> {
+        self.node.simulated_clock_ms()
+    }
     async fn vspc_v2(&self, mut req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         self.chain_gate()?;
         let full = req.data_verbosity_level == Verbosity::Full;
@@ -576,10 +579,11 @@ async fn an_authority_that_gives_the_chain_slower_than_real_time_is_handed_over(
     }
 }
 
-/// R4C1-M1 with no other node: the dripping authority stays, its answers apply, but none is progress, so `/v1/health`
-/// turns `stale` ten minutes after the last progress, and `lag_seconds` shows the cursor block's age meanwhile.
+/// R4C1-M1 with no other node: the dripping authority stays, its answers apply, but one period after its first answer it
+/// is `failing` (`/v1/health` not ok), its answers are no progress, so the health turns `stale` ten minutes after the
+/// last progress, and `lag_seconds` shows the cursor block's age meanwhile.
 #[tokio::test]
-async fn a_lone_authority_that_drips_the_chain_turns_the_health_stale() {
+async fn a_lone_authority_that_drips_the_chain_turns_the_health_failing_then_stale() {
     let _g = serial().await;
     let node = MockNode::new("testnet-10");
     node.set_block_clock(now_ms() - 2 * 3_600_000, 10);
@@ -588,12 +592,13 @@ async fn a_lone_authority_that_drips_the_chain_turns_the_health_stale() {
     *a.drip.lock().unwrap() = Some((1, Duration::from_millis(40)));
     a.lead.store(1_000_000, Ordering::Relaxed);
     let r = run_with(node.anchor(), vec![(spec("ws://10.9.0.1:18210", true), a.clone())], 1, Duration::from_millis(1), paced);
-    r.steps(5).await;
+    r.until(100, "failing", |r| r.health.snapshot().authority_failing()).await;
     let at = r.health.snapshot().last_progress_unix_ms;
-    let out = r.steps(15).await;
+    let out = r.steps(10).await;
     assert!(out.iter().all(|o| matches!(o, StepOutcome::Applied { .. })), "{out:?}");
     let h = r.health.snapshot();
     assert_eq!(h.state, FollowerState::CatchingUp);
+    assert!(h.authority_failing() && !h.caught_up());
     assert_eq!(h.last_progress_unix_ms, at, "no progress");
     let stale_after = kobd::indexer::status::STALE_AFTER_MS;
     assert!(!h.stale(at + stale_after) && h.stale(at + stale_after + 1));
@@ -602,21 +607,20 @@ async fn a_lone_authority_that_drips_the_chain_turns_the_health_stale() {
     assert_eq!(r.source.board().authority(), 0);
 }
 
-/// The honest cases of the pace rule (R4C1-M1), none of which ever counts against the authority:
+/// The honest cases of the pace rule, none of which ever counts against the authority (at test scale, a tolerance of
+/// 500 ms and a period of 1 s):
 /// - a restart 15 minutes behind on an honest node: it catches up faster than real time, is never failing, and the
 ///   health shows the real lag until it is fresh;
 /// - a deep reorg, from a fresh cursor and from an old one;
-/// - an answer that pauses (here 50 ms, under the tolerance; a minute against the 3 minutes in production) in a catch-up;
-/// - a halted network (nothing new, no node shows chain past the cursor) from an old cursor: no progress for the health,
-///   but no node is blamed;
-/// - at the tip, the state flickering between `following` and `catching_up` (R4C1-I3): a fresh cursor is progress
-///   whatever the state.
+/// - an answer that pauses (here 300 ms) in a catch-up from an old cursor;
+/// - at the tip, the state flickering between `following` and `catching_up` (R4C1-I3): a cursor within the tolerance
+///   is progress whatever the state.
 #[tokio::test]
 async fn honest_nodes_are_never_failing_by_the_pace_rule() {
     let _g = serial().await;
     let tolerant = |c: &mut FollowerConfig| {
         c.authority_lag_tolerance = Duration::from_millis(500);
-        c.authority_stall = Duration::ZERO;
+        c.authority_stall = Duration::from_secs(1);
     };
     // a restart 15 minutes behind: 9,000 chain blocks of 100 ms, the last one now
     let node = MockNode::new("testnet-10");
@@ -652,26 +656,16 @@ async fn honest_nodes_are_never_failing_by_the_pace_rule() {
     node.reorg(200, vec![vec![]; 210]);
     r.until(200, "the reorg applied", |r| r.cursor() == Some(node.tip())).await;
     // a pause of 300 ms in a catch-up (one chain block after it), then fast again
-    node.push_empty(2_000);
+    node.push_empty(20_000);
     *a.drip.lock().unwrap() = Some((1, Duration::from_millis(300)));
     let before = r.health.snapshot().last_progress_unix_ms;
     let out = r.steps(1).await;
     assert!(matches!(out[..], [StepOutcome::Applied { added: 1, .. }]), "{out:?}");
-    assert!(r.health.snapshot().last_progress_unix_ms > before, "within the tolerance: progress");
+    assert!(r.health.snapshot().last_progress_unix_ms > before, "within the period: progress");
     *a.drip.lock().unwrap() = None;
-    r.until(200, "caught up after the pause", |r| r.cursor() == Some(node.tip())).await;
+    r.until(400, "caught up after the pause", |r| r.cursor() == Some(node.tip())).await;
     assert_eq!(r.source.board().authority(), 0, "a pause is no failure");
-    // a halted network: nothing new for longer than the tolerance, and nobody shows more
-    for _ in 0..4 {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let out = r.steps(1).await;
-        assert!(matches!(out[..], [StepOutcome::Idle]), "{out:?}");
-    }
-    let at = r.health.snapshot().last_progress_unix_ms;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    r.steps(3).await;
-    assert_eq!(r.source.board().authority(), 0, "a halted network blames no node");
-    assert_eq!(r.health.snapshot().last_progress_unix_ms, at, "no progress past the tolerance: stale ten minutes on");
+    assert!(!r.health.snapshot().authority_failing());
 
     // at the tip with a fresh cursor: the state flickers, every answer is progress
     let node = MockNode::new("testnet-10");
@@ -679,10 +673,7 @@ async fn honest_nodes_are_never_failing_by_the_pace_rule() {
     node.push_empty(10);
     let (a, b) = (Flaky::new(&node), Flaky::new(&node));
     let nodes = vec![(spec("ws://10.10.2.1:18210", true), a.clone()), (spec("ws://10.10.2.2:18210", true), b.clone())];
-    let r = run_with(node.anchor(), nodes, 1, Duration::from_millis(1), |c| {
-        c.authority_lag_tolerance = Duration::ZERO;
-        c.authority_stall = Duration::ZERO;
-    });
+    let r = run_with(node.anchor(), nodes, 1, Duration::from_millis(1), tolerant);
     r.until(200, "first sync", |r| r.cursor() == Some(node.tip())).await;
     let mut states = vec![];
     for i in 0..10u64 {

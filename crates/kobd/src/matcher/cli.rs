@@ -119,8 +119,9 @@ pub struct MatchArgs {
     /// Also run the keepers in this process.
     #[arg(long)]
     pub keep: bool,
-    /// Maintenance: also sell the operator's token UTXOs into the book, above a price floor taken
-    /// from the book's asks (default: off, they are only merged; see `kobd --executor --help`).
+    /// Has no effect here: maintenance (the merge and this sale) runs only under `kobd --executor`,
+    /// which reads the operator's tokens from its own index; `kobd match` reads its book from
+    /// `--book-file` and holds none. Accepted for the shared command lines.
     #[arg(long, env = "KOB_DUST_SELL")]
     pub dust_sell: bool,
 }
@@ -189,6 +190,9 @@ fn run_cfg(c: &CommonArgs, network: String, roles: Roles) -> RunConfig {
         // Checked by the command before it gets here.
         select: c.select.config().unwrap_or_default(),
         state_dir: c.state_dir.clone(),
+        // The inventory policy's use of its period, as `kobd --executor` keeps it in its data
+        // directory: a restart continues the budgets instead of starting them again (R5D-1).
+        inventory_state: c.state_dir.as_ref().map(|d| d.join("inventory-use.json")),
         ..RunConfig::default()
     }
 }
@@ -317,6 +321,15 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     cfg.maintenance.fee_rate = a.common.fee_rate;
     cfg.maintenance.inventory = inventory;
     cfg.maintenance.sell = a.dust_sell;
+    if a.dust_sell {
+        tracing::warn!("--dust-sell has no effect in kobd match: maintenance (the merge and the sale) runs only under kobd --executor, which reads the operator's tokens from its own index (R5D-I1)");
+    }
+    if a.inventory_policy.is_some() && a.common.state_dir.is_none() && !a.common.dry_run {
+        // Its budgets would start again with each process (R5D-1): keep nothing, as for the subsidy.
+        tracing::warn!("no --state-dir: the inventory policy keeps no surplus (its budgets would restart with each process); give --state-dir to keep its use");
+        cfg.engine.planner.inventory = super::planner::InventoryPolicy::default();
+        cfg.maintenance.inventory = super::planner::InventoryPolicy::default();
+    }
     state_rule(&mut cfg)?;
     let node = WrpcNode::new(WrpcConfig::new(rpc_url.clone()));
     tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "matcher starting");
@@ -413,5 +426,29 @@ mod tests {
         assert_eq!(dry.keeper.subsidy_budget, budget);
         state_rule(&mut cfg).unwrap();
         assert_eq!(cfg.keeper.subsidy_budget, 0);
+    }
+
+    /// R5D-1: with `--state-dir`, `kobd match` keeps the inventory policy's use in the folder, so a restart continues
+    /// the period's budgets: a use saved by one run is the next run's, as under `kobd --executor`.
+    #[test]
+    fn the_state_folder_keeps_the_inventory_use_across_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("match-state");
+        let a = Keep::try_parse_from(["kobd", "--book-file", "book.json", "--state-dir", state.to_str().unwrap()]).unwrap().k;
+        let mut cfg = run_cfg(&a.common, "testnet-10".into(), Roles { matcher: true, keeper: false });
+        state_rule(&mut cfg).unwrap();
+        let path = cfg.inventory_state.clone().expect("kept in the state folder");
+        assert_eq!(path, state.join("inventory-use.json"));
+        // one run used part of the budget and saved it; the next run, from the same folder, loads it
+        let mut used = super::super::planner::InventoryUse::default();
+        used.roll(1_000, 36_000);
+        used.record(&[super::super::planner::Kept { token: [7; 32], amount: 5, value: 0 }], 123);
+        used.save(&path).unwrap();
+        let again = run_cfg(&a.common, "testnet-10".into(), Roles { matcher: true, keeper: false });
+        let loaded = super::super::planner::InventoryUse::load(again.inventory_state.as_deref().unwrap()).unwrap().unwrap();
+        assert_eq!((loaded.since, loaded.fee, loaded.kept.get(&[7; 32]).copied()), (Some(1_000), 123, Some(5)));
+        // no folder: nothing is kept on disk
+        let a = Keep::try_parse_from(["kobd", "--book-file", "book.json"]).unwrap().k;
+        assert!(run_cfg(&a.common, "testnet-10".into(), Roles { matcher: true, keeper: false }).inventory_state.is_none());
     }
 }

@@ -68,6 +68,9 @@ struct Stalled {
 }
 
 impl ChainSource for Stalled {
+    fn simulated_clock_ms(&self) -> Option<u64> {
+        self.inner.simulated_clock_ms()
+    }
     async fn vspc_v2(&self, _req: VspcRequest) -> Result<RawVspcResponse, ChainError> {
         self.windows_asked.fetch_add(1, Ordering::SeqCst);
         std::future::pending().await

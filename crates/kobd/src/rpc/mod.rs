@@ -374,14 +374,12 @@ pub trait ChainSource: Send + Sync + 'static {
             Ok(false)
         }
     }
-    /// Whether the last chain answer of the authority came with chain past it that another node
-    /// showed: a header that hashes to its claimed id, with its proof of work, well past the
-    /// authority's answer (`multi::MultiNode`, R4C1-M2). It never counts against the authority by
-    /// itself. The follower uses it only to tell a halted network from an authority that holds the
-    /// chain back, once the cursor is old by the local clock. The default is `false`.
-    fn chain_beyond_shown(&self) -> bool {
-        false
-    }
+    /// The chain authority this source deposed last ([`ChainSource::authority_failing`]) was to
+    /// blame: its successor kept up after serving chain that existed at the deposal and the deposed
+    /// one had not served (`indexer::follower`, *Progress*). A source that hands the authority
+    /// over keeps that node away longer each time (`multi::MultiNode`: `resolver::strike`;
+    /// `failover::Failover`: the primary's probe hold). The default ignores it.
+    fn deposal_confirmed(&self) {}
     /// The primary's copy of `runs` of a window `raw` from another node (`origin`, from `start`)
     /// differs from it (`why`). The default drops that node ([`ChainSource::report_lie`]). A
     /// source with a third node asks it first when the primary is a public node too
@@ -451,6 +449,19 @@ pub trait ChainSource: Send + Sync + 'static {
     /// Which nodes serve now. A new value means a new chain authority, checked again.
     fn authority_key(&self) -> String {
         String::new()
+    }
+    /// Tests only: the Unix ms the follower's local clock reads at its start, for a source that
+    /// serves a simulated chain with fixed block times (`testkit::MockNode`). `None`, the default
+    /// and every node client's: the real clock.
+    #[doc(hidden)]
+    fn simulated_clock_ms(&self) -> Option<u64> {
+        None
+    }
+    /// The chain authority alone: a new value is a new authority, which the follower's progress
+    /// rule judges from where it starts (`indexer::follower`, *Progress*). A change of another
+    /// node (the cross-checking one) is none. The default is [`ChainSource::authority_key`].
+    fn authority_node(&self) -> String {
+        self.authority_key()
     }
     /// Per-node counters for `/v1/health` (empty for a single node).
     fn node_stats(&self) -> Vec<multi::NodeStatus> {

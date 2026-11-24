@@ -284,16 +284,18 @@ Every key the handler returns:
 | `node_version` | string or `null` | The node's server version; `null` until the first successful contact. |
 | `cursor_hash` | hex or `null` | The last applied chain block. |
 | `cursor_daa` | number | DAA score of the cursor. |
-| `cursor_time_unix_ms` | number or `null` | Header time (Unix ms) of the cursor's chain block, set by its miner; `null` until a batch applied it or its header was read after a start. |
+| `cursor_time_unix_ms` | number or `null` | Header time (Unix ms) of the cursor's chain block, set by its miner, as verified: the proven header's, or with chain proofs off one that hashes to its block; `null` until a batch applied it or its header was read after a start. |
+| `authority_pace` | object, **omitted** before the follower's first step | Whether the chain authority keeps up with real time, judged from the cursor block's header time and the local clock alone (docs/ops/executor.md Part C, *Whether the chain authority keeps up*): `state` (`keeping_up`: the cursor block at most `tolerance_ms`, 90 s, old; `gaining`: older, and no period of 180 s has ended without the lag falling by 90 s; `failing`: one has, or after keeping up the authority spent more than 300 s of an hour above the tolerance, and the lag has not come within the tolerance since: the authority is handed over where there is another node; `unknown`: the cursor block's time is not known yet), `lag_ms` (the cursor block's age by the local clock at that step, negative when it is stamped ahead; `null` when unknown), `tolerance_ms`, `at_unix_ms` (when it was judged). |
+| `chain_proofs_off` | bool | Chain proofs are off (`[chain_proof] enabled = false`): no batch is proven, and the cursor block's time is the node's word, checked only against the block's hash. |
 | `node_daa` | number or `null` | The node's virtual DAA score at the last successful poll; `null` until known. |
 | `last_error` | string or `null` | The last follower error (set while `node_unavailable`, cleared on progress). |
 | `gap_reason` | string or `null` | Why the chain cannot be continued (set with `state = gap`). |
 | `last_poll_unix_ms` | number | Wall time of the last poll. |
-| `last_progress_unix_ms` | number | Last poll that was progress: one from a cursor whose chain block is at most 10 minutes old by the local clock, or whose chain keeps up with real time (its lag behind the local monotonic clock at most 3 minutes above the least it reached since the chain authority leads). What the node says of its own position plays no part (`docs/ops/executor.md`, Part C). |
-| `ok` | bool | `state` is `following` or `catching_up`, `stale` is false **and** `alarms` is empty. Note a catching-up store can be `ok`. |
-| `stale` | bool | `following` or `catching_up`, but no progress (`last_progress_unix_ms`) for 10 minutes: the follower hangs, or its chain authority gives the chain slower than real time, or the network stands still (then 20 minutes after its last chain block). A follower task that died is `stopped`, with `halt_reason`, and the process exits so that its supervisor restarts it. |
-| `caught_up` | bool | `state = following` and `node_daa` known. The matcher and keepers plan only against a caught-up store (or within the tolerance below). |
-| `within_lag_tolerance` | bool | `caught_up`, or `following` / `catching_up` with a lag of at most `lag_tolerance_daa` (when that is above 0). What the matcher, keepers and maintenance gate on. |
+| `last_progress_unix_ms` | number | Last step whose `authority_pace` was `keeping_up` or `gaining`. What the node says of its own position plays no part (`docs/ops/executor.md`, Part C). |
+| `ok` | bool | `state` is `following` or `catching_up`, `stale` is false, `alarms` is empty **and** `authority_pace.state` is not `failing`. Note a catching-up store can be `ok` (`gaining`); read `lag_seconds` for how far behind it is. |
+| `stale` | bool | `following` or `catching_up`, but no progress (`last_progress_unix_ms`) for 10 minutes: the follower hangs, or its chain authority has been `failing` that long (a lone node that holds the chain back, or a network that stands still: then about 14.5 minutes after its last chain block). A follower task that died is `stopped`, with `halt_reason`, and the process exits so that its supervisor restarts it. |
+| `caught_up` | bool | `state = following`, `node_daa` known, not `stale`, and `authority_pace` said `keeping_up` within the last 90 s (the cursor block at most 90 s old by the local clock, whatever the node says of its position). The matcher and keepers plan only against a caught-up store (or within the tolerance below). |
+| `within_lag_tolerance` | bool | `caught_up`, or `following` / `catching_up` with a lag of at most `lag_tolerance_daa` (when that is above 0), not `stale`, and the cursor block within 90 s by the local clock as for `caught_up`. What the matcher, keepers and maintenance gate on. |
 | `lag_tolerance_daa` | number | The tolerance in DAA: `max_lag_secs` (default 30) times `daa_per_second` (10) = 300; 0 means strict (only `following`). |
 | `lag_daa` | number or `null` | `node_daa` minus `cursor_daa` (not below 0); `null` while `node_daa` is unknown. |
 | `lag_seconds` | number or `null` | `lag_daa / daa_per_second` (integer division; `daa_per_second` default 10), and at least the age in seconds of the cursor's chain block by the local clock (`cursor_time_unix_ms`), so a node that claims to be just ahead of an old cursor does not hide the lag; `null` with `lag_daa`. A host clock that runs ahead shows that much lag. |
@@ -367,6 +369,7 @@ A load-balancer probe. No parameters. Body: `{"ready": bool, "reason": string, "
 |---|---|---|
 | `200` | `ok` | `state` is `following` or `catching_up`, `lag_seconds` is known, and the lag is below the smallest `lag_alarm_hours` threshold (default 1 hour; with no thresholds configured the lag check is skipped). |
 | `503` | `no progress for 10 minutes` | `following` / `catching_up` but `stale`. |
+| `503` | `the chain authority does not keep up with real time` | `following` / `catching_up` but `authority_pace.state` is `failing`. |
 | `503` | `node position unknown` | `following` / `catching_up` but `node_daa` is not known yet. |
 | `503` | `indexer lag above the first alarm threshold` | `following` / `catching_up` with `lag_seconds` at or above the smallest threshold times 3600. |
 | `503` | `indexer is not following the chain` | any other state (`starting`, `node_unavailable`, `gap`, `stopped`). |

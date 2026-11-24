@@ -2126,8 +2126,10 @@ Poll `/v1/health`, or scrape `GET /v1/metrics` (the same numbers as Prometheus t
 | `node_alarms` non-empty, `kob_indexer_node_alarms` above 0 | a node named in the configuration is unusable (another network, no UTXO index, not synced for 2 min, hanging, behind the other node, contradicting it, chain requests that keep failing; Part C, *Node*): it is never replaced, fix it; a cross-checking one, or a primary whose role another node took over, is cut off from the pair meanwhile |
 | `kob_indexer_node_replaced_total` rising every few minutes | the public nodes keep failing; `nodes[].cut_reason` says which host and why |
 | `kob_indexer_authority_replaced_total` rising | chain authorities given up for a finding (useless, a disagreement that did not settle, an answer contradicting the store, chain requests that keep failing: Part C, *A failing chain authority*); `nodes[].cut_reason` says why, `nodes[].promoted` which named node took over |
+| `authority_pace.state = failing`, `kob_indexer_authority_failing` 1 | the chain authority held the index more than 90 s behind real time without gaining for 3 minutes, or for more than 300 s within an hour after it kept up (Part C, *Whether the chain authority keeps up*): it is handed over where there is another node; with one node, or while it lasts, check the node, and the host clock (NTP: a clock fast by more than 90 s makes every node look behind) |
+| `kob_indexer_chain_proofs_off` 1 | `[chain_proof] enabled = false`: no batch is proven and the cursor block's time is the node's word; turn the proofs on |
 | `lag_seconds` above 1 h / 6 h / 12 h / 24 h | approaching the node's retention; 12 h is consensus finality, 24 h leaves little of the default 30 h pruning window |
-| `last_progress_unix_ms` older than 60 s | the follower is stuck, or its chain authority holds the chain back (progress is stamped on every answer from a cursor whose chain block is at most 10 minutes old, or whose chain keeps up with real time: Part C, *A chain authority that answers nothing new*) |
+| `last_progress_unix_ms` older than 60 s | the follower is stuck, or its chain authority holds the chain back (progress is stamped at every step while `authority_pace` is `keeping_up` or `gaining`: Part C, *Whether the chain authority keeps up*) |
 | `vspc_timeouts_total` rising, `batch_window_blue` small, `lag_blue` not falling | the link to the node is slower than the chain (section 3, *Bandwidth*): run the indexer next to its node |
 | `prefetch_discards_total` rising steadily | the chain keeps reorganising under the windows fetched ahead (a node far behind its own peers, or a deep reorg); each discard costs one window of traffic, the state stays exact |
 | `prefetch_bytes_peak` at `prefetch_max_mb` and `lag_blue` falling slowly | the budget, not the link, limits the catch-up: raise `prefetch_max_mb` if memory allows |
@@ -2902,7 +2904,7 @@ It is off by default. `--inventory-policy <file>` (on `kobd --executor` and `mat
 | `tokens[].token` | (required) | an allowlisted token (covenant id); every other token's surplus goes to the pair ask as before |
 | `tokens[].refPrice` | none | `sompi` per `per` base units: the owner's own valuation (it sells the inventory off-matcher), used instead of the KAS bids |
 | `maxFee` | `1000000000` (10 KAS) | the most network fee (sompi) the batches that keep a surplus may pay per period; once spent, no surplus is kept until the period ends. Checked before each batch: the batches of one tick count against it in turn (the last batch may overshoot it by its own fee). Set a larger value for a larger budget |
-| `periodDaa` | `864000` (one day) | the budget period of `maxFee` and `tokens[].maxAmount`, DAA; it starts at the first tick of the Executor and restarts when it ends. The period's use is kept in `inventory-use.json` in the data directory (next to the database), so a restart continues the period instead of starting its budgets again; delete the file to reset them |
+| `periodDaa` | `864000` (one day) | the budget period of `maxFee` and `tokens[].maxAmount`, DAA; it starts at the first tick of the Executor and restarts when it ends. The period's use is kept in `inventory-use.json` in the data directory (next to the database), so a restart continues the period instead of starting its budgets again; delete the file to reset them. `kobd match` keeps it in its `--state-dir` folder; without one, a live `kobd match` keeps no surplus (its budgets would restart with each process) |
 | `tokens[].maxAmount` | none | the most base units of the token kept per period; a batch that would keep more than what is left of it keeps none (the surplus goes to the pair ask). Like `maxFee` it counts every batch of the tick, so batches of different pair markets that keep the same token share it. Without it a token's amount is bounded only by `maxFee`: set it for every listed token |
 | `tokens[].minAmount` | none | the least surplus worth keeping (base units). With `refPrice`: no bound unless set. Without it the bound is the dust rule, the smallest minimum fill of the bids that value the surplus (a sale of the kept amount alone could fill one), and `minAmount` only raises it (a value below the dust rule, `0` included, changes nothing) |
 
@@ -3162,7 +3164,7 @@ builders (`SendTokens`, a taker `Batch`), signed and validated in the engine, su
 (`maintenance: the operator's token UTXOs`, with `released`: the carriers it moves back to the funding). A sale runs only on
 bids the matcher's tick left: a bid that crosses an ask is the matcher's. `--no-maintenance` turns both off.
 
-**The sale is opt-in** (`--dust-sell`, also `$KOB_DUST_SELL`; in `kobd.toml` `[launch] args = ["--dust-sell"]`; `kobd match --dust-sell`).
+**The sale is opt-in** (`--dust-sell`, also `$KOB_DUST_SELL`; in `kobd.toml` `[launch] args = ["--dust-sell"]`). Maintenance, the merge and the sale, runs only under `kobd --executor`: standalone `kobd match` reads its book from `--book-file` and holds no operator tokens, so `--dust-sell` there does nothing (it warns).
 By default maintenance only merges, and unsold holdings stay with the operator key, merged. Why: a third-party operator must be
 safe by default, and any price floor taken from the book can be posted into (the residual in the floor section below). An
 operator who turns the sale on accepts that residual for the tokens the `--inventory-policy` file does not list. `--no-dust-sell`,
@@ -3348,30 +3350,53 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   holds one (from the authority), and from the cross-checking node at most 4 window requests per window, or, past 4 runs,
   one copy of the window from its first flagged chain block to its last (at most one extra copy of the authority's window,
   each answer at most 256 MiB, asked one after another). The referee is asked the same only on a difference.
-  **A chain authority that answers nothing new, or gives the chain slower than real time** (R2C-M1, R3C1-M1, R4C1-M1):
-  no node's word about its own position (its sink, its virtual DAA score, `catching_up` or not) decides whether its
-  answers are progress, and neither does the other node's claim to be ahead. What decides is the header time of the
-  cursor's chain block (bound to the block by its hash and proof of work; its miner can move it by about two minutes, not
-  hours) against the local clock. The cursor is *fresh* while that time is at most 10 minutes old by the local wall
-  clock, and an answer from a fresh cursor is progress. From an older cursor an answer is progress only while the chain
-  keeps up with real time: its lag behind the local monotonic clock may rise at most 3 minutes
-  (`AUTHORITY_LAG_TOLERANCE`) above the least it reached since this authority leads. An honest catch-up gains on real
-  time (14.6 s of chain a second measured), and following at the tip holds it, so both count, in either state. An
-  authority that gives the chain slower than real time from an old cursor, one chain block or a hundred a poll, its sink
-  claimed just ahead or far ahead, does not: its answers still apply (they are real chain), but each counts as a failed
-  chain request, so after the 3-minute stall another node takes over (*A failing chain authority*), and `/v1/health`
-  turns `stale` 10 minutes after the last progress. `lag_seconds` is at least the cursor block's age, so the web sees
-  the lag (and goes to standalone mode past 120 s) whatever the authority claims. Timing, an attacker as chain authority
-  that drips from the tip: progress until the cursor is 10 minutes old, then a handover about 3 minutes later; with no
-  other node, `stale` 10 minutes after that, at a lag of about 20 minutes, shown all the while. So the most it can hold
-  for good with `ok: true` and no handover is a lag of 10 minutes, which `lag_seconds` shows. An honest node slower than real time is handed over
-  the same way, which is the point. An answer with nothing new from a cursor older than 10 minutes is no progress either;
-  it counts against the authority only when the chain moves on: the authority itself claims more, or the cross-checking
-  node showed a real block well past it (below). A halted network, both nodes standing still, blames no node: `stale`
-  turns on 20 minutes after the last chain block, as before. A cross-checking node that reports 100 chain blocks or more
-  beyond a short answer must show the block 100 past it (`getBlock`: a header that hashes to its id, its proof of work
-  met at a target at most 16 times the cursor block's, a blue score that far past it); one it cannot show is a lie, and
-  the node is given up (a public node replaced, a named one dropped). A shown block counts against nobody (R4C1-M2).
+  **Whether the chain authority keeps up** (R2C-M1, R3C1-M1, R4C1-M1, R5C1-M1, R5C1-M2): decided from two things only,
+  the header time of the cursor's chain block as it was verified when the block was applied, and the local clock. No
+  field of any answer of the authority (its sink, its virtual DAA score, "more follows", an empty answer, how long it
+  takes to answer) and no claim of another node enters it. The *lag* is the local monotonic clock minus that header time.
+  While it is at most **90 s** (`AUTHORITY_LAG_TOLERANCE`), the authority keeps up (an honest node at the tip is seconds
+  behind; the web leaves an indexer whose lag is above 120 s). Above it, the authority must gain on real time: in every
+  **180 s** (`AUTHORITY_STALL`) of the follower's own running time the lag must fall by at least **90 s**. A *period*
+  begins when the lag rises above 90 s and ends once the lag has stayed within 90 s for a whole period (a lag that rises
+  above it again before then continues the period). A period that reaches its end without the gain is the authority's
+  failure: it is handed over as below (*A failing chain authority*), and with nothing to hand over to, `/v1/health`
+  says so: `authority_pace.state` `failing`, `ok` false, `/v1/health/ready` 503, `caught_up` and `within_lag_tolerance`
+  false (the matcher, keepers and maintenance plan nothing), `kob_indexer_authority_failing` 1, `CHAIN AUTHORITY NOT
+  KEEPING UP` on the status line, and `stale` 10 minutes after the last progress. Not configurable. An honest catch-up
+  gains far more (14.6 s of chain a second measured; even one at 5 times real time gains 720 s a period), so it is
+  `gaining`, `ok`, until it is within 90 s. The running time is the follower's own: whatever a node takes to answer
+  counts (every wait on a node is inside a step), the follower's database work does not, and a gap of more than 30 s
+  (`PAUSE_CAP`: the process stopped, the host asleep, a disk that hung, a storage error) starts the period again from
+  the lag at that moment, so a pause on kobd's side is never the node's (R5C1-L1). A new authority (a handover, a
+  failover switch, a restart of kobd) begins with no period. **What a node can hold back, at most:** the index within
+  90 s of real time for good (`ok`, the web uses it); above that, one period: about 270 s of lag from the tip (90 s to
+  pass the tolerance, 180 s of period), or the lag it found plus 180 s, then it loses the role. **Excursions:** once an authority has kept up (its lag within 90 s) in its stint, the running time it spends with the
+  lag above 90 s is limited to **300 s in any rolling hour** of the running time (`EXCURSION_BUDGET`,
+  `EXCURSION_WINDOW`); past it, it is `failing` and handed over as for a failed period. A node that swings the lag
+  above the tolerance and back within each period (each swing must be followed by a whole period within 90 s) therefore
+  gets two swings at most: before its deposal it holds the lag above 120 s for at most about 240 s of an hour (two
+  excursions of 180 s and 120 s, each spending its first 30 s rising from 90 s to 120 s), about 7 %. The catch-up of a
+  stint that began behind is not an excursion (only the period rule applies until it first keeps up), and the
+  follower's own pauses do not use the budget: after a 2-minute commit, compaction or stop, only the seconds the node
+  then takes to catch up are charged. **Strikes:** a deposal counts against the deposed node only once its successor
+  shows it was to blame: the successor keeps up (within 90 s, or a period with the gain) after serving chain stamped
+  more than 90 s after the cursor block and before the deposal, chain that existed and the deposed node did not serve. If the
+  successor fails too, or the deposed node leads again first, nobody is struck: a halted network serves no such chain.
+  A struck public node is not resolved again for 10 minutes, doubling with each strike up to 6 hours
+  (`resolver::strike`); a struck own node behind a failover is probed again only after the same hold. With it, a
+  hostile node that is resolved again each time its hold ends gets about 3 stints in its first hour (about 720 s above
+  120 s, 20 %), 1 in the second (240 s), then one per hold up to 6 hours (about 1 %).
+  **A network that stops making blocks** fails every authority the same way, so the nodes are handed over in turn,
+  one period apart, until blocks come again: harmless, the cost of the handovers only (below, *A failing chain
+  authority*). **Clock:** the rule assumes a host clock within 30 s of real time (NTP). A clock slow by X under-reports
+  the lag by X (an authority may hold the index X more behind; a cursor block stamped more than 162 s ahead of the local
+  clock warns at the start and then hourly: `the host clock is slow`); one fast by more than 90 s makes every authority
+  look behind: a handover every period and `ok` false. The monotonic clock is not moved by steps of the wall clock.
+  **Chain proofs off** (`[chain_proof] enabled = false`): the header time is then the node's word, taken only from a
+  header that hashes to its block's hash (a cross-checking node vouches for the hashes), and a time not known counts as
+  not keeping up; `/v1/health` `chain_proofs_off: true`, `kob_indexer_chain_proofs_off` 1, `chain proofs OFF` on the
+  status line, and a warning at the start. Chain the cross-checking node reports past the authority's answer decides
+  nothing and costs nobody anything (R4C1-M2).
   **A window from another node whose KOB transactions differ from the authority's copy** (R4C1-L1): when the authority
   is a public node, its copy is only vouched for by ids, so the referee (or a third cross-checking node) decides before
   anyone is given up, as for the authority's own windows; with no third node, nobody is given up yet and the difference
@@ -3464,8 +3489,9 @@ the node as `benched`. So a slow public node can stay listed without slowing the
 **A failing chain authority** (`indexer::follower`, `rpc::multi`; every role, the Executor's indexer included). A node can
 answer its small calls (health, sink) while its chain requests (a VSPC batch, the chain hashes, its copy of a window from
 another node) time out or lose the connection: on 2026-11-13 such a primary held index-a still for over 18 minutes, its
-status `authority, ok`. When **2 chain requests in a row fail on the wire, or are answers that are no progress (the chain from an old cursor slower than real time, R4C1-M1), and there was no progress for 3 minutes**
-(the local monotonic clock; `AUTHORITY_FAILURES`, `AUTHORITY_STALL`, not configurable), or when **5 steps in a row over at least
+status `authority, ok`. When **a period of the progress rule ends without the gain** (above, *Whether the chain authority keeps up*), when **2
+chain requests in a row fail on the wire and there was no answer for 3 minutes** (the local monotonic clock;
+`AUTHORITY_FAILURES`, `AUTHORITY_STALL`, not configurable), or when **5 steps in a row over at least
 a minute gave up on a claimed tip reorg** (a lane proof answered "not in the selected parent chain" every time;
 `TIP_REORG_STALL_STEPS`, `TIP_REORG_STALL`; the state is `node_unavailable`), the authority is handed over:
 
@@ -3482,8 +3508,35 @@ a minute gave up on a claimed tip reorg** (a lane proof answered "not in the sel
 * **Public pair** (`rpc_url = "resolver"`): the authority's public node is given up, the other node of the pair is the
   authority at once, and a replacement is resolved on a host neither in use nor failed lately (the same node again only
   when the resolvers name no other).
-* **Single node:** nothing to hand over. It keeps its node alarm and the follower retries with its backoff, as before.
-  With `[failover]` the public pair is checked and, when it can serve, becomes the chain source.
+* **Single node:** nothing to hand over. It keeps its node alarm and the follower retries with its backoff, as before;
+  the progress rule drives the health only (`authority_pace` `failing`). With `[failover]` the public pair is checked and,
+  when it can serve, becomes the chain source.
+
+**How often the same node gets the role again.** A named node leads again only when the node that took over fails the
+same way (its alarm ends after a minute of answers; it is never promoted while it has one). A public node given up
+joins the hosts the next resolutions avoid (the last 8); one struck (its successor served chain it held back, above) is also kept out of every resolution for 10 minutes,
+doubling with each strike up to 6 hours, and forgiven after a day without one (`resolver::strike`). Avoided is not
+banned: when the resolvers name no other node, it is taken. The own node behind `[failover]` is probed back after the
+same hold when struck, else after the probes (`return_after_probes` x `probe_secs`). So a hostile public node holds the
+index back at most one period (plus the tolerance), or its excursion budget, each time it gets the slot, and gets it
+again only after 10 minutes, 20, 40 ... up to 6 hours.
+
+**A network that stops making blocks** (every node equally stuck) fails each authority after one period. What a halt of
+20 minutes does (the period begins 90 s after the last block; handovers then every 180 s, about 6):
+
+* **Public pair:** about 6 authorities given up (`authority_replaced_total` +6), each replaced at once by the other node
+  and its entry resolved again: at most about one resolution per handover (an entry resolves 3 times in 10 minutes,
+  then once per 5 minutes; the authority's entry, never held back, resolves only when no other node is left, once per
+  period at most). The avoided hosts stay at most 8 and soft. The index never lacks a node and never stops.
+* **Named pair:** the two nodes swap the role every period (each swap a node alarm, logged; a node with an alarm not yet
+  ended stays a secondary, and the authority then stays with its alarm).
+* **Own node with `[failover]`:** the own node is deposed after the first period, the fallback serves, the own node is
+  probed back after 3 healthy probes (90 s) and deposed again a period later: a switch every 4.5 minutes or so. No
+  deposal is a strike (the fallback serves no chain the own node held back), so a halt soon after a start holds nothing off.
+* **Single node:** no handover; `authority_pace` `failing` and `ok` false from 4.5 minutes in, `stale` 10 minutes later.
+
+When blocks come again they are stamped with the time then, so whichever node serves is within the tolerance at its first
+answer: the cursor is fresh within one period, and the own node is the chain source again within the probes.
 
 Which nodes may take over is the operator's choice, per `[[nodes]]` entry: `may_lead = true` or `false`. The default is
 the entry's `fetch`. A node that serves windows is a full peer the operator listed, and it may lead. A submit-only node
@@ -3617,8 +3670,8 @@ kobd keep --network testnet-10 --book-file book.json --metrics-file /var/lib/nod
 | `--select-min-share` | 0.1 | the lowest share of the optional work per tick the races may push the executor to (room for `1 / share` executors) |
 | `--select-seed` | OS randomness | seed of the selection's random source (a reproducible run) |
 | `--keep` (match) | off | run the keepers too |
-| `--dust-sell` (match) | off | maintenance also sells the operator's token UTXOs above the book's price floor (opt-in; also `$KOB_DUST_SELL`; C, "Maintenance"); off, it only merges them |
-| `--state-dir` | none | the folder of what must survive a restart, one per process (also `$KOB_STATE_DIR`; created if missing; covered by the start check): the in-flight journal, the keepers' subsidy window and the start count (Restarts). Without it they are in memory only, and the keepers pay no subsidy |
+| `--dust-sell` (match) | off | no effect in `kobd match` (it warns): maintenance runs only under `kobd --executor` (C, "Maintenance") |
+| `--state-dir` | none | the folder of what must survive a restart, one per process (also `$KOB_STATE_DIR`; created if missing; covered by the start check): the in-flight journal, the keepers' subsidy window, the inventory policy's use (`inventory-use.json`) and the start count (Restarts). Without it they are in memory only: the keepers pay no subsidy and the inventory policy keeps no surplus |
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
 | `--keeper-subsidy-max-kas` (keep, match) | 0.05 | the most KAS of the operator's funding added to the fee of one kill or refund whose tip pays the floor but not its urgency's rate (0: off; see Fee policy) |
 | `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` (keep, match) | 1, 864000, 8 | the most KAS of subsidy all kills and refunds together (replacements included) take within any rolling window of this many DAA, and the most subsidised jobs per tick; past either, jobs go at the rate their tip pays (0: no subsidy; see Fee policy, Subsidy budget) |

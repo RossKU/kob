@@ -66,7 +66,8 @@ use crate::hex::Hash32;
 use serde::Serialize;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 /// When to switch and when to come back ([`crate::config::FailoverConfig`]).
 #[derive(Debug, Clone)]
@@ -138,6 +139,22 @@ struct State {
     last_switch_reason: Option<String>,
     refused: u64,
     last_refusal: Option<String>,
+    /// What this source deposed last, until the follower says it was to blame
+    /// (`ChainSource::deposal_confirmed`).
+    deposed: Option<Deposed>,
+    /// The primary's strikes: deposals soon after it began at the tip, and the last one
+    /// (`resolver::strike` for public nodes).
+    strikes: u32,
+    last_strike: Option<Instant>,
+}
+
+/// A deposal of [`Failover::authority_failing`].
+#[derive(Debug, Clone, Copy)]
+enum Deposed {
+    /// The configured node, for the fallback.
+    Primary,
+    /// A node within tier `t`, by that tier.
+    Within(usize),
 }
 
 const NAMES: [&str; 2] = ["primary", "fallback"];
@@ -190,6 +207,9 @@ impl<S: ChainSource> Failover<S> {
             last_switch_reason: None,
             refused: 0,
             last_refusal: None,
+            deposed: None,
+            strikes: 0,
+            last_strike: None,
         };
         let inner = Inner {
             tiers: [primary, fallback],
@@ -516,6 +536,7 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     async fn authority_failing(&self, at: Hash32, why: &str) -> bool {
         let t = self.active();
         if self.inner.tiers[t].authority_failing(at, why).await {
+            self.inner.with(|s| s.deposed = Some(Deposed::Within(t)));
             return true;
         }
         if t != 0 {
@@ -524,7 +545,11 @@ impl<S: ChainSource> ChainSource for Failover<S> {
         match self.inner.healthy(1, None).await {
             Ok(()) => {
                 self.inner.switch(1, &format!("the configured node's chain requests keep failing ({why})"));
-                self.active() == 1
+                let moved = self.active() == 1;
+                if moved {
+                    self.inner.with(|s| s.deposed = Some(Deposed::Primary));
+                }
+                moved
             }
             Err(e) => {
                 tracing::warn!(primary = %self.inner.shown[0], fallback = %self.inner.shown[1], "node failover: the configured node's chain requests keep failing, but the fallback cannot serve ({e}); staying");
@@ -545,6 +570,41 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     fn authority_key(&self) -> String {
         let t = self.active();
         format!("{t} {}", self.inner.tiers[t].authority_key())
+    }
+    fn simulated_clock_ms(&self) -> Option<u64> {
+        self.inner.tiers[0].simulated_clock_ms()
+    }
+    fn authority_node(&self) -> String {
+        let t = self.active();
+        format!("{t} {}", self.inner.tiers[t].authority_node())
+    }
+    /// The configured node, deposed for the fallback, held back chain the fallback then served: it
+    /// is probed again only after a hold that doubles with each such deposal
+    /// (`resolver::STRIKE_AWAY` to `STRIKE_AWAY_MAX`, forgiven after `STRIKE_FORGET`). A deposal
+    /// within a tier is that tier's to judge. A halted network confirms nothing, so the configured
+    /// node comes back within the probes once blocks come again.
+    fn deposal_confirmed(&self) {
+        match self.inner.with(|s| s.deposed.take()) {
+            Some(Deposed::Within(t)) => self.inner.tiers[t].deposal_confirmed(),
+            Some(Deposed::Primary) => self.inner.with(|s| {
+                if s.active != 1 {
+                    return;
+                }
+                let now = Instant::now();
+                if s.last_strike.is_some_and(|t| now.saturating_duration_since(t) >= super::resolver::STRIKE_FORGET) {
+                    s.strikes = 0;
+                }
+                s.strikes = s.strikes.saturating_add(1);
+                s.last_strike = Some(now);
+                let hold = super::resolver::STRIKE_AWAY
+                    .saturating_mul(1u32 << (s.strikes - 1).min(10))
+                    .min(super::resolver::STRIKE_AWAY_MAX);
+                s.next_check = s.next_check.max(now + hold);
+                s.probes_ok = 0;
+                tracing::warn!(primary = %self.inner.shown[0], strikes = s.strikes, hold_secs = hold.as_secs(), "node failover: the configured node held back chain the fallback then served; it is probed again only after the hold");
+            }),
+            None => {}
+        }
     }
     fn source_status(&self) -> Option<FailoverStatus> {
         Some(self.status())
@@ -573,9 +633,6 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     }
     async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, String> {
         self.inner.tiers[self.active()].confirm_bodies(start, raw, runs).await
-    }
-    fn chain_beyond_shown(&self) -> bool {
-        self.inner.tiers[self.active()].chain_beyond_shown()
     }
     async fn window_contradicted(&self, origin: Origin, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun], why: &str) {
         let t = (origin.tier as usize).min(1);

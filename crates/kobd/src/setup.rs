@@ -821,6 +821,7 @@ pub(crate) fn ensure_token_list(dir: &Path, network: &str) -> Result<(String, bo
         return Ok((TOKENS_FILE.to_string(), false));
     }
     std::fs::write(&p, program_registry(network)?).with_context(|| p.display().to_string())?;
+    crate::matcher::wallet::no_group_write(&p).map_err(anyhow::Error::msg)?;
     Ok((TOKENS_FILE.to_string(), true))
 }
 
@@ -838,6 +839,8 @@ pub(crate) fn write_config(dir: &Path, file: &SetupFile) -> Result<PathBuf> {
         return Err(e.context("the configuration written does not read back"));
     }
     std::fs::rename(&tmp, &config_path).with_context(|| config_path.display().to_string())?;
+    // Whatever the umask: the start check refuses a configuration others may change (R5D-2).
+    crate::matcher::wallet::no_group_write(&config_path).map_err(anyhow::Error::msg)?;
     Ok(config_path)
 }
 

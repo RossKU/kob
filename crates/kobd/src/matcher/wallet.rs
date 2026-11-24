@@ -1180,8 +1180,27 @@ pub fn restrict_folder(dir: &Path) -> Result<(), String> {
             return Err(format!("icacls could not restrict {}: {}", dir.display(), String::from_utf8_lossy(&out.stdout).trim()));
         }
     }
+    // No group or other write, whatever the umask: what the start check wants (R5D-2).
     #[cfg(unix)]
-    let _ = dir;
+    no_group_write(dir)?;
+    Ok(())
+}
+
+/// Unix: takes the group's and others' write permission off `path`, whatever the umask, so that the
+/// start check (`mode & 0o022`) passes a file or folder `kobd setup` made (R5D-2). Elsewhere it does
+/// nothing: Windows has ACLs ([`restrict_folder`]).
+pub fn no_group_write(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.permissions().mode();
+        if mode & 0o022 != 0 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & !0o022 & 0o7777))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -1674,5 +1693,24 @@ mod tests {
         let found = ancestors_changeable_by_others(&[clean.join("kob")]);
         assert!(found.iter().any(|(p, _)| p.ends_with("shared")), "{found:?}");
         std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// R5D-2: with a umask of 002 (user-private groups) what `kobd setup` makes is group-writable;
+    /// `no_group_write` and `restrict_folder` take that off, so the start check passes it.
+    #[cfg(unix)]
+    #[test]
+    fn what_setup_makes_is_not_group_writable_whatever_the_umask() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (folder, file) = (dir.path().join("kob"), dir.path().join("kob").join("kobd.toml"));
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(&file, "x").unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o775)).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o664)).unwrap();
+        restrict_folder(&folder).unwrap();
+        no_group_write(&file).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!((mode(&folder), mode(&file)), (0o755, 0o644));
+        assert!(writable_by_others(&[folder, file]).is_empty());
     }
 }
