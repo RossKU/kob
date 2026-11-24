@@ -63,6 +63,12 @@ describe('readHoldingsPart while the indexer goes away', () => {
   it('without the mode the own orders stay unread (the planner refuses until they are)', async () => {
     expect((await readHoldingsPart(deps(false), { pubkey: MAKER_PK }, token, m)).ownOrders).toBeNull();
   });
+
+  it('a list of own orders cut at its page bound is not read: self-trade prevention needs all of them (R7C2b-4)', async () => {
+    const cut = (truncated: boolean) => ({ ...deps(false), indexer: { allOrders: async () => Object.assign([own], truncated ? { truncated: true } : {}) } }) as unknown as Parameters<typeof readHoldingsPart>[0];
+    expect((await readHoldingsPart(cut(true), { pubkey: MAKER_PK }, token, m)).ownOrders).toBeNull();
+    expect((await readHoldingsPart(cut(false), { pubkey: MAKER_PK }, token, m)).ownOrders).toHaveLength(1);
+  });
 });
 
 describe('ownOrderRefs', () => {

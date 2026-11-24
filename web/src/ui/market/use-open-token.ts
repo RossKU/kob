@@ -30,6 +30,9 @@ export interface OpenTokenState {
 
 const NONE: OpenTokenState = { info: null, reason: null, loading: false };
 
+/** Pages of the token's resting orders read for an extension commitment the token row lacks. */
+const OPEN_EXT_PAGES = 5;
+
 /**
  * `refreshKey` changes when the book moved, so the scales are read again (coalesced). `decimals`
  * is entered for a first order and is used only without orders.
@@ -49,8 +52,16 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
       const scales = [...book.asks, ...book.bids] as ScaleSample[];
       let ext: Hex | null = view.extension_commitment ?? null;
       if (!ext && view.template_hash) {
-        const orders = await indexer.orders({ token: view.covenant_id, status: 'active', limit: 20 }, { signal }).catch(() => null);
-        ext = orders?.items.find((o) => o.extension_commitment)?.extension_commitment ?? null;
+        // A page of a status read can be short or empty and still carry a cursor: the cursor is
+        // followed to the first order that names the commitment, at most OPEN_EXT_PAGES pages. Not
+        // found, the reason says the commitment could not be read from the orders (R7B-I3).
+        let cursor: string | undefined;
+        for (let page = 0; page < OPEN_EXT_PAGES && !ext; page++) {
+          const orders = await indexer.orders({ token: view.covenant_id, status: 'active', limit: 20, ...(cursor ? { cursor } : {}) }, { signal }).catch(() => null);
+          ext = orders?.items.find((o) => o.extension_commitment)?.extension_commitment ?? null;
+          if (!orders?.next_cursor) break;
+          cursor = orders.next_cursor;
+        }
       }
       // The wallet's own holdings of a KCC-20 token, each confirmed by the node. A failure leaves
       // the pick unchecked and never blocks the page.

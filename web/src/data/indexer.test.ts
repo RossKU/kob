@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import type { AddressInfo } from 'node:net';
 import {
-  HttpIndexer, IndexerError, IndexerFeed, isValidChannel, sompi, sompiOrNull, toFeedUrl, type FeedEventMap, type WebSocketCtor,
+  HttpIndexer, IndexerError, IndexerFeed, incompleteAsNull, isValidChannel, sompi, sompiOrNull, toFeedUrl, type FeedEventMap, type WebSocketCtor,
 } from './indexer';
 
 const H1 = '11'.repeat(32);
@@ -106,6 +106,22 @@ describe('HttpIndexer requests', () => {
     expect(calls.map((u) => u.searchParams.get('cursor'))).toEqual([null, '1', '2']);
     const finite = stub((u) => json(u.searchParams.get('cursor') ? { items: [{ covenant_id: 'b' }], next_cursor: null } : { items: [{ covenant_id: 'a' }], next_cursor: 'z' }));
     expect((await new HttpIndexer({ baseUrl: 'http://x', fetch: finite.f }).allOrders()).map((o) => o.covenant_id)).toEqual(['a', 'b']);
+  });
+
+  it('allOrders reads past empty pages that carry a cursor, and marks a list it cut at maxPages (R7B-L3, R7C2b-2)', async () => {
+    // three empty pages with a cursor (a status read's scan stretch), then the orders
+    const s = stub((u) => {
+      const n = Number(u.searchParams.get('cursor') ?? 0);
+      return json(n < 3 ? { items: [], next_cursor: String(n + 1) } : { items: [{ covenant_id: 'x' }], next_cursor: null });
+    });
+    const whole = await new HttpIndexer({ baseUrl: 'http://x', fetch: s.f }).allOrders({ token: H1, status: 'active' });
+    expect(whole.map((o) => o.covenant_id)).toEqual(['x']);
+    expect(whole.truncated).toBeUndefined();
+    const cut = await new HttpIndexer({ baseUrl: 'http://x', fetch: s.f }).allOrders({ token: H1, status: 'active' }, { maxPages: 2 });
+    expect(cut).toHaveLength(0);
+    expect(cut.truncated).toBe(true);
+    expect(incompleteAsNull(cut)).toBeNull();
+    expect(incompleteAsNull(whole)).toBe(whole);
   });
 });
 

@@ -128,6 +128,15 @@ function assertHex(what: string, v: string): string {
   return v.toLowerCase();
 }
 
+/**
+ * An order list of `allOrders`. `truncated`: it stopped at its page bound with more pages left
+ * (R7B-L3, R7C2b-2, R7C2b-4).
+ */
+export type OrderList = OrderView[] & { truncated?: boolean };
+
+/** The list, or null when it was cut: for a check that needs every order, a cut list is not read. */
+export const incompleteAsNull = (l: OrderList): OrderView[] | null => (l.truncated ? null : l);
+
 // --- REST client ---
 
 /** Options of one indexer read. */
@@ -260,8 +269,13 @@ export interface IndexerApi {
    */
   order(id: Hex, o?: RequestOptions): Promise<OrderView | null>;
   orders(q?: OrdersQuery, o?: RequestOptions): Promise<Page<OrderView>>;
-  /** Follows `next_cursor` until exhausted or `maxPages` (default 20). */
-  allOrders(q?: Omit<OrdersQuery, 'cursor'>, o?: RequestOptions & { maxPages?: number }): Promise<OrderView[]>;
+  /**
+   * Follows `next_cursor` until exhausted or `maxPages` (default 20). A page may be short or empty
+   * and still carry a cursor (a status read scans a bounded stretch of the store per page), so only
+   * a missing cursor ends the list. Stopped at `maxPages` with a cursor left, the list is marked
+   * `truncated`: a check that needs every order treats it as not read (`incompleteAsNull`).
+   */
+  allOrders(q?: Omit<OrdersQuery, 'cursor'>, o?: RequestOptions & { maxPages?: number }): Promise<OrderList>;
   orderEvents(id: Hex, q?: { after?: number | string; limit?: number }, o?: RequestOptions): Promise<Page<EventView> | null>;
   fills(q?: FillsQuery, o?: RequestOptions): Promise<Page<EventView>>;
   strays(q?: { maker?: Hex; limit?: number }, o?: RequestOptions): Promise<StrayView[]>;
@@ -606,15 +620,16 @@ export class HttpIndexer implements IndexerApi {
     );
   }
 
-  async allOrders(q: Omit<OrdersQuery, 'cursor'> = {}, o: RequestOptions & { maxPages?: number } = {}) {
-    const out: OrderView[] = [];
+  async allOrders(q: Omit<OrdersQuery, 'cursor'> = {}, o: RequestOptions & { maxPages?: number } = {}): Promise<OrderList> {
+    const out: OrderList = [];
     let cursor: string | undefined;
     for (let page = 0; page < (o.maxPages ?? 20); page++) {
       const p = await this.orders({ ...q, cursor }, o);
       out.push(...p.items);
-      if (!p.next_cursor) break;
+      if (!p.next_cursor) return out;
       cursor = p.next_cursor;
     }
+    out.truncated = true;
     return out;
   }
 
