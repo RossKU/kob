@@ -11,7 +11,7 @@ import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import type { ActionRequest } from '../../kob/types';
 import { FakeChain, MAKER, TOKEN, goldenRequest, keyUtxo, orderViewOf, placeGolden, signAndValidate, snapshotOfRecovered, strayFor, testAddress, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { describeActionError, dropRecords, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, snapshotFor, strayToTokenUtxo } from './actions';
+import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, snapshotFor, strandedCount, strayToTokenUtxo } from './actions';
 import { buildEntries, describeEntry, type OrderEntry } from './orders-model';
 
 const kob = loadKobNode();
@@ -237,6 +237,43 @@ describe('a decoy of another class named as the custody is never spent (R8F4-1)'
     expect(spends(out.plan!, d.real)).toBe(true);
     expect(spends(out.plan!, d.decoy)).toBe(false);
     await expect(planAmendFor(services({ chain: d.chain, indexer: { order: async () => d.view } }), MAKER.pk, entryOf(d.a, true, false), 'limit', { price: 260_000_000n, amount: 6_000n })).rejects.toMatchObject({ code: 'node-mismatch' });
+  });
+});
+
+describe('strays a cancel would leave behind for good (R8F4-2)', () => {
+  it('an unread stray list stops the cancel ("could not check"), as it stops a refund and a replacement', async () => {
+    const a = place('create.ask');
+    const stray = strayFor(a.snap, 9n);
+    const view = { ...tokenUtxoView(stray, 'stray'), owner: a.rec.covenantId };
+    const cut = async () => Object.assign([view], { truncated: true as const });
+    const { plan } = await planCancelFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: cut } }), MAKER.pk, entryOf(a, false, true), []);
+    expect(plan.ok).toBe(false);
+    expect(plan.built).toBeNull();
+    expect(plan.issues.filter((i) => i.severity === 'error').map((i) => i.code)).toEqual(['cancel.strays-unknown']);
+    // the stray list read in full: the cancel goes on and sweeps the stray
+    const whole = async () => [view];
+    validate((await planCancelFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: whole } }), MAKER.pk, entryOf(a, false, true), [])).plan);
+  });
+
+  it('a stray of another class: the cancel offers "Sweep first" for it (a sweep moves it while the order lives)', async () => {
+    const a = place('create.ask');
+    const other: TokenUtxo = { ...strayFor(a.snap, 4n, 93), state: { ...(strayFor(a.snap, 4n, 93).state as Kcc20State), extension_commitment: '77'.repeat(32) } };
+    const view = orderViewOf(kob, { ...a.snap, strays: [other] });
+    const { plan } = await planCancelFor(services({ chain: withStrays(chainOf(a), [other]), indexer: { order: async () => view } }), MAKER.pk, entryOf(a));
+    expect(plan.ok).toBe(true);
+    expect(abandonsStrays(plan)).toBe(true);
+    expect(abandoningOrders([plan])).toEqual([a.snap.covenantId]);
+    expect(strandedCount([plan])).toBe(1);
+    expect(lostStrays(plan)).toBe(0);
+  });
+
+  it('a stray its maker cannot move at all is counted for the confirmation, which states it before signing', () => {
+    const a = place('create.ask');
+    const env: CancelEnv = { kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 100n * KAS, 201)], tokenUtxos: [], clock: { daa: 1000n } };
+    const plan = planCancel(env, { ...a.snap, foreignUnproven: [{ outpoint: `${'ee'.repeat(32)}:0`, token: 'ef'.repeat(32), amount: 5n }] });
+    expect(plan.ok).toBe(true);
+    expect(lostStrays(plan)).toBe(1);
+    expect(abandonsStrays(plan)).toBe(false);
   });
 });
 

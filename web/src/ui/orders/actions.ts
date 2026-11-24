@@ -158,7 +158,35 @@ const straysExceedSlots = (p: CancelPlan): boolean => !p.ok && p.issues.some((i)
  * A cancel plan that abandons strays because one transaction cannot move them all. A sweep first
  * moves them while the order lives.
  */
-export const abandonsStrays = (p: CancelPlan): boolean => p.ok && p.issues.some((i) => i.code === 'cancel.strays-abandoned');
+export const abandonsStrays = (p: CancelPlan): boolean => p.ok && p.issues.some((i) => SWEEPABLE_LEFT.has(i.code));
+
+/**
+ * Strays a cancel leaves behind that a sweep in place can still move while the order lives: those
+ * that do not fit, and those of another class than the transfer's (a sweep takes one class at a
+ * time). Once the order's covenant id has ended nothing can move them (R8F4-2).
+ */
+const SWEEPABLE_LEFT = new Set(['cancel.strays-abandoned', 'cancel.stray-other-extension']);
+
+/** How many stray token UTXOs the plans leave behind that a sweep could move first. */
+export const strandedCount = (plans: readonly CancelPlan[]): number =>
+  plans.flatMap((p) => (p.ok ? p.issues : [])).reduce((a, i) => a + (i.code === 'cancel.strays-abandoned' ? Number(i.params?.count ?? 0) : i.code === 'cancel.stray-other-extension' ? 1 : 0), 0);
+
+/**
+ * A cancel, refund or replacement that ends an order while the order's stray list could not be
+ * read stops: whatever the order owns would be lost with it, and nothing says what (R8F4-2). An
+ * amend in place keeps the order, and its strays with it.
+ */
+export function stopOnUnreadStrays(plan: CancelPlan): CancelPlan {
+  if (!plan.ok || !plan.issues.some((i) => i.code === 'cancel.strays-unknown') || plan.issues.some((i) => i.code.startsWith('cancel.amend-in-place'))) return plan;
+  return { ...plan, ok: false, request: null, built: null, issues: plan.issues.map((i) => (i.code === 'cancel.strays-unknown' ? { ...i, severity: 'error' as const } : i)) };
+}
+
+/**
+ * The strays a plan leaves behind that its maker cannot move at all (of another token, without a
+ * proven state or under a program this app cannot spend): the token UTXOs that are lost for good
+ * when the order closes. The final confirmation states them before anything is signed (R8F4-2).
+ */
+export const lostStrays = (p: CancelPlan): number => (p.ok ? p.issues.filter((i) => i.code === 'cancel.stray-other-token').length : 0);
 
 /**
  * Plans the cancel of one order. Anyone can send dust token UTXOs to an order's covenant id. With
@@ -172,7 +200,7 @@ export async function planCancelFor(s: Services, pubkey: Hex, entry: OrderEntry,
   const snapshot = await snapshotFor(s, entry, strays);
   const env = await buildCancelEnv(s, { pubkey });
   const plan = planCancel(env, snapshot);
-  return { plan: straysExceedSlots(plan) ? planCancel(env, snapshot, { allowAbandonStrays: true }) : plan, snapshot };
+  return { plan: stopOnUnreadStrays(straysExceedSlots(plan) ? planCancel(env, snapshot, { allowAbandonStrays: true }) : plan), snapshot };
 }
 
 /**
@@ -207,7 +235,7 @@ export async function planSweepMany(s: Services, pubkey: Hex, entries: readonly 
 
 /** The orders a cancel plan abandons strays of, as their ids from the plan's own findings. */
 export function abandoningOrders(plans: readonly CancelPlan[]): Hex[] {
-  const ids = plans.flatMap((p) => (p.ok ? p.issues.filter((i) => i.code === 'cancel.strays-abandoned').map((i) => String(i.params?.order ?? '')) : []));
+  const ids = plans.flatMap((p) => (p.ok ? p.issues.filter((i) => SWEEPABLE_LEFT.has(i.code)).map((i) => String(i.params?.order ?? '')) : []));
   return [...new Set(ids.filter((x) => /^[0-9a-f]{64}$/.test(x)))];
 }
 
@@ -216,7 +244,7 @@ export async function planRefundFor(s: Services, pubkey: Hex, entry: OrderEntry,
   const env = await buildCancelEnv(s, { pubkey });
   // Reclaiming the tip needs one wallet signature and returns most of the tip to the maker.
   // `planRefund` falls back to no signature without funding.
-  return { plan: planRefund(env, snapshot, { reclaimTip: true }), snapshot };
+  return { plan: stopOnUnreadStrays(planRefund(env, snapshot, { reclaimTip: true })), snapshot };
 }
 
 /**
@@ -261,7 +289,7 @@ export async function planCancelMany(s: Services, pubkey: Hex, entries: readonly
   // transaction can move is re-planned abandoning its smallest strays. That carries a
   // `cancel.strays-abandoned` warning, and My orders offers "Sweep first" for it.
   const plans = planCancelAll(env, snapshots);
-  return { plans: plans.some(straysExceedSlots) ? planCancelAll(env, snapshots, { allowAbandonStrays: true }) : plans, snapshots, failed };
+  return { plans: (plans.some(straysExceedSlots) ? planCancelAll(env, snapshots, { allowAbandonStrays: true }) : plans).map(stopOnUnreadStrays), snapshots, failed };
 }
 
 export interface PlannedAmend {
@@ -282,7 +310,7 @@ export async function planAmendFor(s: Services, pubkey: Hex, entry: OrderEntry, 
   const amend = buildReplacement(snapshot, kind, input, { tick: token?.tick ?? undefined, kob: s.kob, ...(nowDaa !== undefined ? { nowDaa } : {}) });
   if (!amend.ok || !amend.spec) return { amend, plan: null, snapshot };
   const env = await buildCancelEnv(s, { pubkey }, token);
-  return { amend, plan: planCancelReplace(env, snapshot, amend.spec), snapshot };
+  return { amend, plan: stopOnUnreadStrays(planCancelReplace(env, snapshot, amend.spec)), snapshot };
 }
 
 /**
@@ -301,7 +329,7 @@ export async function planReplaceFor(s: Services, pubkey: Hex, entry: OrderEntry
   const quote = tokenOf(s, quoteCovIdOf(snapshot.order.state));
   const quoteUtxos = quote && quote.program ? await s.tracker.tokenUtxosFor(pubkey, { covenantId: quote.covenantId, program: quote.program }) : [];
   const env = quoteUtxos.length ? { ...env0, tokenUtxos: [...(env0.tokenUtxos ?? []), ...quoteUtxos] } : env0;
-  return { plan: planCancelReplace(env, snapshot, spec), snapshot };
+  return { plan: stopOnUnreadStrays(planCancelReplace(env, snapshot, spec)), snapshot };
 }
 
 /**

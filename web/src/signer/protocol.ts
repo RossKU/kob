@@ -130,7 +130,12 @@ export type SignerNote =
   /** The price is `bps` basis points through the market, probably a typing error. */
   | { kind: 'farThrough'; bps: number }
   /** Blocks are contended and the priority fee is off, so this transaction may wait. */
-  | { kind: 'congestion' };
+  | { kind: 'congestion' }
+  /**
+   * The transaction ends an order that owns `utxos` token UTXOs its maker cannot move (another
+   * token, no proven state): they are lost for good when it closes (R8F4-2).
+   */
+  | { kind: 'straysLost'; utxos: number };
 
 /** The most notes of a request. A longer list is not a request of the app. */
 export const MAX_NOTES = 4;
@@ -327,6 +332,8 @@ export function sanitizeNotes(v: unknown): SignerNote[] {
       out.push({ kind: 'farThrough', bps: n.bps });
     } else if (n.kind === 'congestion' && hasKeys(n, ['kind'])) {
       out.push({ kind: 'congestion' });
+    } else if (n.kind === 'straysLost' && hasKeys(n, ['kind', 'utxos']) && typeof n.utxos === 'number' && Number.isSafeInteger(n.utxos) && n.utxos > 0 && n.utxos <= 10_000) {
+      out.push({ kind: 'straysLost', utxos: n.utxos });
     }
   }
   return out;

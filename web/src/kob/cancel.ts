@@ -645,7 +645,7 @@ function prepareForeign(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions
     }
     const p = pickStrays(g.utxos, null, room);
     for (const u of p.otherExt) {
-      issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(u), amount: big(u.state.amount), ...(u.covenantId ? { token: u.covenantId } : {}) }));
+      issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(u), amount: big(u.state.amount), order: snap.covenantId, ...(u.covenantId ? { token: u.covenantId } : {}) }));
     }
     if (p.over.length) {
       if (!opts.allowAbandonStrays) {
@@ -717,7 +717,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
     // rule). They are reported and not silently moved.
     let strays = mine.filter((s) => {
       if (!extensionMatches(s.state, ext)) {
-        issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount), ...(s.covenantId ? { token: s.covenantId } : {}) }));
+        issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount), order: snap.covenantId, ...(s.covenantId ? { token: s.covenantId } : {}) }));
         return false;
       }
       return true;
