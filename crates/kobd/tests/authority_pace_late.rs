@@ -45,7 +45,6 @@ struct Miner {
 impl Miner {
     fn new(clock: &Clock) -> Arc<Miner> {
         let node = MockNode::new("testnet-10");
-        node.set_added_cap(50);
         let from = clock.now() - 5_000;
         node.set_block_clock(from, 1_000);
         let m = Arc::new(Miner { node, clock: clock.clone(), next: AtomicU64::new(from) });
@@ -221,12 +220,12 @@ async fn an_authority_that_answers_late_but_lands_each_commit_within_the_toleran
     assert!(max_lag <= 90 + 180 + 30, "the lag reached {max_lag} s");
 }
 
-/// The same with the VSPC delay alone (85 s): the lag swings between about 87 s and about 175 s, above the tolerance
-/// for half of each step. The period never sees the lag fall by half a period: handed over within the hour.
+/// The same with the VSPC delay alone (80 s): each commit lands about 81 s behind, the lag swings up to about 162 s,
+/// above the tolerance for most of each step. The period never sees the lag fall by half a period: handed over within the hour.
 #[tokio::test(start_paused = true)]
 async fn an_authority_whose_vspc_answers_come_late_is_handed_over() {
     let _g = serial().await;
-    let (handed, max_lag) = an_hour(1, 0, 85_000).await;
+    let (handed, max_lag) = an_hour(1, 0, 80_000).await;
     assert!(handed, "never handed over in an hour (largest lag {max_lag} s)");
     assert!(max_lag <= 90 + 180 + 30, "the lag reached {max_lag} s");
 }
