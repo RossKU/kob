@@ -364,3 +364,112 @@ fn a_custody_is_what_the_covenant_accepts_whatever_its_guard() {
     let bc = tutxo(t, TOKEN_COV, 72, 4 * WHOLE, O, true);
     assert!(check_releases_held(&s, O, &[guarded(&bc, 0x5f)]).is_err());
 }
+
+/// R9FA-1 / R9FA2-1, by execution: a hand-made partial fill of a `KobAsk` whose custody input is a unit that differs
+/// from the honest custody ONLY in its borrow guard (borrowing disabled), with the rest output carrying that guard, as
+/// the contract copies it. KOB's fill builders refuse such a custody, so the transaction is the builder's honest fill
+/// with the custody input's state, its script and the rest output's state and script replaced, then re-signed.
+/// The engine runs the real order and token scripts on it.
+#[test]
+fn the_engine_takes_a_guarded_unit_as_the_custody_of_a_fill() {
+    use kob_protocol::tx::{sighash, spk_to_string, SigPlan};
+    let t = TemplateId::Kcc20Ref;
+    let honest = Batch {
+        lock_time: NOW,
+        legs: vec![ev_ask(P250, 2, t)],
+        updates: vec![],
+        taker_tokens: vec![],
+        taker: Some(pk(MAKER_B)),
+        taker_token_carrier: CARRIER,
+        keep_surplus: vec![],
+        keep_carrier: None,
+        receivers: vec![],
+        payments: vec![],
+        funding: vec![key_utxo(3, MAKER_B, 100 * KAS)],
+        change: None,
+        records: vec![],
+        fee: fee(),
+    };
+    let mut built = build_batch(&honest, &kob_protocol::budget::lookup).unwrap();
+    engine(&built, "honest partial fill");
+    let Leg::Ask { order, .. } = &honest.legs[0] else { panic!() };
+    let order_cov = order.utxo.covenant_id.unwrap();
+    let guard = [0x5a; 32];
+    // the custody input (the token leader) and the rest output (the unit owned by the order, scheme 4)
+    let k = built.plans.iter().position(|p| matches!(p, SigPlan::TokenLeader { .. })).expect("a token leader");
+    let (old_rest, new_rest) = {
+        let SigPlan::TokenLeader { state, next_states, template, .. } = &mut built.plans[k] else { unreachable!() };
+        assert_eq!((state.owner, state.borrow_scheme), (order_cov, 0), "the leader is the custody");
+        state.borrow_guard = guard;
+        let r = next_states.iter_mut().find(|s| s.owner == order_cov).expect("the rest of the custody");
+        let old = spk_to_string(&r.spk_with(kob_protocol::artifacts::template(*template)));
+        r.borrow_guard = guard;
+        (old, spk_to_string(&r.spk_with(kob_protocol::artifacts::template(*template))))
+    };
+    let honest_spk = built.tx.inputs[k].utxo.script_public_key.clone();
+    built.tx.inputs[k].utxo.script_public_key = spk_to_string(&built.plans[k].spk());
+    assert_ne!(built.tx.inputs[k].utxo.script_public_key, honest_spk, "the custody input is another UTXO (the guarded unit)");
+    let o = built.tx.outputs.iter().position(|x| x.script_public_key == old_rest).expect("the rest output");
+    // control: the guarded custody with the rest WITHOUT the guard is refused (the scripts do run on these states)
+    {
+        let mut bad = built.clone();
+        if let SigPlan::TokenLeader { next_states, .. } = &mut bad.plans[k] {
+            next_states.iter_mut().filter(|s| s.owner == order_cov).for_each(|s| s.borrow_guard = [0; 32]);
+        }
+        let (tx, entries) = bad.tx.to_tx().unwrap();
+        for r in bad.sign.iter_mut() {
+            r.sighash = sighash(&tx, &entries, r.input_index);
+        }
+        let s = finalize(&bad, &sign_locally(&bad, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+        assert!(validate_signed(&s).is_err(), "a rest that drops the guard must be refused");
+    }
+    built.tx.outputs[o].script_public_key = new_rest;
+    let (tx, entries) = built.tx.to_tx().unwrap();
+    for r in built.sign.iter_mut() {
+        r.sighash = sighash(&tx, &entries, r.input_index);
+    }
+    let signed = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+    let v = validate_signed(&signed);
+    assert!(v.is_ok(), "the engine refuses the guarded custody: {:?}", v.err());
+    // and the order this leaves (rest custody guarded) is ended by the tools: covered by
+    // `a_custody_is_what_the_covenant_accepts_whatever_its_guard`
+}
+
+/// The same surgery on a sell-first if-done entry's partial fill (`KobIfdAsk`, R9FA2-1): the engine takes the guarded
+/// unit as the entry's custody, so the state whose cancel and refund the tools must handle is one the chain reaches.
+#[test]
+fn the_engine_takes_a_guarded_unit_as_the_custody_of_an_if_done_entry_fill() {
+    use kob_protocol::tx::{sighash, spk_to_string, SigPlan};
+    let (_, a) = scenarios_on(TemplateId::Kcc20Ref).into_iter().find(|(n, _)| n == "ifd.ask.partial").expect("scenario");
+    let mut built = kob_protocol::build::build(&a).unwrap();
+    engine(&built, "honest if-done entry fill");
+    let order_cov = built
+        .plans
+        .iter()
+        .zip(&built.tx.inputs)
+        .find_map(|(p, i)| matches!(p, SigPlan::Entry { .. }).then_some(i.utxo.covenant_id).flatten())
+        .unwrap();
+    let k = built
+        .plans
+        .iter()
+        .position(|p| matches!(p, SigPlan::TokenLeader { state, .. } if state.owner == order_cov))
+        .expect("the entry's custody leads its token");
+    let (old_rest, new_rest) = {
+        let SigPlan::TokenLeader { state, next_states, template, .. } = &mut built.plans[k] else { unreachable!() };
+        state.borrow_guard = [0x5a; 32];
+        let r = next_states.iter_mut().find(|s| s.owner == order_cov).expect("the rest of the custody");
+        let old = spk_to_string(&r.spk_with(kob_protocol::artifacts::template(*template)));
+        r.borrow_guard = [0x5a; 32];
+        (old, spk_to_string(&r.spk_with(kob_protocol::artifacts::template(*template))))
+    };
+    built.tx.inputs[k].utxo.script_public_key = spk_to_string(&built.plans[k].spk());
+    let o = built.tx.outputs.iter().position(|x| x.script_public_key == old_rest).expect("the rest output");
+    built.tx.outputs[o].script_public_key = new_rest;
+    let (tx, entries) = built.tx.to_tx().unwrap();
+    for r in built.sign.iter_mut() {
+        r.sighash = sighash(&tx, &entries, r.input_index);
+    }
+    let signed = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+    let v = validate_signed(&signed);
+    assert!(v.is_ok(), "the engine refuses the guarded custody: {:?}", v.err());
+}
