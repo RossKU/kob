@@ -136,9 +136,11 @@ export interface RequestOptions {
   /** Overrides the client's default timeout, in ms. */
   timeoutMs?: number;
   /**
-   * The browser's fetch priority. `low` is for what only decorates the page, such as the chart,
-   * stats, depth and tape. The reads an order needs then get a connection first when a slow
-   * indexer has every one busy. A browser opens about six per host over HTTP/1.1.
+   * The read's priority, in the page's in-flight queue and as the browser's fetch priority. `high`
+   * is for the reads the order ticket and the checks before a signature make (app/env.ts,
+   * app/book-verify.ts, the holdings check). `low` is for what only decorates the page, such as
+   * the chart, stats, depth and tape. A waiting `high` read gets the next free place, then the
+   * unmarked ones, then `low`. A read already in flight is never interrupted for it.
    */
   priority?: 'high' | 'low' | 'auto';
   /**
@@ -349,21 +351,38 @@ export interface HttpIndexerOptions {
 
 /**
  * The most reads one page has in flight to one indexer. kobd admits 8 per client and answers the
- * rest `503 overloaded`, and a page burst is 12-20 reads. The rest wait here, in order.
+ * rest `503 overloaded`, and a page burst is 12-20 reads. The rest wait here, in order within
+ * their priority (`RequestOptions.priority`).
  */
 export const INDEXER_MAX_IN_FLIGHT = 6;
+/**
+ * The same over `http:`, which a browser speaks only as HTTP/1.1, with about six sockets per host:
+ * one stays free for the health probe, which skips this queue but not the browser's (R6B-I3).
+ * Over `https:` the protocol is not known to the page; it is HTTP/2 behind the public CDN.
+ */
+export const INDEXER_MAX_IN_FLIGHT_HTTP1 = 5;
 /** Retries of a `503 overloaded`, apart from the other retries. */
 export const OVERLOADED_RETRIES = 3;
 
 const cancelled = () => new IndexerError('aborted', 0, 'aborted', 'The request was cancelled.');
 
-/** A FIFO limit of requests in flight. A waiter whose signal aborts leaves the queue at once. */
+/**
+ * A limit of requests in flight, with one FIFO per priority: `high`, then unmarked, then `low`
+ * (R6B-L1). A waiter whose signal aborts leaves its queue at once.
+ */
 class InFlightLimit {
   private open = 0;
-  private readonly waiting: (() => void)[] = [];
+  private readonly waiting: [(() => void)[], (() => void)[], (() => void)[]] = [[], [], []];
   constructor(private readonly max: number) {}
 
-  acquire(signal?: AbortSignal): Promise<() => void> {
+  private next(): void {
+    for (const q of this.waiting) {
+      const go = q.shift();
+      if (go) return go();
+    }
+  }
+
+  acquire(signal?: AbortSignal, priority?: RequestOptions['priority']): Promise<() => void> {
     if (signal?.aborted) return Promise.reject(cancelled());
     const take = () => {
       this.open++;
@@ -372,22 +391,23 @@ class InFlightLimit {
         if (done) return;
         done = true;
         this.open--;
-        this.waiting.shift()?.();
+        this.next();
       };
     };
     if (this.open < this.max) return Promise.resolve(take());
+    const queue = this.waiting[priority === 'high' ? 0 : priority === 'low' ? 2 : 1];
     return new Promise((resolve, reject) => {
       const go = () => {
         signal?.removeEventListener('abort', onAbort);
         resolve(take());
       };
       const onAbort = () => {
-        const i = this.waiting.indexOf(go);
-        if (i >= 0) this.waiting.splice(i, 1);
+        const i = queue.indexOf(go);
+        if (i >= 0) queue.splice(i, 1);
         reject(cancelled());
       };
       signal?.addEventListener('abort', onAbort, { once: true });
-      this.waiting.push(go);
+      queue.push(go);
     });
   }
 }
@@ -397,7 +417,7 @@ class InFlightLimit {
 const inFlightLimits = new Map<string, InFlightLimit>();
 function inFlightLimitOf(base: string): InFlightLimit {
   let l = inFlightLimits.get(base);
-  if (!l) inFlightLimits.set(base, (l = new InFlightLimit(INDEXER_MAX_IN_FLIGHT)));
+  if (!l) inFlightLimits.set(base, (l = new InFlightLimit(/^http:/i.test(base) ? INDEXER_MAX_IN_FLIGHT_HTTP1 : INDEXER_MAX_IN_FLIGHT)));
   return l;
 }
 
@@ -469,7 +489,7 @@ export class HttpIndexer implements IndexerApi {
     let retries = 0;
     let overloadedRetries = 0;
     for (;;) {
-      const release = unlimited ? () => undefined : await this.limit.acquire(o.signal);
+      const release = unlimited ? () => undefined : await this.limit.acquire(o.signal, o.priority);
       const ctl = new AbortController();
       const timeoutMs = o.timeoutMs ?? this.timeoutMs;
       let timedOut = false;

@@ -3355,7 +3355,7 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   field of any answer of the authority (its sink, its virtual DAA score, "more follows", an empty answer, how long it
   takes to answer) and no claim of another node enters it. The *lag* is the local monotonic clock minus that header time.
   While it is at most **90 s** (`AUTHORITY_LAG_TOLERANCE`), the authority keeps up (an honest node at the tip is seconds
-  behind; the web leaves an indexer whose lag is above 120 s). Above it, the authority must gain on real time: in every
+  behind; the web leaves an indexer whose lag is above 120 s and returns to it at 100 s or less, above this tolerance). Above it, the authority must gain on real time: in every
   **180 s** (`AUTHORITY_STALL`) of the follower's own running time the lag must fall by at least **90 s**. A *period*
   begins when the lag rises above 90 s and ends once the lag has stayed within 90 s for a whole period (a lag that rises
   above it again before then continues the period). A period that reaches its end without the gain is the authority's

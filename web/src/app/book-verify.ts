@@ -65,6 +65,13 @@ export const BOOK_CHECK_ROUNDS = BOOK_CHECK_MAX_ROWS / BOOK_CHECK_PER_SIDE;
 /** The check of one round gets this long. A node that has not answered by then is `unavailable`. */
 export const BOOK_CHECK_TIMEOUT_MS = 5_000;
 /**
+ * An order read of the indexer is given up on (and cancelled) this long after it was asked. Its
+ * own timeout (the client's, 10 s) starts only once it has a place in the page's queue, so a slow
+ * but honest indexer (answers of several seconds) is waited for: a read given up on leaves its
+ * side unread, and the order waits (R6B-L1). This bounds the wait for a place and the retries.
+ */
+export const BOOK_ORDER_READ_TIMEOUT_MS = 20_000;
+/**
  * An order read from the indexer is reused this long while its book row (price, amount, value) is
  * unchanged. A stale one only fails the node check below, so the order leaves the book and never
  * enters it.
@@ -87,6 +94,8 @@ export interface BookVerifyDeps {
   /** Token base units a side must offer in confirmed orders before it counts as verified. */
   depth?: bigint;
   timeoutMs?: number;
+  /** Default BOOK_ORDER_READ_TIMEOUT_MS. */
+  orderTimeoutMs?: number;
 }
 
 /** What an order of the market commits: the token it sells or buys. */
@@ -111,6 +120,13 @@ export interface VerifiedBook {
    * The node-confirmed UTXOs of the orders kept, by covenant id in lower case. A take spends them.
    */
   orders: Map<string, BookOrderUtxo>;
+  /**
+   * Sides whose touch could not be checked: an order read of the indexer failed or timed out for a
+   * row better than every confirmed one (or the side has none confirmed). Such a side is not
+   * known, which is not the same as empty or worse-priced, so the book counts as unavailable
+   * (app/env.ts) and nothing is planned against it (R6B-L1).
+   */
+  unread: ('sell' | 'buy')[];
 }
 
 const isOrderRow = (r: LevelView | BookOrderView): r is BookOrderView => 'covenant_id' in r;
@@ -126,22 +142,28 @@ export const settle = <T,>(p: Promise<T>, ms: number, onTimeout: () => Error): P
 
 // Order reads.
 
-const viewCache = new WeakMap<object, Map<string, { at: number; p: Promise<OrderView | null> }>>();
+const viewCache = new WeakMap<object, Map<string, { at: number; p: Promise<OrderView | null | undefined> }>>();
 
 /**
- * The indexer's full view of a book row's order (its decoded state and current outpoint), or null
- * when it cannot be read. Reused while the row is unchanged.
+ * The indexer's full view of a book row's order (its decoded state and current outpoint), null
+ * when the indexer does not know it, or undefined when the read failed or took longer than `ms`.
+ * Reused while the row is unchanged. The read goes ahead of the page's other reads in the indexer
+ * queue, and one given up on is cancelled, so it leaves the queue or frees its place (R6B-L1).
  */
-function readOrder(ix: Pick<IndexerApi, 'order'>, row: OrderKey, ms: number): Promise<OrderView | null> {
-  const cache = viewCache.get(ix) ?? new Map<string, { at: number; p: Promise<OrderView | null> }>();
+function readOrder(ix: Pick<IndexerApi, 'order'>, row: OrderKey, ms: number): Promise<OrderView | null | undefined> {
+  const cache = viewCache.get(ix) ?? new Map<string, { at: number; p: Promise<OrderView | null | undefined> }>();
   viewCache.set(ix, cache);
   const key = `${row.covenant_id}|${row.price}|${row.amount_left}|${row.cur_value}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < ORDER_VIEW_TTL_MS) return hit.p;
-  const p = settle(ix.order(row.covenant_id), ms, () => new Error('order read timed out')).catch(() => null);
+  const ctl = new AbortController();
+  const p = settle(ix.order(row.covenant_id, { signal: ctl.signal, priority: 'high' }), ms, () => {
+    ctl.abort();
+    return new Error('order read timed out');
+  }).catch(() => undefined);
   cache.set(key, { at: Date.now(), p });
   void p.then((v) => {
-    if (v === null && cache.get(key)?.p === p) cache.delete(key);
+    if (v == null && cache.get(key)?.p === p) cache.delete(key);
   });
   if (cache.size > 64) for (const k of [...cache.keys()].slice(0, cache.size - 64)) cache.delete(k);
   return p;
@@ -237,15 +259,17 @@ export type OrderKey = Pick<BookOrderView, 'covenant_id' | 'price' | 'amount_lef
 /**
  * The indexer's view of each order, a snapshot of the state it claims, and the node's answer for
  * it. The node read is one call for all of them. `confirmed` is a `SnapshotError` for an order the
- * node does not confirm. A null entry means no usable view of the order. Rejects only when the
- * node cannot be asked.
+ * node does not confirm. A null entry means no usable view of the order. `unread` gets the index
+ * of each key whose order read failed or timed out. Rejects only when the node cannot be asked.
  */
 export async function confirmOrders(
-  deps: Pick<BookVerifyDeps, 'kob' | 'node' | 'indexer' | 'toAddress' | 'timeoutMs'>,
+  deps: Pick<BookVerifyDeps, 'kob' | 'node' | 'indexer' | 'toAddress' | 'timeoutMs' | 'orderTimeoutMs'>,
   keys: readonly OrderKey[],
+  unread?: Set<number>,
 ): Promise<({ claimed: OrderSnapshot; confirmed: OrderSnapshot | SnapshotError } | null)[]> {
   const ms = deps.timeoutMs ?? BOOK_CHECK_TIMEOUT_MS;
-  const views = await Promise.all(keys.map((k) => readOrder(deps.indexer, k, ms)));
+  const views = await Promise.all(keys.map((k) => readOrder(deps.indexer, k, deps.orderTimeoutMs ?? BOOK_ORDER_READ_TIMEOUT_MS)));
+  views.forEach((v, i) => v === undefined && unread?.add(i));
   const claimed = views.map((v, i): OrderSnapshot | null => {
     if (!v || v.covenant_id !== keys[i]!.covenant_id) return null;
     try {
@@ -278,9 +302,10 @@ export async function confirmOrders(
  * The verdict of each row, with the node-confirmed snapshot. Rejects only when the node cannot be
  * asked.
  */
-async function checkRows(deps: BookVerifyDeps, rows: readonly { row: BookOrderView; side: 'sell' | 'buy' }[]): Promise<{ v: Verdict; snap: OrderSnapshot | null }[]> {
-  const got = await confirmOrders(deps, rows.map((r) => r.row));
-  return got.map((g, i) => (g ? { v: judge(deps, rows[i]!.row, rows[i]!.side, g.claimed, g.confirmed), snap: g.confirmed instanceof SnapshotError ? null : g.confirmed } : { v: 'unproven', snap: null }));
+async function checkRows(deps: BookVerifyDeps, rows: readonly { row: BookOrderView; side: 'sell' | 'buy' }[]): Promise<{ v: Verdict; snap: OrderSnapshot | null; unread: boolean }[]> {
+  const unread = new Set<number>();
+  const got = await confirmOrders(deps, rows.map((r) => r.row), unread);
+  return got.map((g, i) => (g ? { v: judge(deps, rows[i]!.row, rows[i]!.side, g.claimed, g.confirmed), snap: g.confirmed instanceof SnapshotError ? null : g.confirmed, unread: false } : { v: 'unproven', snap: null, unread: unread.has(i) }));
 }
 
 // The book.
@@ -337,7 +362,7 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
         return (side === 'sell' ? a.key < b.key : a.key > b.key) ? -1 : 1;
       })
       .map((c) => c.row);
-    return { side, rows, levels: rows.length > 0 && !rows.every(isOrderRow), cands, next: 0, confirmed: 0, depth: 0n, kept: [] as BookOrderView[] };
+    return { side, rows, levels: rows.length > 0 && !rows.every(isOrderRow), cands, next: 0, confirmed: 0, depth: 0n, kept: [] as BookOrderView[], unread: false };
   });
   const dropped: DroppedBookOrder[] = [];
   const orders = new Map<string, BookOrderUtxo>();
@@ -354,7 +379,10 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
     for (const s of sides) if (!satisfied(s)) s.next = Math.min(s.next + BOOK_CHECK_PER_SIDE, BOOK_CHECK_MAX_ROWS);
     const verdicts = await checkRows(deps, batch.map((b) => ({ row: b.row, side: b.s.side })));
     batch.forEach((b, i) => {
-      const { v, snap } = verdicts[i]!;
+      const { v, snap, unread } = verdicts[i]!;
+      // Rows are checked best first, so a failed read before the first confirmed row is one ahead
+      // of the touch.
+      if (unread && b.s.confirmed === 0) b.s.unread = true;
       if (typeof v === 'object' && snap) orders.set(b.row.covenant_id.toLowerCase(), { covenantId: snap.covenantId, order: snap.order, custody: snap.custody, ...(snap.boughtCustody ? { boughtCustody: snap.boughtCustody } : {}) });
       if (typeof v === 'object' && b.row.curve_level != null) {
         // A curve sell order has one row per remaining level and is checked once. Its levels stay
@@ -378,11 +406,15 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
         // An ask's amount is the custody the node holds. The row's own word counts only where the
         // order has no custody to read, which is a bid, and then only up to what the node-confirmed
         // KAS of the bid can buy at its price.
-        const claimed = b.row.amount_left != null ? BigInt(b.row.amount_left) : 1n;
+        // A bid's own word is what one fill can take now (`fillable_now`: an if-done bid keeps its
+        // carriers), at most its amount left (R6B-I4).
+        const left = b.row.amount_left != null ? BigInt(b.row.amount_left) : 1n;
+        const now = b.row.fillable_now != null ? BigInt(b.row.fillable_now) : null;
+        const claimed = now !== null && now < left ? now : left;
         const amount = v.amount ?? (claimed < v.cap ? claimed : v.cap);
         b.s.confirmed++;
         b.s.depth += amount;
-        const row0 = v.amount !== null ? (b.row.amount_estimated ? { ...b.row, amount_left: v.amount.toString(), amount_estimated: false } : b.row) : amount !== claimed ? { ...b.row, amount_left: amount.toString() } : b.row;
+        const row0 = v.amount !== null ? (b.row.amount_estimated ? { ...b.row, amount_left: v.amount.toString(), amount_estimated: false } : b.row) : amount !== left ? { ...b.row, amount_left: amount.toString() } : b.row;
         // The row's tip and minimum fill are the state's. It is the same object when they already
         // are, so an unchanged book stays the same book.
         const [tip, minFill] = [v.tip.toString(), v.minFill.toString()];
@@ -419,6 +451,7 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
   const asks = rowsOf(a);
   const bids = rowsOf(b);
   const beyond = beyondOf(a) + beyondOf(b);
-  if (!dropped.length && !beyond && same(view.asks, asks) && same(view.bids, bids)) return { view, dropped, beyond, orders };
-  return { view: { ...view, asks, bids }, dropped, beyond, orders };
+  const unread = sides.filter((x) => x.unread).map((x) => x.side);
+  if (!dropped.length && !beyond && same(view.asks, asks) && same(view.bids, bids)) return { view, dropped, beyond, orders, unread };
+  return { view: { ...view, asks, bids }, dropped, beyond, orders, unread };
 }

@@ -105,13 +105,16 @@ export const CALM_MS = 600_000;
  */
 export const LAG_SWITCH_SECONDS = 120;
 /**
- * An automatic mode ends only once the indexer is within this many seconds of the chain. It is
- * well under LAG_SWITCH_SECONDS, so the two do not flap. `lag_seconds` includes the age of the
- * indexer's cursor block by the indexer host's clock: a few seconds when healthy, more on a host
- * clock that runs fast. So the bound leaves room for that, and a fast clock cannot hold every
- * client in the mode (R5B-L2).
+ * An automatic mode ends only once the indexer is within this many seconds of the chain. It must
+ * stay above kobd's AUTHORITY_LAG_TOLERANCE (90 s, crates/kobd/src/indexer/follower.rs): kobd lets
+ * a node hold the index that far behind for good and calls it keeping up, so a lower bound keeps a
+ * client that entered the mode in it for as long as a node holds the lag there (R6B-M1). It must
+ * stay below LAG_SWITCH_SECONDS, so the two do not flap; a lag that wanders across both is bounded
+ * by the re-entry back-off (MIN_AUTO_MS up to MAX_AUTO_MS). `lag_seconds` includes the age of the
+ * indexer's cursor block by the indexer host's clock, so a host clock that runs fast adds to it
+ * (R5B-L2).
  */
-export const LAG_RETURN_SECONDS = 60;
+export const LAG_RETURN_SECONDS = 100;
 /**
  * With further indexers the failover gets this long to find a usable one first. Its re-checks and
  * one round of probes take about 12 s.

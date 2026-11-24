@@ -150,6 +150,9 @@ describe('the unchecked tail of the book sets nothing the order signs (audit 202
     expect(lie.book.bidOrders![0]!.amount).toBeLessThan(1_000_000_000_000n);
     // a claim within the cap is kept as it is
     expect((await claim('1')).book.bidOrders![0]!.amount).toBe(1n);
+    // what one fill can take now (an if-done bid keeps its carriers) is the bid's word when smaller (R6B-I4)
+    const slice = await readMarketPart(w.services([], [rowOf(bid, { amount_left: '5', fillable_now: '3' })]), w.market);
+    expect(slice.book.bidOrders![0]!.amount).toBe(3n);
   });
 });
 

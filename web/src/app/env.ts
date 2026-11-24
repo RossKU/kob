@@ -192,7 +192,9 @@ export interface HoldingsPart {
  * state derives. An order the node does not confirm is left out and listed in `dropped`.
  * It rejects only with a `NodeError` when the node cannot be asked for that check, and then the
  * ticket shows its node banner and plans nothing. An unreadable book is reported in
- * `bookUnavailable`.
+ * `bookUnavailable`, and so is a side whose touch could not be checked because an order read of
+ * the indexer failed (`VerifiedBook.unread`): planned as empty, a take shown as "Fill now" would
+ * become a resting limit at the click, without the marketable warning (R6B-L1).
  */
 export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node' | 'sdk' | 'config'>, market: TokenMarket, o: Pick<BuildEnvOptions, 'offline' | 'depth'> = {}): Promise<MarketPart> {
   // The indexer in use now serves the book and the order reads behind it alike. With failover,
@@ -203,9 +205,11 @@ export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node
   // read against it, and an unreadable clock means the node is unavailable.
   const daaP = readClock(s).then((c) => c.daa, (e) => { throw describeNodeError(e, 'read'); });
   daaP.catch(() => undefined);
+  // The ticket's reads go before the page's other reads in the indexer queue (data/indexer.ts).
+  const hi = { priority: 'high' } as const;
   const [bv0, trades] = await Promise.all([
-    ix.book(market.covenantId, { depth: 100, aggregate: false }).catch(() => null),
-    ix.trades(market.covenantId, { limit: 1 }).catch(() => null),
+    ix.book(market.covenantId, { depth: 100, aggregate: false }, hi).catch(() => null),
+    ix.trades(market.covenantId, { limit: 1 }, hi).catch(() => null),
   ]);
   const daa = bv0 ? await daaP : undefined;
   const checked = bv0
@@ -227,7 +231,7 @@ export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node
   // Trades are priced per `price_basis` base units (the standard scale). Convert to the market's
   // scale, per whole token.
   const lastFillPrice = last && trades.price_basis && BigInt(trades.price_basis) > 0n ? (BigInt(last.price) * market.scale) / BigInt(trades.price_basis) : null;
-  return { book: bv ? bookFromIndexer(market, bv) : { asks: [], bids: [] }, dropped: checked?.dropped ?? [], bookUnavailable: !bv, lastFillPrice, ...(checked ? { orders: checked.orders } : {}) };
+  return { book: bv ? bookFromIndexer(market, bv) : { asks: [], bids: [] }, dropped: checked?.dropped ?? [], bookUnavailable: !bv || checked!.unread.length > 0, lastFillPrice, ...(checked ? { orders: checked.orders } : {}) };
 }
 
 /** Reads the node part of the environment. */
@@ -252,7 +256,7 @@ export async function readHoldingsPart(
   const mine = c?.state.active
     ? Promise.resolve(own())
     : s.indexer && !o.offline
-      ? s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(async (e: unknown) => {
+      ? s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }, { priority: 'high' }).catch(async (e: unknown) => {
           // The indexer is down. Once standalone mode is on, its book lists the wallet's orders,
           // and the failed read starts its check.
           return c && typeof c.readFailed === 'function' && (await c.readFailed(e)) ? own() : null;
@@ -430,8 +434,8 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
   const indexed =
     indexer && !o.offline
       ? Promise.all([
-          indexer.pairBook(a.covenantId, b.covenantId, { depth: 100 }).catch(() => null),
-          indexer.allOrders({ maker: wallet.pubkey, token: a.covenantId, status: 'active' }).catch(() => null),
+          indexer.pairBook(a.covenantId, b.covenantId, { depth: 100 }, { priority: 'high' }).catch(() => null),
+          indexer.allOrders({ maker: wallet.pubkey, token: a.covenantId, status: 'active' }, { priority: 'high' }).catch(() => null),
           kasReferenceOf(indexer, a),
           kasReferenceOf(indexer, b),
         ])
@@ -467,7 +471,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
       // The planners get what the node confirms (app/pair-book.ts). That is the resting pair
       // orders one by one, and the route from the two KAS books.
       const hasOrders = [...pv.asks, ...pv.bids].some((l) => l.source !== 'route');
-      const listed = hasOrders && indexer ? await indexer.allOrders({ token: a.covenantId, status: 'active' }).catch(() => null) : [];
+      const listed = hasOrders && indexer ? await indexer.allOrders({ token: a.covenantId, status: 'active' }, { priority: 'high' }).catch(() => null) : [];
       if (listed === null) guardsUnavailable.push('book');
       else {
         const checked = await verifyPairBook(
@@ -484,6 +488,9 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
         if (checked.beyond) console.info(`pair book check: ${checked.beyond} order(s) behind the verified depth are not part of the book`);
       }
     } else guardsUnavailable.push('book');
+    // The route is derived from the two KAS books: one that could not be read or checked leaves
+    // it unknown, not empty.
+    if ((ma.bookUnavailable || mb.bookUnavailable) && !guardsUnavailable.includes('book')) guardsUnavailable.push('book');
     if (mine) ownOrders = ownPairOrderRefs(mine, a.covenantId, b.covenantId);
     else guardsUnavailable.push('own-orders');
     // The KAS price of each token sets the default minimum fill. It comes from the KAS book the

@@ -435,7 +435,8 @@ export class TokenTracker {
     const key = `${pubkey}|${token.covenantId}`;
     let views: TokenUtxoView[] | null;
     try {
-      views = await this.indexer.tokenUtxos({ owner: pubkey, token: token.covenantId, spent: false });
+      // The holdings a ticket spends: ahead of the page's other reads in the indexer queue.
+      views = await this.indexer.tokenUtxos({ owner: pubkey, token: token.covenantId, spent: false }, { priority: 'high' });
     } catch {
       // The indexer cannot be read, so use what it gave last. It is verified on the node below like
       // any candidate.

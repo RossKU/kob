@@ -297,14 +297,14 @@ describe('an indexer that falls behind the chain', () => {
     await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
     expect(h.c.state.active).toBe(true);
     // under the switch threshold but over the return bound: stays, however long
-    h.setHealth(lagged(LAG_SWITCH_SECONDS - 30));
-    h.c.report(assess(lagged(LAG_SWITCH_SECONDS - 30)));
+    h.setHealth(lagged(LAG_SWITCH_SECONDS - 10));
+    h.c.report(assess(lagged(LAG_SWITCH_SECONDS - 10)));
     await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS * 6);
     expect(h.c.state.active).toBe(true);
     // caught up once, then behind again: the two looks start over
     h.setHealth(lagged(LAG_RETURN_SECONDS - 5));
     h.c.report(assess(lagged(LAG_RETURN_SECONDS - 5)));
-    h.setHealth(lagged(LAG_SWITCH_SECONDS - 30));
+    h.setHealth(lagged(LAG_SWITCH_SECONDS - 10));
     await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS + 10);
     expect(h.c.state.active).toBe(true);
     // caught up on two looks in a row: it ends (once MIN_AUTO_MS has passed)
@@ -314,7 +314,7 @@ describe('an indexer that falls behind the chain', () => {
   });
 
   it('a steady 30 s cursor age (a host clock that runs fast) still lets an automatic mode end (R5B-L2)', async () => {
-    expect(LAG_RETURN_SECONDS).toBe(60);
+    expect(LAG_RETURN_SECONDS).toBe(100);
     expect(LAG_SWITCH_SECONDS).toBe(120);
     const h = harness();
     h.setHealth(lagged(500));
@@ -325,6 +325,42 @@ describe('an indexer that falls behind the chain', () => {
     h.c.report(assess(lagged(30)));
     await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS * 3 + MIN_AUTO_MS);
     expect(h.c.state).toMatchObject({ active: false, behind: false });
+  });
+
+  it("a steady lag of 90 s (kobd's lasting keep-up tolerance) ends an automatic mode; one of 110 s does not (R6B-M1)", async () => {
+    for (const [sec, ends] of [[90, true], [110, false]] as const) {
+      const h = harness();
+      h.setHealth(lagged(130));
+      h.c.report(assess(lagged(130)));
+      await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+      expect(h.c.state).toMatchObject({ active: true, reason: 'auto', behind: true });
+      // the status poll every 15 s for 10 minutes, the mode's own looks in between
+      h.setHealth(lagged(sec));
+      for (let t = 0; t < 600_000; t += 15_000) {
+        h.c.report(assess(lagged(sec)));
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+      expect(h.c.state.active).toBe(!ends);
+      h.c.dispose();
+    }
+  });
+
+  it('a lag that wanders between 95 s and 125 s enters at most about once per back-off stay (R6B-M1, R4B-I2)', async () => {
+    const h = harness();
+    let starts = 0;
+    let was = false;
+    h.c.subscribe((s) => {
+      if (s.active && !was) starts++;
+      was = s.active;
+    });
+    for (let t = 0; t < 3_600_000; t += 15_000) {
+      const sec = (t / 15_000) % 2 === 0 ? 125 : 95;
+      h.setHealth(lagged(sec));
+      h.c.report(assess(lagged(sec)));
+      await vi.advanceTimersByTimeAsync(15_000);
+    }
+    expect(starts).toBeGreaterThan(1);
+    expect(starts).toBeLessThanOrEqual(15);
   });
 
   it('with automatic fallback off it never switches on lag', async () => {
@@ -350,7 +386,7 @@ describe('an indexer that falls behind the chain', () => {
     expect(h.c.state).toMatchObject({ active: true, behind: true });
     h.c.report(bad);
     expect(h.c.state).toMatchObject({ active: true, behind: false });
-    h.c.report(assess(lagged(LAG_SWITCH_SECONDS - 30)));
+    h.c.report(assess(lagged(LAG_SWITCH_SECONDS - 10)));
     expect(h.c.state).toMatchObject({ active: true, behind: true });
   });
 });

@@ -61,7 +61,7 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
 * **Book.** Aggregated levels with depth bars, the spread row with the last price, price grouping 1x / 10x / 100x / 1000x the tick (asks round up,
   bids down; a click on a grouped row prefills the worst price of the group).
 * **Live.** The WebSocket channels `book:<token>` / `fills:<token>` trigger a refetch of every panel (debounced 1 s); 5 s polling while the socket is down.
-* **The book never disappears.** A failed or late book pull keeps the last good book on screen with a subtle `stale since hh:mm:ss` marker (the time of that book); only the next good response replaces it. A crossed book (matchers a moment behind) is the live book like any other: it is drawn as it is, with a negative spread (`Mid 0.043173 · Spread -0.000052 (-0.11%)`), and is not marked stale. A pull in flight is never aborted by the next refresh (a live notice or a poll that arrives meanwhile runs once right after it). The indexer-lag entry of the bell and the book's "possibly out of date" badge show only when the indexer is more than 30 s behind the chain.
+* **The book never disappears.** A failed or late book pull keeps the last good book on screen with a subtle `stale since hh:mm:ss` marker (the time of that book); only the next good response replaces it. A crossed book (matchers a moment behind) is the live book like any other: it is drawn as it is, with a negative spread (`Mid 0.043173 · Spread -0.000052 (-0.11%)`), and is not marked stale. A pull in flight is never aborted by the next refresh (a live notice or a poll that arrives meanwhile runs once right after it). The indexer-lag entry of the bell and the book's "possibly out of date" badge show only when the indexer is more than 2 minutes behind the chain, or follows and says it is not ok (`/v1/health` `ok` false: its chain authority does not keep up).
 * **Order button.** The ticket holds only the inputs (the amount box shows the balance it spends, "Available 988.41 KAS", a tap is Max; on
   the KAS/TOKEN view one line converts the KAS) and one button ("Buy Limit", "Sell Market order" ...). The button plans the order again from
   the state at the click with the node clock (read every 2 s in the background, projected to the click) and runs the pre-sign checks silently
@@ -261,7 +261,7 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   join the book (`StandaloneReceipts`). `services.indexer` then answers the book, order views, token list, trades, candles, stats and depth from that
   (`src/data/stream-market.ts`: fills counted once the node holds an output of their transaction), labelled "since hh:mm"; everything else fails as with the
   indexer down. The ticket, the book check and the signing are unchanged; an open-list token is traded only with declared or program-default decimals. The
-  first usable report ends an automatic mode (`standalone.autoReturn`; off: a button in the bell's entry). Settings / any config layer: `standalone: { manual, auto, autoReturn }`.
+  indexer's usable report within 100 s of the chain (`LAG_RETURN_SECONDS`, above kobd's 90 s keep-up tolerance), seen twice 5 s apart, ends an automatic mode (`standalone.autoReturn`; off: a button in the bell's entry). Settings / any config layer: `standalone: { manual, auto, autoReturn }`.
 * **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the order cannot be placed: one error line
   ("Could not read the token's guard data; try again in a moment") until the ticket's background refresh reads them, then it clears by itself.
 * **Book against the node.** Every read of the order book for a KAS market (`readMarketPart`, `src/app/book-verify.ts`) checks the first orders of each
@@ -269,7 +269,9 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   (`kob/node-verify.ts` `confirmSnapshotsOnNode`, the reconciliation cancel and amend use) must find the order UTXO (and an ask's custody) unspent at that
   script, with the KAS value and token amount the book row lists and the side, price and scale the state commits. An order the node does not confirm is
   left out of `PlanEnv.book` (`PlanEnv.bookDropped` names it; a taking order shows the warning `BOOK_ORDERS_NOT_ON_NODE`); when none of the first 3 x 3 orders of a
-  side is confirmed, the side is empty. A node that does not answer within 5 s rejects the read with a `NodeError`, so the ticket shows its node banner and plans
+  side is confirmed, the side is empty. When an order read of the indexer fails or times out ahead of a side's confirmed touch, the side is not known, and the book
+  counts as unreadable (the guard error above), so a crossing limit is never planned as a resting one against it. These reads, the book, the wallet's orders
+  and holdings go ahead of the page's other indexer reads in its in-flight queue (`RequestOptions.priority` `high`; chart, stats and tape are `low`). A node that does not answer within 5 s rejects the read with a `NodeError`, so the ticket shows its node banner and plans
   nothing. The check is invisible when everything matches and needs no acknowledgement. Pair books (aggregated levels, no orders) are not covered.
 * **Market start.** A market or close order starts at the best price of the indexer book, whose touch is confirmed on the node (above). Its start is compared
   with the best price of every `extraIndexerUrls` indexer (a pair market: the rate the further indexer's two KAS books imply); more than

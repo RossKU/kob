@@ -30,7 +30,8 @@ export interface HealthAssessment {
 
 /**
  * The indexer is announced (banner, "possibly out of date" mark on the book, warning in the status
- * bar) only when it is MORE than this many seconds behind the chain, whatever state it reports. A
+ * bar) only when it is MORE than this many seconds behind the chain, whatever state it reports, or
+ * when it follows and says it is not ok (its chain authority falls behind real time). A
  * `catching_up` follower a few seconds behind is not worth a banner. Above STALE it is an error
  * ("stale"), as the book cannot be trusted.
  */
@@ -67,6 +68,9 @@ export function assessIndexerHealth(i: HealthInput): HealthAssessment {
   if (h.stale === true) return mk('bad', 'hung', lag);
   switch (h.state) {
     case 'following':
+      // kobd answers not ok while it follows when its chain authority does not keep up with real time
+      // (`authority_pace` failing, above its 90 s tolerance): that is behind, under the bound too.
+      if (h.ok === false && lag !== null && lag <= LAG_WARN_SECONDS) return mk('warn', 'lagging', lag);
       if (lag === null || lag <= LAG_WARN_SECONDS) return mk('ok', 'ok', lag);
       return lag <= LAG_STALE_SECONDS ? mk('warn', 'lagging', lag) : mk('bad', 'stale', lag);
     case 'starting':

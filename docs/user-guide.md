@@ -365,7 +365,7 @@ price is the one you typed. If you do not want to rely on someone else's indexer
 | You see | Meaning and what to do |
 |---|---|
 | "Switching to your node…" | The indexer just stopped answering. With the standalone fallback on (the default) the page switches to standalone mode at once (below); the ticket says the same for that moment. |
-| "Trading through your node since hh:mm" | The indexer cannot be used (down, more than 10 minutes behind, without its node or on another network), or you switched standalone mode on in Settings. The page follows your Kaspa node itself; see "Standalone mode" below. The bell also has one notification when the page switches to the node, and one when it is back on the indexer. |
+| "Trading through your node since hh:mm" | The indexer cannot be used (down, more than 2 minutes behind the chain, without its node or on another network), or you switched standalone mode on in Settings. The page follows your Kaspa node itself; see "Standalone mode" below. The bell also has one notification when the page switches to the node, and one when it is back on the indexer. |
 | "Order book data may be out of date" with "The indexer cannot be reached" | Only with the standalone fallback off: books and order status may be old or missing, and placing new orders waits until an indexer answers. **Cancelling your orders still works** (from your records and the node). |
 | "The indexer is behind the chain by ..." | Prices and status may be older than the chain. |
 | "The indexer is ... behind the chain. Do not trust the book shown" | Orders may already be filled or cancelled. Wait or use another indexer (Settings). |
@@ -430,7 +430,7 @@ What it shows, and its limits:
   the indexer is back. A token without a known declaration or program default for its decimals, and whose market scale the indexer did
   not give this page before the switch, cannot be traded in this mode (its scale cannot be checked without the indexer): the ticket says so.
 - **Trading goes to the node as always**: you sign in your wallet and the page sends the transaction to the node.
-- **Back to the indexer**: when the indexer answers again (twice, five seconds apart, so one that flickers does not bring it back), the
+- **Back to the indexer**: when the indexer answers again within 100 seconds of the chain (twice, five seconds apart, so one that flickers does not bring it back), the
   page switches back by itself and its book is used again (the indexer's book wins). What standalone mode collected is dropped; the kept indexer data is replaced by what the indexer says now.
 
 Settings has three switches for it: **"Standalone mode (use the node only)"** keeps the page in standalone mode whatever the indexer does,
