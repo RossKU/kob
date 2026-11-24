@@ -646,9 +646,14 @@ const max0 = (a: bigint): bigint => (a < 0n ? 0n : a);
  * Splits the KAS of an order UTXO: refund tip and keeper tip (always inside the order), reserves,
  * and carrier (asks) or trading escrow (bids).
  */
-function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
+export function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
   const refundTips = min(d.refundTip, value);
-  let rest = value - refundTips;
+  // A buy order's refund tip is paid only at a refund, out of what is left then: its fills may spend
+  // that KAS (KobBid.sil fill: `left = inValue - used`, `left >= reserve`; the tip is not held back),
+  // and the builder sizes the escrow without it (kob-protocol BidState::escrow). So it is no part
+  // taken out of the budget; a sell's refund tip is part of the order's KAS outside any budget.
+  const buyBudget = d.side !== 'sell' && !d.pair;
+  let rest = buyBudget ? value : value - refundTips;
   const keeperTips = min(d.trigger?.keeperTip ?? d.entry?.keeperTip ?? 0n, rest);
   rest -= keeperTips;
   const reserves = min(d.reservedKas, rest);

@@ -649,7 +649,8 @@ function timingRows(d: OrderDescription, extra: { value: bigint | null; deadline
   }
   // The refund tip is paid only to whoever refunds the order after its expiry. A cancel or the last
   // fill returns it to the maker.
-  if (d.refundTip > 0n) rows.push(row('refundTip', tr('confirm.f.refundTip'), kas(d.refundTip), 'muted', tr('confirm.f.refundTipHint')));
+  // a buy's refund tip comes out of what is left at a refund, not out of its budget
+  if (d.refundTip > 0n) rows.push(row('refundTip', tr(d.side === 'buy' && !d.pair ? 'confirm.f.refundTipBuy' : 'confirm.f.refundTip'), kas(d.refundTip), 'muted', tr('confirm.f.refundTipHint')));
   if (extra.value !== null) rows.push(row('value', tr('confirm.f.orderValue'), kas(extra.value), 'muted'));
   return rows;
 }
