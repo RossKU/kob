@@ -1528,6 +1528,20 @@ impl Draft {
     }
 
     /// Runs the fee pass and produces the unsigned transaction with its signing plan.
+    ///
+    /// **The change contract.** A change that would put the transaction over a block mass limit is
+    /// left out and becomes fee: the builder does not refuse it. So a caller MUST bound the fee it
+    /// accepts before anything is signed; every in-tree caller does (R8F1c-1, an accepted Low):
+    ///
+    /// | Caller | Bound |
+    /// |---|---|
+    /// | `kob`, every signing command | `kob-cli/src/feecap.rs:70` `Ceiling::violation_of` (4x the node's estimate), applied in `trade/flow.rs:80`, `recover.rs:980`, `trade/merge.rs:336`, `token.rs:783`, `token_lock.rs:381`, `:561` |
+    /// | web app, through kob-wasm | `web/src/kob/decode.ts:89` `FEE_ABSOLUTE_MAX` (0.5 KAS), enforced at `:2058` |
+    /// | kobd matcher | its profit gate `kobd/src/matcher/batch.rs:1032`, `:2330` (`min_profit`) and the inventory fee cap `matcher/planner.rs:361` (`max_fee`) |
+    /// | kobd keepers | `kobd/src/keepers/mod.rs:762-773` (`min_profit`, the subsidy cap) |
+    ///
+    /// The matcher relies on this: a batch whose change is left out is seen as over the storage
+    /// limit and retried with fewer fills.
     pub fn seal(self, budgets: &dyn Fn(&str) -> Result<u16>) -> Result<BuiltTx> {
         if self.inputs.is_empty() {
             return invalid("a transaction needs at least one input");
@@ -1746,7 +1760,6 @@ impl Draft {
             let spk = p2pk_spk(&pk);
             let mut c = slack.saturating_sub(fee_without);
             let mut ok = false;
-            let mut placed = false;
             for _ in 0..32 {
                 if c == 0 {
                     break;
@@ -1769,7 +1782,7 @@ impl Draft {
             if ok && c > 0 {
                 // The relay floor does not price storage mass, so nothing else keeps a small change
                 // output (storage mass ~ 10^12 / value) from pushing the transaction over the block
-                // storage limit. Only a dust change is folded into the fee (below).
+                // storage limit. Such a change is folded into the fee instead.
                 let mut outs = outputs.clone();
                 with_change(&mut outs, TransactionOutput { value: c, script_public_key: spk.clone(), covenant: None });
                 let mass_report = masses(&build_tx(outs), &entries);
@@ -1794,20 +1807,10 @@ impl Draft {
                         return draft.seal(budgets);
                     }
                     outputs = o;
-                    placed = true;
                 } else if mass_report.within_block_limits() {
                     let at = with_change(&mut outputs, TransactionOutput { value: c, script_public_key: spk, covenant: None });
                     change_output = Some(at as u32);
-                    placed = true;
                 }
-            }
-            // A change that is not placed goes to the fee. That is meant only for a change below
-            // DUST_OUTPUT_MIN, whose own storage mass (KIP-9, about 10^12 / value) would weigh more
-            // than it is worth; a larger one is never folded unseen (R8F1c-1): a counterparty's output
-            // values can push the storage mass toward the block limit.
-            let lost = slack.saturating_sub(fee_without);
-            if !placed && lost >= DUST_OUTPUT_MIN {
-                return Err(Error::ChangeDoesNotFit { change: lost });
             }
         }
         if let (Some(k), None) = (gap, change_output) {
@@ -1974,10 +1977,11 @@ mod tests {
         assert_eq!(output_storage_mass(&out(0, true)), u64::MAX);
     }
 
-    /// R8F1c-1: a change whose output would put the transaction over the block storage limit is refused, never
-    /// folded into the fee; a change below DUST_OUTPUT_MIN still is (its own storage mass outweighs it).
+    /// The change contract of `seal` (R8F1c-1, accepted): a change whose output would put the transaction over the
+    /// block storage limit is left out and becomes fee, which every caller bounds by its own fee ceiling. A change that
+    /// fits is kept. R8F1c-4: a local signature signs the recomputed digest.
     #[test]
-    fn a_large_change_is_never_folded_into_the_fee() {
+    fn a_change_that_does_not_fit_becomes_fee_for_the_caller_to_bound() {
         let fee = FeeOptions::default();
         let sk = [0x41u8; 32];
         let key = pubkey_of(&sk).unwrap();
@@ -1994,12 +1998,17 @@ mod tests {
             d.add_output(98 * 100_000_000, spk.clone(), None);
             d.seal(&|_: &str| Ok(1))
         };
-        // one KAS of change does not fit next to it: refused
-        let e = build(near + 99 * 100_000_000).unwrap_err();
-        assert!(matches!(e, Error::ChangeDoesNotFit { change } if change > 99_000_000), "{e}");
-        // a dust change goes to the fee, as before
-        let b = build(near + 98 * 100_000_000 + 1_000_000).unwrap();
-        assert_eq!((b.fee.change_output, b.fee.fee), (None, 1_000_000));
+        // one KAS of change does not fit next to it: left out, the whole slack is the fee (a caller's ceiling refuses it)
+        let b = build(near + 99 * 100_000_000).unwrap();
+        assert_eq!((b.fee.change_output, b.fee.fee), (None, 100_000_000));
+        // without that output the change fits and is kept
+        let mut d = Draft::new(0, &fee, Some(key)).unwrap();
+        d.add_p2pk(&KeyUtxo {
+            utxo: Utxo { transaction_id: [3; 32], index: 0, amount: 99 * 100_000_000, block_daa_score: 1, covenant_id: None },
+            pubkey: key,
+        });
+        d.add_output(98 * 100_000_000, spk.clone(), None);
+        assert!(d.seal(&|_: &str| Ok(1)).unwrap().fee.change_output.is_some());
         // R8F1c-4: the digest a local signature signs is this transaction's, recomputed; a stored one of another is refused
         let keys: BTreeMap<[u8; 32], [u8; 32]> = [(key, sk)].into_iter().collect();
         assert_eq!(sign_locally(&b, &keys).unwrap().len(), 1);
