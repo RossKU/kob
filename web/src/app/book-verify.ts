@@ -36,6 +36,8 @@
 // answer in time rejects with a `NodeError` (`unavailable`). The ticket then shows its node banner
 // and plans nothing.
 import type { IndexerApi } from '../data/indexer';
+import type { OrderState } from '../kob/types';
+import { PRESENT_MARGIN_DAA } from '../kob/chain-present';
 import type { BookOrderView, BookView, LevelView, OrderView } from '../data/indexer-types';
 import type { NodeApi } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
@@ -204,10 +206,22 @@ function judge(
         return 'other-market';
       }
     }
+    let quote: bigint | undefined;
     if (deps.daa !== undefined) {
       // The confirmed state's own clock decides, not the row's `expired` flag.
       if (d.expiryDaa > 0n && deps.daa >= d.expiryDaa) return 'expired';
       if (d.activeFrom > deps.daa) return 'inactive';
+      // The price it trades at now is the state's quote at the present, never its `price` (an
+      // auction's start, R9FC2-1). The indexer's `quote` is computed at its own present: the two
+      // may differ by what the price moves within the chain-time margin, in whole price steps.
+      if (!curve) {
+        const q = deps.kob.orderPriceAt(confirmed.order.state, deps.daa, BigInt(confirmed.order.blockDaaScore ?? 0));
+        if (q !== null) {
+          quote = q;
+          const claimedQuote = row.quote != null ? BigInt(row.quote) : null;
+          if (claimedQuote !== null && absDiff(claimedQuote, q) > quoteTolerance(confirmed.order.state)) return 'changed';
+        }
+      }
     }
     if (row.scale !== null && row.scale !== undefined && BigInt(row.scale) !== d.scale) return 'changed';
     // The KAS value of the order UTXO is the node's, and so are the tokens of an ask's custody,
@@ -222,6 +236,7 @@ function judge(
       if (left !== undefined && BigInt(left) !== BigInt(confirmed.custody.state.amount)) return 'changed';
     }
     return {
+      ...(quote !== undefined ? { quote } : {}),
       amount: confirmed.custody ? BigInt(confirmed.custody.state.amount) : null,
       cap: d.price > 0n ? (BigInt(confirmed.order.amount) * d.scale) / d.price : 0n,
       // The tip and the smallest fill shape the minimum fill a planner signs. They are the
@@ -247,7 +262,7 @@ type Verdict =
    * `levels` holds a curve's remaining levels as its confirmed state has them (table index -> price
    * and size left).
    */
-  | { amount: bigint | null; cap: bigint; tip: bigint; minFill: bigint; levels?: Map<number, { price: bigint; amount: bigint }> };
+  | { amount: bigint | null; cap: bigint; tip: bigint; minFill: bigint; levels?: Map<number, { price: bigint; amount: bigint }>; quote?: bigint };
 
 /** The remaining levels of a curve state holding `left` base units (index -> price, size left). */
 const levelsLeftOf = (c: NonNullable<ReturnType<typeof curveFactsOf>>, left: bigint): Map<number, { price: bigint; amount: bigint }> =>
@@ -320,10 +335,28 @@ const dropOf = (row: LevelView | BookOrderView, side: 'sell' | 'buy', reason: Dr
   return { covenantId: isOrderRow(row) ? row.covenant_id : ('' as Hex), side, price, reason };
 };
 
+const absDiff = (a: bigint, b: bigint): bigint => (a > b ? a - b : b - a);
+
+/**
+ * How far the indexer's quote may honestly be from the state's quote at this page's present: what
+ * the price moves within PRESENT_MARGIN_DAA (the chain-time margin between two honest presents),
+ * that is `slope` per `decayStep` DAA over the margin, plus one step for rounding. A fixed price
+ * (slope 0) must be equal.
+ */
+function quoteTolerance(st: OrderState): bigint {
+  const s = st.state as unknown as Record<string, string | undefined>;
+  const slope = s.slope !== undefined ? BigInt(s.slope) : 0n;
+  if (slope === 0n) return 0n;
+  const step = s.decayStep !== undefined && BigInt(s.decayStep) > 0n ? BigInt(s.decayStep) : 1n;
+  const mag = slope < 0n ? -slope : slope;
+  return mag * ((PRESENT_MARGIN_DAA + step - 1n) / step + 1n);
+}
+
 /** A price as a bigint for sorting. An unreadable one sorts last. */
 const priceKey = (row: BookOrderView): bigint | null => {
   try {
-    return BigInt(row.price);
+    // best first by the price it trades at now (the indexer's quote, checked against the state)
+    return BigInt(row.quote ?? row.price);
   } catch {
     return null;
   }
@@ -419,7 +452,9 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
         // The row's tip and minimum fill are the state's. It is the same object when they already
         // are, so an unchanged book stays the same book.
         const [tip, minFill] = [v.tip.toString(), v.minFill.toString()];
-        b.s.kept.push(row0.tip === tip && row0.min_fill === minFill ? row0 : { ...row0, tip, min_fill: minFill });
+        // the row sits at the price it trades at now (the state's quote), not at an auction's start
+        const priced = v.quote !== undefined && v.quote.toString() !== row0.price ? { ...row0, price: v.quote.toString() } : row0;
+        b.s.kept.push(priced.tip === tip && priced.min_fill === minFill ? priced : { ...priced, tip, min_fill: minFill });
         return;
       }
       // An order that is over or not yet live is no liquidity, but it is not a missing one either.

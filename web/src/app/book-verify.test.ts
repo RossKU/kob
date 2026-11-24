@@ -306,3 +306,23 @@ describe('a Collected bid that has bought (its fills spend its bought-custody)',
     expect(w.nodeCalls() - calls).toBe(1);
   });
 });
+
+describe('an auction-shaped order is checked and shown at the price it trades at now (R9FC2-1)', () => {
+  it('the row sits at the state quote; an indexer quote off by more than the margin allows is dropped as changed', async () => {
+    const placed = placeGolden(kob, 'create.ask.dutch', MAKER);
+    const real = placed.snapshots[0]!;
+    const chain = new FakeChain();
+    chain.applyTx(placed.signed.tx);
+    const s = real.order.state.state as unknown as Record<string, string>;
+    expect(BigInt(s.slope)).not.toBe(0n);
+    const daa = BigInt(s.activeFrom) + 3n * BigInt(s.decayStep || '1') + 1n;
+    const deps: BookVerifyDeps = { kob, node: chain, indexer: { order: async () => orderViewOf(kob, real) }, toAddress: testAddress, daa };
+    const q = kob.orderPriceAt(real.order.state, daa, BigInt(real.order.blockDaaScore ?? 0))!;
+    expect(q).not.toBe(BigInt(s.price));
+    const out = await verifyBook(deps, book([rowOf(real, { quote: q.toString() } as Partial<BookOrderView>)]));
+    expect(out.view.asks.map((r) => (r as BookOrderView).price)).toEqual([q.toString()]);
+    const off = await verifyBook(deps, book([rowOf(real, { quote: (q * 3n).toString() } as Partial<BookOrderView>)]));
+    expect(off.view.asks).toEqual([]);
+    expect(off.dropped.map((d) => d.reason)).toEqual(['changed']);
+  });
+});
