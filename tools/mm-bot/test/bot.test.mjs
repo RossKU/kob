@@ -1444,7 +1444,6 @@ test('a STOP with 60 proven asks that are gone ends within the bounded number of
     reset();
   }
 });
-
 // R6T-2: an order ends on its cancel only once the node shows the cancel's own transaction (an
 // output of it to the bot's address), never because the cancel was submitted.
 const age = (bot) => { for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000; };
@@ -1538,5 +1537,119 @@ test('a cancel-replaced order is kept until the node shows the replace; one a fi
       reset();
     }
   }
+});
+
+// R6T-1: every partial fill of an ask pays the bot an output the node shows, so the amount left
+// after it can be found from the payment alone, whatever the indexer reports.
+test('a_lie_about_the_first_fill_leaves_a_proven_ask_unfound (R6T-1): the payment names the true amount, and the ask is cancelled before the stop is done', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, dir } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const [a, b] = Object.keys(c.orders).sort().filter((k) => c.orders[k].side === 1);
+    const A = c.orders[a];
+    const placedA = bot.state.orders[a].amount;
+    // A is bought in part, n1 base units (payout P1, exactly allIn); B in full (payout P2).
+    const n1 = 1_500_007;
+    A.amount -= n1;
+    delete c.orders[b];
+    c.ended[b] = 'filled';
+    writeFileSync(file, JSON.stringify(c));
+    // The indexer hides both, for good, and lies about A's first fill: n1 - 5, the rest paid by P2.
+    hiddenIds = new Set([a, b]);
+    const p1 = '91'.repeat(32);
+    const p2 = '92'.repeat(32);
+    bot.nodeOutputs = async () => [{ txid: p1, index: 1, amount: Math.ceil((n1 * A.price) / 1e6) }, { txid: p2, index: 1, amount: 1e15 }];
+    fillsFeed = [{ id: 2, covenant_id: a, txid: p2, amount: String(placedA - n1 + 5), price: String(A.price) }, { id: 1, covenant_id: a, txid: p1, amount: String(n1 - 5), price: String(A.price) }];
+    // B (no fill reported) stays unresolved; past its expiry the stop does not wait for it.
+    bot.state.orders[b].expiresAt = Date.now() - 1000;
+    const n = await stopUntilDone(bot, 8);
+    assert.ok(n != null, 'the stop ends');
+    assert.equal(chain().ended[a], 'cancelled', 'A was found at the amount P1 names and cancelled through the node');
+    assert.equal(bot.state.orders[a], undefined, 'and ended on its confirmed cancel');
+    assert.equal(bot.state.payments[`${p1}:1`].usedBy, a, 'P1 is marked as its fill');
+    assert.match(readFileSync(paths(dir).log, 'utf8'), /from the payment\(s\) 9191.*not from the indexer/);
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});
+
+test('a proven ask is found by a payment the node shows after the proof (R6T-1)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, dir } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const [a, b] = Object.keys(c.orders).sort().filter((k) => c.orders[k].side === 1);
+    const A = c.orders[a];
+    const placedA = bot.state.orders[a].amount;
+    const n1 = 1_500_007;
+    A.amount -= n1;
+    delete c.orders[b];
+    c.ended[b] = 'filled';
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a, b]);
+    const p1 = '91'.repeat(32);
+    const p2 = '92'.repeat(32);
+    // The indexer names B's payout as the fill of all of A; A's own payout is not shown yet.
+    bot.nodeOutputs = async () => [{ txid: p2, index: 1, amount: 1e15 }];
+    fillsFeed = [{ id: 1, covenant_id: a, txid: p2, amount: String(placedA), price: String(A.price) }];
+    await bot.cycle();
+    assert.ok(bot.state.orders[a].proven, 'proven on the forged fill');
+    bot.nodeOutputs = async () => [{ txid: p2, index: 1, amount: 1e15 }, { txid: p1, index: 1, amount: Math.ceil((n1 * A.price) / 1e6) }];
+    await bot.cycle();
+    assert.equal(chain().ended[a], 'cancelled', 'the rotation finds it at the amount P1 names');
+    assert.ok(alertsOf(dir).some((x) => x.reason === 'proven-live'));
+  } finally {
+    reset();
+  }
+});
+
+test('two odd fills the indexer never reports: the sum of their payments finds the ask (R6T-1)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const a = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    const A = c.orders[a];
+    const n1 = 1_500_007;
+    const n2 = 2_300_011;
+    A.amount -= n1 + n2;
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a]);
+    const pay = (n) => Math.ceil((n * A.price) / 1e6);
+    bot.nodeOutputs = async () => [{ txid: '93'.repeat(32), index: 1, amount: pay(n1) }, { txid: '94'.repeat(32), index: 1, amount: pay(n2) }];
+    await bot.cycle();
+    assert.equal(chain().ended[a], 'cancelled', 'found at amount - n1 - n2 and cancelled');
+    assert.ok(!bot.state.orders[a]?.unconfirmed);
+  } finally {
+    reset();
+  }
+});
+
+test('a payment that could pay for more than 200 fill amounts is skipped as a hint, with a log line (R6T-1)', () => {
+  reset();
+  const { bot, dir } = setup();
+  bot.nodeOutputs = async () => [];
+  const id = 'f1'.repeat(32);
+  // 1,000 sompi per whole token of 10^6 base units: a base unit is worth 0.001 sompi.
+  bot.state.orders[id] = { side: 'sell', level: 0, price: 1000, amount: 50_000_000, ownAmount: 50_000_000, amountLeft: 50_000_000, ownAt: 1000,
+    own: { state: { kind: 'KobAsk', state: { price: '1000', scale: '1000000', amountLeft: '50000000' } } } };
+  bot.state.payments = { [`${'95'.repeat(32)}:0`]: { txid: '95'.repeat(32), sompi: 7, at: 2000 } };
+  assert.deepEqual(bot.payHints(id), [], 'n in (6,000, 7,000]: 1,000 amounts, skipped');
+  assert.match(readFileSync(paths(dir).log, 'utf8'), /1 payment\(s\) to the bot not used as lookup hints: each could pay for more than 200 different fill amounts/);
+  // At 4,000 sompi a base unit, the same kind of payment names one amount.
+  bot.state.orders[id].own.state.state.price = '4000000000';
+  bot.state.payments = { [`${'95'.repeat(32)}:0`]: { txid: '95'.repeat(32), sompi: 4000 * 1_500_007, at: 2000 } };
+  assert.deepEqual(bot.payHints(id), [50_000_000 - 1_500_007]);
 });
 

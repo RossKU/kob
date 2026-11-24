@@ -34,6 +34,15 @@ const PAYMENTS_KEEP = 2000; // payments to the bot's address no longer shown on 
 const PAYMENT_KEEP_MS = 7 * 86_400_000; // ... for a week after the node last showed them
 const FILLS_KEEP = 200; // fill events kept per order
 const HINTS_MAX = 32; // amounts left passed to kob recover per ask
+// Amounts left derived from the payments the node showed to the bot (R6T-1): from each payment
+// first seen after the ask's last known amount, and from sums of 2 and 3 of them. Per ask and
+// lookup: at most PAY_SOURCES_MAX payments (C(12,1) + C(12,2) + C(12,3) = 298 sums at most, cut at
+// PAY_HINTS_MAX amounts), so with the HINTS_MAX others an ask stays within kob recover's 200
+// candidate scripts, the cap every lookup had already. A payment whose filled amount spans more
+// than PAY_RANGE_MAX base units (a token whose base unit is worth far less than a sompi) is skipped.
+export const PAY_SOURCES_MAX = 12;
+export const PAY_HINTS_MAX = 160;
+export const PAY_RANGE_MAX = 200;
 const CANCEL_TXIDS_KEEP = 8; // txids of the cancels sent per order, any of which may confirm (R6T-2)
 // A paid ask is kept as proven (R5T-1): its level and cap share are free, it is still looked up.
 export const PROVEN_MAX = 200; // proven records kept; past it a proof frees nothing
@@ -436,6 +445,7 @@ export class Bot {
       for (const e of r.orders) {
         if (!sent.includes(e.covenant_id) || out.get(e.covenant_id).ok) continue;
         if (e.status === 'live') this.prove(e);
+        if (e.status === 'live' && isAsk(s0(e.covenant_id)) && e.amount_left != null) this.markPayHit(e.covenant_id, e.amount_left);
         const done = e.cancel?.status === 'submitted' || (this.dryRun && e.cancel?.status === 'signed');
         out.set(e.covenant_id, done ? { ok: true, dryRun: this.dryRun, txid: e.cancel.txid ?? null, fee: Number(e.cancel.fee ?? 0) }
           : { ok: false, live: e.status === 'live', error: e.status === 'live' ? `kob recover --cancel: ${e.cancel?.status ?? '?'}: ${e.cancel?.reason ?? r.error ?? ''}` : `not found on the node (${e.status})` });
@@ -452,7 +462,102 @@ export class Bot {
    * record, the indexer's list and per-order view, and the placed amount less the fills the
    * indexer reported. The node checks each; none is trusted.
    */
-  hintsOf(id, listed = null) {
+  hintsOf(id, listed = null, { pay = true } = {}) {
+    const base = this.indexerHints(id, listed);
+    if (!pay) return base;
+    const p = this.payHints(id);
+    return [...new Set([...base, ...p])];
+  }
+
+  /**
+   * Amounts left of ask `id` that owe nothing to the indexer (R6T-1), from the payments the node
+   * showed to the bot. A fill of n base units pays the maker, at the ask's own output, at least
+   * allIn = ceil(n x (price - tip) / scale) (KobAsk.sil, and its KRON form, the `allIn` line); a
+   * partial fill leaves both carriers on the order, so a matcher's payout is exactly allIn. A
+   * payment P then names n in [floor((P - 1) x scale / r) + 1, floor(P x scale / r)], r = price -
+   * tip: one value while a base unit is worth a sompi or more, about scale / r otherwise. The
+   * payments are those first seen after the ask's last known amount (its own outpoint's, or the
+   * node's last live answer), not the bot's own, and not used to prove another ask; the ones the
+   * indexer names as fills of this ask go first. A hit marks its payments used by the ask
+   * (markPayHit). A payout above allIn (a filler who pays the maker more) names a larger n than
+   * was filled, and is then no help: README, tracking.
+   */
+  payHints(id) {
+    const s = this.state.orders[id];
+    (this.paySrc ??= {})[id] = new Map();
+    if (!s || !isAsk(s) || !this.nodeOutputs) return [];
+    const base = s.leftAt != null && (s.ownAt == null || s.leftAt >= s.ownAt) ? { left: s.amountLeft, at: s.leftAt } : { left: s.ownAmount ?? s.amountLeft ?? s.amount, at: s.ownAt };
+    if (!Number.isSafeInteger(base.left) || base.left < 2 || base.at == null) return [];
+    const st = s.own?.state?.state ?? {};
+    let r;
+    let sc;
+    let minFill;
+    try {
+      r = BigInt(st.price ?? Math.round(s.price ?? 0)) - BigInt(st.tip ?? 0);
+      sc = BigInt(st.scale ?? this.scale);
+      minFill = BigInt(st.minFill ?? 1);
+    } catch {
+      return [];
+    }
+    if (r <= 0n || sc <= 0n) return [];
+    const own = new Set(this.state.ownTx ?? []);
+    const named = new Set((s.fills ?? []).map((f) => f.txid));
+    const left = BigInt(base.left);
+    const ranges = [];
+    const wide = [];
+    const pays = Object.entries(this.state.payments)
+      .filter(([, p]) => !p.own && !own.has(p.txid) && (!p.usedBy || p.usedBy === id) && p.at > base.at && Number.isSafeInteger(p.sompi) && p.sompi > 0)
+      .sort((a, b) => Number(named.has(b[1].txid)) - Number(named.has(a[1].txid)) || a[1].at - b[1].at);
+    for (const [k, p] of pays) {
+      if (ranges.length >= PAY_SOURCES_MAX) break;
+      const P = BigInt(p.sompi);
+      let hi = (P * sc) / r;
+      let lo = ((P - 1n) * sc) / r + 1n;
+      if (hi - lo + 1n > BigInt(PAY_RANGE_MAX)) {
+        wide.push(k);
+        continue;
+      }
+      if (lo > hi) lo = hi; // more than allIn of any n: the largest n it covers
+      if (lo < minFill) lo = minFill;
+      if (lo >= left) continue; // more than a partial fill of this ask leaves
+      if (hi >= left) hi = left - 1n;
+      if (lo <= hi) ranges.push({ k, lo, hi });
+    }
+    if (wide.length) {
+      const fresh = wide.filter((k) => !(this.wideLogged ??= new Set()).has(`${id}/${k}`));
+      for (const k of fresh) this.wideLogged.add(`${id}/${k}`);
+      if (fresh.length) this.log.info(`${short(id)}: ${fresh.length} payment(s) to the bot not used as lookup hints: each could pay for more than ${PAY_RANGE_MAX} different fill amounts (a base unit worth far less than a sompi)`);
+    }
+    const src = this.paySrc[id];
+    const combos = [];
+    for (let i = 0; i < ranges.length; i++) {
+      combos.push([i]);
+    }
+    for (let i = 0; i < ranges.length; i++) for (let j = i + 1; j < ranges.length; j++) combos.push([i, j]);
+    for (let i = 0; i < ranges.length; i++) for (let j = i + 1; j < ranges.length; j++) for (let m = j + 1; m < ranges.length; m++) combos.push([i, j, m]);
+    for (const c of combos) {
+      const lo = c.reduce((a, i) => a + ranges[i].lo, 0n);
+      const hi = c.reduce((a, i) => a + ranges[i].hi, 0n);
+      for (let n = hi; n >= lo && src.size < PAY_HINTS_MAX; n--) {
+        const rest = Number(left - n);
+        if (rest >= 1 && !src.has(rest)) src.set(rest, c.map((i) => ranges[i].k));
+      }
+      if (src.size >= PAY_HINTS_MAX) break;
+    }
+    return [...src.keys()];
+  }
+
+  /** A lookup found ask `id` at `amountLeft`: the payments that hint named are its fills (R6T-1). */
+  markPayHit(id, amountLeft) {
+    const keys = this.paySrc?.[id]?.get(Number(amountLeft));
+    const s = this.state.orders[id];
+    if (!keys || !s || Number(amountLeft) === s.amountLeft) return;
+    for (const k of keys) if (this.state.payments[k]) this.state.payments[k].usedBy = id;
+    this.log.info(`${short(id)}: found on the node at amount left ${amountLeft}, from the payment(s) ${keys.join(', ')} to the bot (not from the indexer): they are marked as its fills`);
+  }
+
+  /** The hints of hintsOf that come from the bot's own records and the indexer. */
+  indexerHints(id, listed = null) {
     const s = this.state.orders[id];
     const all = [s?.amountLeft, listed, s?.idxAmount, s?.amount != null && s?.filledSeen ? s.amount - s.filledSeen : null];
     // The amount left after each fill the indexer reported (R5T-1): from the last own outpoint
@@ -765,7 +870,9 @@ export class Bot {
       if (s.own) Object.assign(s.own, { prev: null, txid: r.txid });
       s.value = r.value;
       if (r.amountLeft != null && /^\d+$/.test(String(r.amountLeft))) {
+        if (isAsk(s)) this.markPayHit(id, r.amountLeft);
         s.amountLeft = Number(r.amountLeft);
+        s.leftAt = now; // the node's last word on its amount (payHints)
         if (isAsk(s) && s.own?.state?.state) s.own.state.state.amountLeft = String(r.amountLeft);
       }
       if (s.fate) this.log.info(`${tag}: the placement whose outcome was unknown is on chain`);
@@ -1009,7 +1116,7 @@ export class Bot {
       if (q == null || own.has(f.txid)) continue;
       // The smallest free output of the fill's transaction that covers it.
       const k = Object.entries(this.state.payments)
-        .filter(([key, p]) => p.txid === f.txid && !p.usedBy && !p.own && !picked.includes(key) && p.at > s.ownAt && BigInt(p.sompi) >= q)
+        .filter(([key, p]) => p.txid === f.txid && (!p.usedBy || p.usedBy === id) && !p.own && !picked.includes(key) && p.at > s.ownAt && BigInt(p.sompi) >= q)
         .sort((a, b) => a[1].sompi - b[1].sompi)[0]?.[0];
       if (!k) continue;
       picked.push(k);
@@ -1025,7 +1132,7 @@ export class Bot {
   unresolvedOrders() {
     return Object.entries(this.state.orders).filter(([, s]) => s.unconfirmed || s.parked || s.proven).map(([id, s]) => ({
       id, side: s.side, level: s.level, price: s.price, amount: s.amount ?? null, amountLeft: s.amountLeft ?? null, filledSeen: s.filledSeen ?? 0,
-      parked: !!s.parked, proven: !!s.proven, placedAt: s.placedAt ?? null, expiresAt: s.expiresAt ?? null, hints: isAsk(s) ? this.hintsOf(id) : [],
+      parked: !!s.parked, proven: !!s.proven, placedAt: s.placedAt ?? null, expiresAt: s.expiresAt ?? null, hints: isAsk(s) ? this.hintsOf(id, null, { pay: false }) : [],
     }));
   }
 
@@ -1192,6 +1299,8 @@ export class Bot {
     // Without an answer the next read that succeeds stands for the time (ownAt null).
     const sends = (a.kind === 'place' || a.kind === 'amend') && !this.dryRun;
     const ownAt = sends && (await this.seePayments(Date.now())) ? Date.now() : null;
+    // A merge spends the wallet's KAS too: what landed since the last read is recorded first (R6T-1).
+    if (a.kind === 'merge' && !this.dryRun) await this.seePayments(Date.now());
     const r = a.kind === 'place' ? await this.kob.place(tok, a.side, a.amount, a.price, gtd)
       : a.kind === 'amend' ? await this.kob.amend(a.id, a.price, gtd)
         : a.kind === 'cancel' ? await this.cancelOrder(a.id) : await this.kob.merge(tok);

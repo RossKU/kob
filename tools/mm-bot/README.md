@@ -42,8 +42,9 @@ On testnet-10 it is a warning.
   says where to look: an order it does not list, lists at another outpoint, or that has an open question is looked up
   on the node from that record (`kob recover --from <dataDir>/own-orders.json`). A partial fill moves an ask to a new
   script, and `kob recover` finds it only at an amount it is told (the bot passes every amount left it knows: its own
-  record, the indexer's list and per-order view, and the amount left after each fill the indexer reported, at most 32) or reaches
-  by its bounded search (`amountLeft - k x minFill`); a fill of another amount is not followed. Cancels go through the
+  record, the indexer's list and per-order view, and the amount left after each fill the indexer reported, at most 32;
+  and the amounts the payments to the bot name, below) or reaches by its bounded search (`amountLeft - k x minFill`); a
+  fill of another amount is not followed. Cancels go through the
   node from the record too (`kob recover --cancel`); `kob cancel <id>` is the fallback for an order the record cannot
   find. An order leaves the state file only on proof that it ended, under an order template the node has proven (an
   order found live under it): a bid has no unspent output at its script (a bid's script never changes), the node shows
@@ -86,9 +87,8 @@ On testnet-10 it is a warning.
   and still counted in the ask cap) and the bot warns once per ask (`proven-full`). The ladder then runs short on the
   ask side until older records end, within 3.5 h; the operator should check `mm-bot unresolved` and, if fills that
   fast are expected, lower the fill rate (fewer or larger levels) or drop records already seen ended (`mm-bot drop
-  --id <id> --force`, bot stopped). A forged proof thus costs one level of ladder
-  room until the ask is found or expires, not a forgotten order; the ask itself stays fillable at its old price until
-  its expiry (at most `lifeMin`, 90 min) where the search cannot reach its amount. To see the payments the
+  --id <id> --force`, bot stopped). A forged proof thus never makes the bot forget an order; what it can still cost is
+  below (**What the lookup cannot find**). To see the payments the
   bot reads its own address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle, before each
   placement or amend, and after a cycle that sent. An output keeps the time the node first showed it for as long as the
   node shows it; once the node stops showing it, its record is kept for a week (at most 2,000 that proved nothing and
@@ -119,6 +119,34 @@ On testnet-10 it is a warning.
   covers it unless the indexer reports the fill days late. With a JSON wRPC node and an honest indexer this should be rare: the bot reads its
   outputs every cycle before it sends, so it misses a payment only when it lands within the seconds of one cycle's
   sends and the CLI picks that very output to fund one of them.
+- **Amounts from the payments.** With a JSON wRPC node every partial fill of an ask also names its own amount: the
+  covenant pays the maker at least `allIn = ceil(n x (price - tip) / scale)` at the ask's output, a partial fill
+  leaves both carriers on the order, and a matcher pays exactly `allIn`. So a payment of P sompi names the filled
+  amount n (one value while a base unit is worth a sompi or more), whatever the indexer says. Each ask the bot looks
+  up is also tried at its last known amount (its own outpoint's, or the node's last live answer) less what each
+  payment first seen after it names, and less each sum of 2 or 3 of them: at most 12 payments (the ones the indexer
+  names as its fills first) and 160 amounts per ask and lookup, within the 200 candidate scripts `kob recover`
+  already searched per order, so the node calls do not grow. A payment that could pay for more than 200 fill amounts
+  (a base unit worth under 1/200 sompi) is skipped, with a log line. An ask found that way marks those payments as its
+  fills (the log names them); they then prove nothing else.
+- **What the lookup cannot find.** The node can only be asked for an ask at an amount, and with a hostile indexer
+  the only amounts the bot has are its own and the payments'. An ask stays unfindable when the filler paid the maker
+  more than `allIn` (the payout then names a larger fill than was made: escaping costs him the value of one base unit,
+  4,000 sompi at the TUSDC6 defaults), when more than 3 fills (or more than 12 payments) landed since the bot last
+  knew its amount, when a payment could pay for more than 200 fill amounts, when the bot's own send spent the payment
+  before it read it (the bot reads its outputs at the start of each cycle, before each placement, amend and merge,
+  and after a cycle that sent; cancels pay their fee from the order's own carrier; so only a payment that confirms in
+  the second or two between that read and the CLI's own, at a send that picks that output, is missed), or without a
+  JSON wRPC node. Such an ask stays live at its old price until its expiry: **one level at a stale price for at most
+  `lifeMin`**, while its level is quoted again (when the ask was taken as paid in full, proven) or stays blocked
+  (unresolved). With the defaults a level is 15 % of `capitalUsd` (150 USD at 1,000 USD) and `lifeMin` is 90 min: the
+  loss is that level times the move against the bot within 90 min, about 3 to 8 USD per attack at 1,000 USD for a 2
+  to 5 % move. The attacker needs the indexer the bot reads (or a man in the middle of an `http://` one) and pays the
+  spread of two trades at the bot's own prices. The remedy is the operator's: point the bot at an indexer you run
+  yourself (`indexer`); keep `lifeMin` short (the exposure lasts at most `lifeMin`; its floor, 30 min, is a third of the
+  default); and watch `<dataDir>/proven-not-found.json` (written by each STOP and
+  IDLE pass) and `mm-bot unresolved`, with its `node-unconfirmed` and `proven-live` alerts: an ask there you cannot
+  account for is checked by hand (`kob recover --from <file> --amount-left <id>=<n> --cancel`).
 - **An indexer that hides a quote or shows it at an old outpoint.** The node still holds it: it is cancelled through the
   node, with an error alert, and its level is quoted again once the node shows it ended. An order the node cannot find
   while the indexer still lists it, or that cannot be looked up yet (no order template proven: the indexer never listed
