@@ -222,7 +222,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
     // The plan spends coins of the key it was built for. After an account switch this screen must
     // not sign it, because the plan is stale.
     const planned = [...built.sign, ...(props.creation?.prep.sign ?? [])].find((s) => s.pubkey !== wallet.info!.pubkey)!.pubkey;
-    extraBlocking.push({ code: 'account-changed', severity: 'blocking', message: 'account changed', text: t('confirm.accountChanged', { planned: shortId(planned), now: shortId(wallet.info.pubkey) }) });
+    extraBlocking.push({ code: 'account-changed', severity: 'blocking', message: 'account changed', text: t('confirm.accountChanged', { planned: planned, now: wallet.info.pubkey }) });
   } else if (wallet.networkMismatch) {
     extraBlocking.push({ code: 'network', severity: 'blocking', message: 'network', text: t('confirm.networkMismatch', { wallet: wallet.info.network, app: config.network }) });
   }

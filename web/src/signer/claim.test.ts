@@ -38,7 +38,7 @@ describe('signer summary: claims', () => {
     const s = summarize(kob, built, MAKER.pk, HINTS);
     expect(s.problems).toBe(0);
     expect(s.title).toBe('Claim bought tokens');
-    expect(line(s, /^Claims from order$/)).toBe(`${snap.covenantId.slice(0, 8)}…${snap.covenantId.slice(-8)}`);
+    expect(line(s, /^Claims from order$/)).toBe(snap.covenantId);
     expect(line(s, /bought by the order$/)).toBe('0.7 TST');
     expect(line(s, /^Goes to$/)).toBe('you, as one UTXO');
     expect(line(s, /carrier of its next custody/)).toMatch(/ KAS$/);

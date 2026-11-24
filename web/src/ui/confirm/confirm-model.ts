@@ -15,7 +15,7 @@ import { UNLIMITED_REPEAT_COUNT } from '../../kob/orders/cond-common';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../../kob/order-facts';
 import type { Clock } from '../../kob/plan-types';
-import { longId, tickerUnit, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
+import { tickerNeedsId, tickerUnit, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { decimalsOfScale, formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
 import { t, type Params, RAW_TOKEN_DECIMALS } from '../../i18n';
@@ -104,7 +104,8 @@ export interface ConfirmModel {
 
 const GROUP = { group: ',' };
 const kas = (v: bigint): string => `${formatKas(v, GROUP)} KAS`;
-const short = (h: string): string => (h.length > 12 ? `${h.slice(0, 4)}...${h.slice(-4)}` : h);
+/** An id on the signing screens: whole, never shortened in the middle (founder 2026-11-12). */
+const short = (h: string): string => h;
 const DAA_PER_SECOND = 10;
 /**
  * Exit orders committed inside an entry carry a "never" expiry (2^62). Anything past two years is
@@ -153,17 +154,17 @@ export function openTokenIdentity(summary: SigningSummary, registry: TokenRegist
   for (const info of tokens) {
     if (info && info.openList === true && info.openScale === 'orders') {
       // the unit is the indexer's market scale (R9FB3-2): said next to the amounts
-      rows.push(row('scale-' + info.covenantId, tr('confirm.openScale.label', { token: longId(info.covenantId) }), tr('confirm.openScale.indexer', { decimals: info.decimals }), 'warn', tr('confirm.openScale.indexerDetail')));
+      rows.push(row('scale-' + info.covenantId, tr('confirm.openScale.label', { token: short(info.covenantId) }), tr('confirm.openScale.indexer', { decimals: info.decimals }), 'warn', tr('confirm.openScale.indexerDetail')));
       continue;
     }
     if (!info || info.openList !== true || info.openScale !== 'entered') continue;
-    const token = longId(info.covenantId);
+    const token = short(info.covenantId);
     rows.push(row('scale-' + info.covenantId, tr('confirm.openScale.label', { token }), tr('confirm.openScale.value', { decimals: info.decimals }), 'warn', tr('confirm.openScale.detail')));
   }
   const open = tokens.filter((i): i is CheckedOpenToken => !!i && i.openList === true && i.family === 'kcc20' && !!i.extension);
   for (const info of open) {
     const x = info.extension;
-    const token = longId(info.covenantId);
+    const token = short(info.covenantId);
     const refName = (src: ExtensionReference['source']): string => tr(src === 'holdings' ? 'confirm.ext.ref.holdings' : 'confirm.ext.ref.registryGenesis');
     const source = tr(x.source === 'indexer' ? 'confirm.ext.fromIndexer' : x.source === 'holdings' ? 'confirm.ext.fromHoldings' : x.source === 'chain' ? 'confirm.ext.fromChain' : 'confirm.ext.fromOrders');
     const check =
@@ -201,7 +202,7 @@ export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenReg
   // A token no pinned entry names shows 8 + 8 hex of its id, not the 4 + 4 fragment. A ticker that
   // is only its id is said once.
   if (info && !info.openList) return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId) });
-  const id = longId(ref.covenantId);
+  const id = short(ref.covenantId);
   const ticker = info?.ticker ?? ref.ticker;
   return ticker && ticker !== id ? tr('confirm.token.label', { ticker, id }) : id;
 }
@@ -210,7 +211,8 @@ export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenReg
  * The unit a token's amounts and prices are printed in: its ticker, with 8 + 8 hex of its id where
  * the ticker reads as KAS (`tickerUnit`), else its id.
  */
-const unitOf = (ref: TokenRef): string => (ref.ticker == null ? longId(ref.covenantId) : tickerUnit(ref.ticker, ref.covenantId));
+// a unit never carries an id: the token is named in full above its lines (founder 2026-11-12)
+const unitOf = (ref: TokenRef): string => (ref.ticker == null || tickerNeedsId(ref.ticker) ? t('signer.token.unit') : ref.ticker);
 
 /**
  * A token amount in whole tokens, of its decimals when known (a hint, the scale of its order),

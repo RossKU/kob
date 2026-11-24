@@ -259,7 +259,7 @@ describe('private-key adapter: a token creation (KCC-23) on one confirmation', (
     // the program and the extension commitment the outputs were checked against are lines of the
     // frame
     expect(line(/^Token program/)).toMatch(/^[A-Za-z0-9_]+$/);
-    expect(line(/^Extension commitment/)).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8}$/);
+    expect(line(/^Extension commitment/)).toMatch(/^[0-9a-f]{64}$/);
     expect(s.problems).toBe(0);
     // the fee and the KAS line cover both transactions
     expect(s.fee).toBe(`${formatKas(BigInt(plan.prep.fee.fee) + BigInt(plan.built.fee.fee))} KAS`);
