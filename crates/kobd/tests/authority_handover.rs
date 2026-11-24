@@ -614,8 +614,9 @@ async fn a_lone_authority_that_drips_the_chain_turns_the_health_failing_then_sta
 ///   health shows the real lag until it is fresh;
 /// - a deep reorg, from a fresh cursor and from an old one;
 /// - an answer that pauses (here 300 ms) in a catch-up from an old cursor;
-/// - at the tip, the state flickering between `following` and `catching_up` (R4C1-I3): a cursor within the tolerance
-///   is progress whatever the state.
+/// - at the tip, a node that claims a sink far ahead in every other answer (R4C1-I3): a cursor within the tolerance is
+///   progress, and the state follows the cursor's verified age, so it stays `following` (R9C1-L2; before, the claim
+///   flipped it to `catching_up`).
 #[tokio::test]
 async fn honest_nodes_are_never_failing_by_the_pace_rule() {
     let _g = serial().await;
@@ -678,7 +679,7 @@ async fn honest_nodes_are_never_failing_by_the_pace_rule() {
     r.until(200, "first sync", |r| r.cursor() == Some(node.tip())).await;
     let mut states = vec![];
     for i in 0..10u64 {
-        // claims far ahead and answers what there is: `catching_up`; or not: `following`
+        // claims far ahead and answers what there is, or not: the verified age decides, so `following` both times
         a.lead.store(if i % 2 == 0 { 1_000_000 } else { 0 }, Ordering::Relaxed);
         *a.drip.lock().unwrap() = (i % 2 == 0).then_some((2_480, Duration::ZERO));
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -689,6 +690,6 @@ async fn honest_nodes_are_never_failing_by_the_pace_rule() {
         states.push(h.state);
         assert!(h.last_progress_unix_ms > before, "a fresh cursor is progress in {:?}", h.state);
     }
-    assert!(states.contains(&FollowerState::CatchingUp) && states.contains(&FollowerState::Following), "{states:?}");
+    assert!(states.iter().all(|s| *s == FollowerState::Following), "the sink claim does not decide the state: {states:?}");
     assert_eq!(r.source.board().authority(), 0);
 }
