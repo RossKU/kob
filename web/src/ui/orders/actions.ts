@@ -11,6 +11,7 @@ import {
 } from '../../kob/cancel';
 import { confirmSnapshotOnNode } from '../../kob/node-verify';
 import { resolveRecord, retiredOf, type RecordKind, type RecordStore } from '../../kob/records';
+import { boughtOf } from '../../kob/bought';
 import { curveFactsOf, custodiesOf, familyOfKind, quoteCovIdOf, tokenCovIdOf } from '../../kob/order-facts';
 import { isLiveStatus, type Position } from '../../kob/positions';
 import { custodyState, extensionOfState } from '../../kob/token-state';
@@ -58,12 +59,7 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
         const ret = retiredOf(s.kob, { kind: detail.contract as RecordKind, templateHash: detail.template_hash });
         const snap0 = snapshotFromOrderView(detail);
         const snap = ret ? { ...snap0, retired: ret.hash } : snap0;
-        // An order whose state holds a custody the view does not name cannot be acted on from the
-        // indexer's data alone: the node lookup of the record finds it at the script the state
-        // implies. Whether it holds one is read from the decoded state, never from a field the
-        // indexer controls such as `side` (R8FX-1).
-        const needsCustody = custodiesOf(snap0.order.state).some((c, k) => c.amount > 0n && (k === 0 ? !snap0.custody : !snap0.prefund));
-        if (!needsCustody || !entry.record) return await onNode(snap);
+        if (!lacksHeldUtxo(snap0) || !entry.record) return await onNode(snap);
       }
     } catch (e) {
       indexerFailure = e;
@@ -95,6 +91,18 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
   }
   if (indexerFailure) throw indexerFailure;
   throw new SnapshotError('state-unknown', `order ${entry.id}: neither the indexer nor a placement record can locate it`);
+}
+
+/**
+ * Whether a snapshot from the indexer's view lacks a UTXO the order's state holds: a custody, a
+ * prefund or a Collected order's bought-custody. Such an order cannot be acted on from the view
+ * alone, and the node lookup of the record finds it at the script the state implies. It is read
+ * from the decoded state, never from a field the indexer controls such as `side` (R8FX-1,
+ * R8FX2-I1).
+ */
+export function lacksHeldUtxo(snap: OrderSnapshot): boolean {
+  const st = snap.order.state;
+  return custodiesOf(st).some((c, k) => c.amount > 0n && (k === 0 ? !snap.custody : !snap.prefund)) || (!!boughtOf(st) && !snap.boughtCustody);
 }
 
 /**
