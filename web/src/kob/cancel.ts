@@ -99,6 +99,8 @@ export interface OrderSnapshot {
    * made first. Unset, an unknown list could not be asked at all (indexer down, standalone mode).
    */
   straysCut?: boolean;
+  /** With a cut list: how many strays the indexer counts beyond those listed (kobd counts up to 10,000). */
+  straysBeyond?: number;
   /**
    * Foreign strays (docs/spec/matcher.md section 1.2). These are tokens of other covenant ids owned
    * by the order id, one group per token with the program the indexer proved their state under. The
@@ -241,7 +243,8 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
     strays,
     // The view lists at most 100 strays and counts the rest: a list the indexer cut (R8B-I1), so an
     // ending cancel offers the sweep first instead of losing the unlisted ones without a count.
-    ...(typeof view.strays_total === 'number' && view.strays_total > (view.strays ?? []).filter((s) => !s.spent).length ? { straysUnknown: true, straysCut: true } : {}),
+    ...(typeof view.strays_total === 'number' && view.strays_total > (view.strays ?? []).filter((s) => !s.spent).length ? { straysUnknown: true, straysCut: true, straysBeyond: view.strays_total - (view.strays ?? []).filter((s) => !s.spent).length } : {}),
+    ...(view.strays_unread === true ? { straysUnknown: true } : {}),
     refundDueDaa: view.refund_due_daa != null ? BigInt(view.refund_due_daa) : null,
     deadline: view.deadline != null ? BigInt(view.deadline) : null,
     source: 'indexer',
@@ -709,7 +712,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
     return false;
   });
   if (snap.straysUnknown) {
-    issues.push(issue('cancel.strays-unknown', 'warning', 'the stray tokens of this order could not be read: any that exist are not swept by this cancel and are lost when it closes', { cut: snap.straysCut === true ? 1 : 0 }));
+    issues.push(issue('cancel.strays-unknown', 'warning', 'the stray tokens of this order could not be read: any that exist are not swept by this cancel and are lost when it closes', { cut: snap.straysCut === true ? 1 : 0, ...(snap.straysBeyond ? { beyond: snap.straysBeyond } : {}) }));
   }
   const kept: TokenUtxo[] = [];
   const groups: TokenGroup[] = [];
@@ -741,7 +744,13 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
       strays = [...strays].sort((a, b) => (big(b.state.amount) > big(a.state.amount) ? 1 : -1));
       const dropped = strays.slice(Math.max(room, 0));
       strays = strays.slice(0, Math.max(room, 0));
-      issues.push(issue('cancel.strays-abandoned', 'warning', `${dropped.length} stray token UTXO(s) do not fit the transaction and are abandoned (lost when the order closes)`, { count: dropped.length, amount: totalAmount(dropped), order: snap.covenantId, ...tokenOfAll(dropped) }));
+      // A twin (exactly a held custody's state) is never swept, so only the others are worth a sweep
+      // first; the twins that do not fit are counted apart (R9B-L1, R9B-I1).
+      const heldStates = new Set(held.map((h) => `${h.covenantId ?? ''}|${JSON.stringify(h.state)}`));
+      const twinsLeft = dropped.filter((s) => heldStates.has(`${s.covenantId ?? ''}|${JSON.stringify(s.state)}`));
+      const movable = dropped.filter((s) => !twinsLeft.includes(s));
+      if (movable.length) issues.push(issue('cancel.strays-abandoned', 'warning', `${movable.length} stray token UTXO(s) do not fit the transaction and are abandoned (lost when the order closes)`, { count: movable.length, amount: totalAmount(movable), order: snap.covenantId, ...tokenOfAll(movable) }));
+      if (twinsLeft.length) issues.push(issue('cancel.twins-abandoned', 'warning', `${twinsLeft.length} stray token UTXO(s) identical to the custody do not fit the transaction and are left behind (lost when the order closes; no sweep can move them)`, { count: twinsLeft.length, amount: totalAmount(twinsLeft), order: snap.covenantId, ...tokenOfAll(twinsLeft) }));
     }
     kept.push(...forced, ...strays);
     const inputs = held.length + forced.length + strays.length;

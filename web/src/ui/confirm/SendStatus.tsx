@@ -81,6 +81,8 @@ export interface SendStatus {
   holdUntil?: number;
   /** Confirming: the node's DAA score now (projected), for the times of the table. */
   daa?: bigint | null;
+  /** Confirming: what witnessed the present the plan's times count from (kob/chain-present.ts). */
+  witness?: 'agreed' | 'anchored' | 'own-node' | 'unverified' | 'disagree' | null;
   /**
    * Signing: the wallet is not asked yet. A coin of this transaction is an output of the one just
    * sent, which the wallet's node does not see yet.
@@ -241,7 +243,7 @@ export function useSend(): Sender {
       let plannedAt = Date.now();
       let open = true;
       let baseline = shown;
-      let view: SendStatus = { phase: 'confirming', table: tableOf(current, shown), identity: identityOf(current, shown), walletLabel: session.current.info?.label ?? '', updated, changed: [], rev: 0, holdUntil: 0, daa: null, notes: [...(job.notes ?? [])] };
+      let view: SendStatus = { phase: 'confirming', table: tableOf(current, shown), identity: identityOf(current, shown), walletLabel: session.current.info?.label ?? '', updated, changed: [], rev: 0, holdUntil: 0, daa: null, witness: job.expected?.present?.witness ?? null, notes: [...(job.notes ?? [])] };
       const draw = () => open && set(id, view);
       follow(current, () => open, (j, d) => {
         const worse = !sameOrBetter(baseline, d);
@@ -481,7 +483,7 @@ function OrderTable(props: { order: SummaryOrder; testid: string; cell: string; 
         {o.rows.map((r, i) => (
           <div class={`send-line${props.live.flash(`${props.cell}:r:${i}`)}`} key={i}>
             <dt><span key={r.label}>{r.label}</span></dt>
-            <dd {...(r.daa ? { 'data-daa': r.daa } : {})}>{r.daa ? <TimeValue daa={BigInt(r.daa)} value={r.value} now={props.live.daa} /> : <span key={r.value}>{unitParts(r.value, true)}</span>}</dd>
+            <dd {...(r.daa ? { 'data-daa': r.daa } : {})}>{r.daa ? <TimeValue daa={BigInt(r.daa)} value={r.value} now={props.live.daa} witness={props.live.witness} /> : <span key={r.value}>{unitParts(r.value, true)}</span>}</dd>
           </div>
         ))}
       </dl>
@@ -494,13 +496,14 @@ function OrderTable(props: { order: SummaryOrder; testid: string; cell: string; 
 interface Live {
   flash(cell: string): string;
   daa: bigint | null;
+  witness: SendStatus['witness'];
 }
 
 /**
  * A start or an expiry: "in 28 s" from the clock, with the DAA score below. Without a clock it is
  * the row's own text.
  */
-function TimeValue(props: { daa: bigint; value: string; now: bigint | null }) {
+function TimeValue(props: { daa: bigint; value: string; now: bigint | null; witness?: SendStatus['witness'] }) {
   if (props.now === null) return <span key={props.value}>{props.value}</span>;
   const rel = untilWords(props.daa, props.now, {
     now: t('signer.rel.now'),
@@ -513,6 +516,7 @@ function TimeValue(props: { daa: bigint; value: string; now: bigint | null }) {
     <>
       <span class="send-rel" key={rel}>{rel}</span>
       <span class="send-daa" key={props.daa.toString()}>{t('signer.rel.daa', { daa: props.daa.toString() })}</span>
+      {props.witness && props.witness !== 'agreed' ? <span class="send-daa" data-testid="confirm-time-witness">{t(`confirm.f.mark.${props.witness}`)}</span> : null}
     </>
   );
 }
@@ -536,7 +540,7 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
   }, [st.holdUntil, held]);
   const changed = new Set(st.changed ?? []);
   // A changed cell flashes. Its class carries the plan's count, so the next change restarts it.
-  const live: Live = { flash: (cell) => (changed.has(cell) ? ` send-changed send-changed-${(st.rev ?? 0) % 2}` : ''), daa: st.daa ?? null };
+  const live: Live = { flash: (cell) => (changed.has(cell) ? ` send-changed send-changed-${(st.rev ?? 0) % 2}` : ''), daa: st.daa ?? null, witness: st.witness ?? null };
   return (
     <Modal
       // "Confirm order" is what this screen is, and the wallet it goes to next is the subtitle.

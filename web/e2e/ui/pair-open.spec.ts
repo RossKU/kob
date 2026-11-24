@@ -109,7 +109,8 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   await waitReviewable(page);
   await clickPlaceOnly(page);
   const rows = await identityRows(page);
-  expect(Object.keys(rows).sort()).toEqual([`ext-${base}`, `ext-${QUOTE}`].sort());
+  // the identity rows of both tokens (a scale row per token whose unit is the indexer's, R9FB3-2)
+  expect(Object.keys(rows).filter((k) => k.startsWith('ext-')).sort()).toEqual([`ext-${base}`, `ext-${QUOTE}`].sort());
   expect(rows[`ext-${QUOTE}`]!.text).toContain(long(QUOTE));
   const receipt = await readReceipt(page);
   // The amounts read as the ticket read them: 8 and 6 decimals, the scales of the two markets. A
@@ -175,7 +176,7 @@ test('only the quote unregistered: a buy escrows it, its identity alone is shown
   await fillFields(page, { price: '0.048', amount: '1' });
   await waitReviewable(page);
   await clickPlaceOnly(page);
-  expect(Object.keys(await identityRows(page))).toEqual([`ext-${QUOTE}`]);
+  expect(Object.keys(await identityRows(page)).filter((k) => k.startsWith('ext-'))).toEqual([`ext-${QUOTE}`]);
   const receipt = await readReceipt(page);
   expect(receipt.orders[0]!.rows).toMatchObject({ Pair: `buys EXKCC with ${long(QUOTE)} (prices in ${long(QUOTE)} per EXKCC)`, 'Limit price': `0.048 ${long(QUOTE)} per EXKCC` });
   await confirmReceipt(page);

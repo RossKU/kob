@@ -59,13 +59,13 @@ export function frameShape(s: SigningSummary, built: BuiltTx, maker: Hex, kob: K
   const own = signed.filter(isOwnOrder);
   // an order input the wallet does not sign is a fill of a resting order, whoever its claimed maker
   const others = unsigned.filter((d) => d.type === 'order');
-  const continues = (i: number) => tx.outputs.some((x) => x.covenant?.authorizingInput === i && !isGenesisBinding(tx, i, x.covenant.covenantId));
+  const continues = (i: number) => tx.outputs.some((x) => x.covenant?.authorizingInput === i && !isGenesisBinding(kob, tx, i, x.covenant.covenantId));
   const continuing = own.filter((d) => continues(d.index));
   const ending = own.filter((d) => !continues(d.index));
   const created = s.orders.filter((o) => o.amendedFrom === undefined && o.sweptFrom === undefined && o.claimedFrom === undefined);
   const createdIds = new Set(created.map((o) => o.covenantId.toLowerCase()));
   const continuedIds = new Set<string>();
-  for (const d of continuing) for (const x of tx.outputs) if (x.covenant?.authorizingInput === d.index && !isGenesisBinding(tx, d.index, x.covenant.covenantId)) continuedIds.add(x.covenant.covenantId.toLowerCase());
+  for (const d of continuing) for (const x of tx.outputs) if (x.covenant?.authorizingInput === d.index && !isGenesisBinding(kob, tx, d.index, x.covenant.covenantId)) continuedIds.add(x.covenant.covenantId.toLowerCase());
   const kinds = new Set(s.outputs.map((o) => o.kind));
   const payments = s.outputs.filter((o) => o.kind === 'payment-out' || o.kind === 'token-out');
   const fillOuts = s.outputs.filter((o) => o.kind === 'fill-payout' || o.kind === 'fill-continue');
@@ -117,7 +117,7 @@ export function frameShape(s: SigningSummary, built: BuiltTx, maker: Hex, kob: K
     // beyond what is less than the custody (strays); the decoder's output-side rule checks the latter
     for (const d of continuing) {
       const next = s.orders.find((o) => o.amendedFrom === d.index || o.sweptFrom === d.index || o.claimedFrom === d.index);
-      const id = tx.outputs.find((x) => x.covenant?.authorizingInput === d.index && !isGenesisBinding(tx, d.index, x.covenant.covenantId))!.covenant!.covenantId.toLowerCase();
+      const id = tx.outputs.find((x) => x.covenant?.authorizingInput === d.index && !isGenesisBinding(kob, tx, d.index, x.covenant.covenantId))!.covenant!.covenantId.toLowerCase();
       if (!next) return refuse(t('signer.shape.unknownOutput'));
       let held: { token: Hex; amount: bigint }[] = [];
       try {

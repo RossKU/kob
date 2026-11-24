@@ -25,7 +25,13 @@ import { formatRowDate, rowTimeTitle } from '../kit/format';
  * gives what the genesis locked, its share of the supply when the supply is proven, and the day it
  * opens. After that day the same line says it is open. What is still locked is the chain's to tell.
  */
-function creatorLockText(lock: VerifiedLock, decimals: number | null, ticker: string, marketExt: Hex | null): string {
+export function creatorLockText(lock: VerifiedLock, decimals: number | null, ticker: string, marketExt: Hex | null): string {
+  // A lock of another class than the one this market trades is not this token's lock (R9B-L5):
+  // said without an amount in this market's ticker. With the market's class unknown it is shown as before.
+  if (marketExt && marketExt.toLowerCase() !== lock.extensionCommitment.toLowerCase()) {
+    const other = t('market.token.creatorLockOtherClass');
+    return lock.otherClass ? t('market.token.creatorLockMultiClass', { text: other }) : other;
+  }
   const amount = `${decimals === null ? lock.amount : formatUnits(BigInt(lock.amount), decimals, { group: ',' })}${ticker ? ` ${ticker}` : ''}`;
   // A share of supply only for the class this market trades (R8FX-6): else the line has no share.
   const pct = lockShareOfMarket(lock, marketExt);
@@ -33,7 +39,10 @@ function creatorLockText(lock: VerifiedLock, decimals: number | null, ticker: st
   const key = lockOpen(lock.until) ? 'market.token.creatorLockOpen' : 'market.token.creatorLockValue';
   const text = pct === null ? t(`${key}NoShare`, { amount, date }) : t(key, { amount, pct, date });
   // an automatic lock opens by itself: anyone may release it to its creator after the date
-  return lock.kind === 'auto' ? t('market.token.creatorLockAuto', { text }) : text;
+  // a lock whose date has passed locks nothing (R9FA2-3): said so, never as a lock
+  if (lockOpen(lock.until)) return lock.otherClass ? t('market.token.creatorLockMultiClass', { text }) : text;
+  const withAuto = lock.kind === 'auto' ? t('market.token.creatorLockAuto', { text }) : text;
+  return lock.otherClass ? t('market.token.creatorLockMultiClass', { text: withAuto }) : withAuto;
 }
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */

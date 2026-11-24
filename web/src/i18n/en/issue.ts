@@ -204,6 +204,7 @@ export default {
   'issue.sale.last': 'Last price',
   'issue.sale.average': 'Average price',
   'issue.sale.realised': 'Total if sold out',
+  'issue.sale.privateKeyNote': 'With the private key signer, this curve cannot be cancelled or changed until its first sale: until then that needs a wallet extension (KasWare or Kaspire) holding the same key.',
   'issue.sale.note': 'Geometric steps, no expiry. You can cancel it any time.',
   'issue.sale.lowStart': 'The first price is too low for this curve. Raise the total or sell fewer tokens.',
   'issue.lock.label': 'Lock my share until',

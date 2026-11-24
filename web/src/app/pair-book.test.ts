@@ -267,6 +267,26 @@ describe('buildPairPlanEnv hands the planners the node-confirmed pair book (audi
     expect((await buildPairPlanEnv(svc, { pubkey: MAKER.pk }, a, b)).guardsUnavailable ?? []).not.toContain('book');
   });
 
+  it('the pair route lists the pair orders whatever either token holds; more than it reads is said as too many, not "try again" (R9B-L4)', async () => {
+    const w = world();
+    const ask = clone(w.askView) as OrderView & { pair: { base: string; quote: string } };
+    ask.pair.base = a.covenantId;
+    ask.pair.quote = b.covenantId;
+    const chain = (x: string[]) => new FakeChain().getUtxosByAddresses(x);
+    const svc = services(chain, []);
+    // both tokens cut by thousands of other orders: the token lists are not read at all
+    (svc.indexer as unknown as { allOrders: () => Promise<unknown> }).allOrders = async () => { throw new Error('not asked'); };
+    (svc.indexer as unknown as { allPairOrders: (x: string, y: string) => Promise<unknown> }).allPairOrders = async (x) => (x === a.covenantId ? [ask] : []);
+    const env = await buildPairPlanEnv(svc, { pubkey: MAKER.pk }, a, b);
+    expect(env.guardsUnavailable ?? []).not.toContain('book');
+    (svc.indexer as unknown as { allPairOrders: () => Promise<unknown> }).allPairOrders = async () => Object.assign([ask], { truncated: true });
+    const cut = await buildPairPlanEnv(svc, { pubkey: MAKER.pk }, a, b);
+    expect(cut.guardsUnavailable).toEqual(expect.arrayContaining(['book', 'list-too-long']));
+    const { chainTimeIssues: _c, ...plan } = await import('../kob/plan');
+    const p = plan.planOrder(cut, { type: 'limit', side: 'sell', amount: 1n, price: 1n } as never);
+    expect(p.issues.map((i) => i.code)).toContain('GUARDS_LIST_TOO_LONG');
+  });
+
   it('a node that cannot be asked for the order check fails the build (the node banner), it is not skipped', async () => {
     const w = world();
     const ghost = clone(w.askView) as OrderView & { pair: { base: string; quote: string } };

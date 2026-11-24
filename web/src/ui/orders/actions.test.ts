@@ -11,7 +11,7 @@ import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import type { ActionRequest } from '../../kob/types';
 import { FakeChain, MAKER, TOKEN, goldenRequest, keyUtxo, orderViewOf, placeGolden, signAndValidate, snapshotOfRecovered, strayFor, testAddress, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lacksHeldUtxo, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, planSweepFor, snapshotFor, strandedCount, straysUnchecked, strayToTokenUtxo } from './actions';
+import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lacksHeldUtxo, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, planSweepFor, snapshotFor, strandedCount, straysUnchecked, straysCutLeft, strayToTokenUtxo } from './actions';
 import { buildEntries, describeEntry, type OrderEntry } from './orders-model';
 
 const kob = loadKobNode();
@@ -241,15 +241,14 @@ describe('a decoy of another class named as the custody is never spent (R8F4-1)'
 });
 
 describe('strays a cancel would leave behind for good (R8F4-2)', () => {
-  it('an unread stray list stops the cancel ("could not check"), as it stops a refund and a replacement', async () => {
+  it('a stray list the indexer cut never stops the cancel: it goes on, and says strays are left behind (R9B-L1)', async () => {
     const a = place('create.ask');
     const stray = strayFor(a.snap, 9n);
     const view = { ...tokenUtxoView(stray, 'stray'), owner: a.rec.covenantId };
     const cut = async () => Object.assign([view], { truncated: true as const });
     const { plan } = await planCancelFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: cut } }), MAKER.pk, entryOf(a, false, true), []);
-    expect(plan.ok).toBe(false);
-    expect(plan.built).toBeNull();
-    expect(plan.issues.filter((i) => i.severity === 'error').map((i) => i.code)).toEqual(['cancel.strays-unknown']);
+    validate(plan);
+    expect(straysCutLeft(plan)).not.toBeNull();
     // the stray list read in full: the cancel goes on and sweeps the stray
     const whole = async () => [view];
     validate((await planCancelFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: whole } }), MAKER.pk, entryOf(a, false, true), [])).plan);
@@ -289,13 +288,14 @@ describe('with the indexer down, a maker gets an order back from its record and 
     });
   }
 
-  it('a stray list the indexer answered but cut still stops the cancel (a sweep can come first)', async () => {
+  it('a stray list the indexer answered but cut goes on too (nothing an outsider sends stops the maker, R9B-L1)', async () => {
     const a = place('create.ask');
     const stray = strayFor(a.snap, 9n);
     const cut = async () => Object.assign([{ ...tokenUtxoView(stray, 'stray'), owner: a.rec.covenantId }], { truncated: true as const });
     const { plan } = await planCancelFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: cut } }), MAKER.pk, entryOf(a, false, true), []);
-    expect(plan.ok).toBe(false);
+    validate(plan);
     expect(straysUnchecked(plan)).toBe(false);
+    expect(straysCutLeft(plan)).not.toBeNull();
   });
 });
 
@@ -478,5 +478,47 @@ describe('markCancelling (C5-06, and an in-place amend is not a cancel)', () => 
     expect(plan.request!.action).toBe('amendOrder');
     await markCancelling(store, plan, 'cc'.repeat(32), 5n);
     expect((await store.get(a.rec.covenantId))!.cancelling ?? null).toBeNull();
+  });
+});
+
+describe('nothing an outsider sends to an order stops its maker from ending it (R9B-L1)', () => {
+  it('a view of listed twins with strays_total above the list still cancels, with the note; a sweep has nothing to move', async () => {
+    const a = place('create.ask');
+    const amount = BigInt((a.snap.custody!.state as Kcc20State).amount);
+    const twins = Array.from({ length: 12 }, (_, k) => strayFor(a.snap, amount, 100 + k));
+    const view = { ...orderViewOf(kob, { ...a.snap, strays: twins }), strays_total: 101 };
+    const s = services({ chain: withStrays(chainOf(a), twins), indexer: { order: async () => view } });
+    const { plan } = await planCancelFor(s, MAKER.pk, entryOf(a));
+    validate(plan);
+    expect(straysCutLeft(plan)).toBe(101 - 12);
+    // the twins that fit go with the cancel; the rest are counted apart and no "Sweep first" is offered for them
+    expect(plan.issues.some((i) => i.code === 'cancel.twins-abandoned')).toBe(true);
+    expect(abandonsStrays(plan)).toBe(false);
+    const sweep = await planSweepFor(s, MAKER.pk, entryOf(a));
+    expect(sweep.plan.ok).toBe(false);
+  });
+
+  it('a refund says it leaves the strays (a cancel returns them, R9B-L2)', async () => {
+    const a = place('create.ask');
+    const stray = strayFor(a.snap, 4n, 92);
+    const { planRefund } = await import('../../kob/cancel');
+    const { refundLeavesStrays } = await import('./actions');
+    const env: CancelEnv = { kob, maker: MAKER.pk, funding: [], tokenUtxos: [], clock: { daa: 10_000_000_000n } };
+    const plan = planRefund(env, { ...a.snap, strays: [stray], straysUnknown: true, straysCut: true, straysBeyond: 200 });
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    expect(refundLeavesStrays(plan)).toBe(1);
+  });
+});
+
+describe('standalone: the stream book reads no strays, and a cancel says so (R9B-L3)', () => {
+  it('a view marked strays_unread gives a cancel that states the strays could not be checked', async () => {
+    const { snapshotFromOrderView } = await import('../../kob/cancel');
+    const a = place('create.ask');
+    const view = { ...orderViewOf(kob, a.snap), strays: [], strays_unread: true };
+    const snap = snapshotFromOrderView(view as never);
+    expect(snap.straysUnknown).toBe(true);
+    expect(snap.straysCut).toBeUndefined();
+    const plan = planCancel({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 100n * KAS, 201)], tokenUtxos: [], clock: { daa: 1000n } }, snap);
+    expect(straysUnchecked(plan)).toBe(true);
   });
 });

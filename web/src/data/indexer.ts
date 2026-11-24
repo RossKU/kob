@@ -16,6 +16,7 @@ import type {
   FillNoticeView, BookNotice, OrderNotice, ReorgNotice, HealthCursorNotice, HealthTickNotice,
   ActivityStatsView, CandleInterval, CandlesView, DepthView, QuotesView, StatsView, TradesView, PairBookView, PairCandlesView, PairFillsView, PairSummaryView,
 } from './indexer-types';
+import { recordAnchor } from '../kob/chain-present';
 import { adaptPairCandles, adaptPairFills, adaptPairSummaries, sanitizePairBook } from './pair-api';
 import type { Hex } from '../kob/types';
 import { dropZeroDepthLevels, dropEmptyRows } from './book-view';
@@ -329,6 +330,11 @@ export interface IndexerApi {
    * (data/pair-api.ts).
    */
   pairBook(base: Hex, quote: Hex, q?: { depth?: number }, o?: RequestOptions): Promise<PairBookView | null>;
+  /**
+   * The live orders of the pair A/B (kobd `GET /v1/pairs/{base}/{quote}/orders`, newest first),
+   * paged up to `maxPages`; `truncated` when more remain. Null when the indexer has no such route.
+   */
+  allPairOrders(base: Hex, quote: Hex, o?: RequestOptions & { maxPages?: number }): Promise<OrderList | null>;
   pairs(token?: Hex, o?: RequestOptions): Promise<PairSummaryView[] | null>;
   pairCandles(base: Hex, quote: Hex, q: CandlesQuery, o?: RequestOptions): Promise<PairCandlesView | null>;
   pairFills(base: Hex, quote: Hex, q?: TradesQuery, o?: RequestOptions): Promise<PairFillsView | null>;
@@ -581,7 +587,10 @@ export class HttpIndexer implements IndexerApi {
   }
 
   async health(o?: RequestOptions) {
-    return this.get<HealthView>('/v1/health', {}, o);
+    const h = await this.get<HealthView>('/v1/health', {}, o);
+    // the last verified present, the chain-time witness while the indexer is down (kob/chain-present.ts)
+    recordAnchor(h, Date.now());
+    return h;
   }
 
   async tokens(o?: RequestOptions) {
@@ -744,6 +753,20 @@ export class HttpIndexer implements IndexerApi {
     const q = assertHash('quote', quote);
     if (b === q) throw new IndexerError('bad-request', 0, 'bad_request', 'a pair needs two different tokens');
     return `/v1/pairs/${b}/${q}/${tail}`;
+  }
+
+  async allPairOrders(base: Hex, quote: Hex, o: RequestOptions & { maxPages?: number } = {}): Promise<OrderList | null> {
+    const out: OrderList = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < (o.maxPages ?? 20); page++) {
+      const p = await this.getOptional<Page<OrderView>>(this.pairPath(base, quote, 'orders'), { limit: 200, cursor }, o);
+      if (!p || !Array.isArray(p.items)) return page === 0 ? null : Object.assign(out, { truncated: true as const });
+      out.push(...p.items);
+      if (!p.next_cursor) return out;
+      cursor = p.next_cursor;
+    }
+    out.truncated = true;
+    return out;
   }
 
   async pairBook(base: Hex, quote: Hex, q: { depth?: number } = {}, o?: RequestOptions): Promise<PairBookView | null> {

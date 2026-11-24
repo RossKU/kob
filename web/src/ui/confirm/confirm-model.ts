@@ -151,6 +151,11 @@ export function openTokenIdentity(summary: SigningSummary, registry: TokenRegist
   // A first order. The scale is the one the user entered, because no order of the token tells one
   // yet. It is shown with its decimals.
   for (const info of tokens) {
+    if (info && info.openList === true && info.openScale === 'orders') {
+      // the unit is the indexer's market scale (R9FB3-2): said next to the amounts
+      rows.push(row('scale-' + info.covenantId, tr('confirm.openScale.label', { token: longId(info.covenantId) }), tr('confirm.openScale.indexer', { decimals: info.decimals }), 'warn', tr('confirm.openScale.indexerDetail')));
+      continue;
+    }
     if (!info || info.openList !== true || info.openScale !== 'entered') continue;
     const token = longId(info.covenantId);
     rows.push(row('scale-' + info.covenantId, tr('confirm.openScale.label', { token }), tr('confirm.openScale.value', { decimals: info.decimals }), 'warn', tr('confirm.openScale.detail')));
@@ -325,7 +330,11 @@ function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string;
 const approxTime = (daa: bigint, f: Fmt): string | null => {
   if (!f.clock) return null;
   const at = f.tr('confirm.f.timeAtDaa', { time: f.time(daaToUnix(f.clock, daa)), daa: daa.toString() });
-  return f.clock.witness && f.clock.witness !== 'agreed' ? f.tr('confirm.f.timeUnverified', { time: at }) : at;
+  const w = f.clock.witness;
+  if (!w || w === 'agreed') return at;
+  if (w === 'own-node') return f.tr('confirm.f.timeOwnNode', { time: at });
+  if (w === 'anchored') return f.tr('confirm.f.timeAnchored', { time: at, tolerance: String((f.clock.toleranceDaa ?? 0n) / 10n) });
+  return f.tr('confirm.f.timeUnverified', { time: at });
 };
 
 /**

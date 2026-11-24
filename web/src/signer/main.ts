@@ -239,7 +239,8 @@ function fillTime(dd: HTMLElement, daa: bigint, value: string): void {
     return;
   }
   const rel = until(daa, now);
-  const small = t('signer.rel.daa', { daa: daa.toString() });
+  // the frame's times count from the app's clock message: said so (R9FB2-7)
+  const small = t('signer.rel.daaFrame', { daa: daa.toString() });
   const [a, b] = [dd.children[0], dd.children[1]];
   if (a && b) {
     if (a.textContent !== rel) a.textContent = rel;

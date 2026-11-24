@@ -71,14 +71,70 @@ export function planOrder(env0: PlanEnv, intent: Intent): OrderPlan {
  * moves its start or its worst price), and a resting order is built with its dates marked
  * unverified. A clock that was not judged (`witness` absent) adds nothing.
  */
-export function chainTimeIssues(env: PlanEnv, intent: Intent, plan: Pick<OrderPlan, 'take'>): PlanIssue[] {
+export function chainTimeIssues(env: PlanEnv, intent: Intent, plan: Pick<OrderPlan, 'take' | 'states'>): PlanIssue[] {
   const w = env.clock.witness;
   if (!w || w === 'agreed') return [];
   const reason = env.clock.witnessReason ?? '';
   if (w === 'disagree') return [issue('CHAIN_TIME_DISAGREE', { reason })];
+  // A take of fixed-price orders and no new order signs no time that moves money: the contracts use
+  // the lock time only to prove tx.daa >= activeFrom (and a decay's t); a wrong one makes the node
+  // or the covenant refuse the transaction, never a worse price.
+  const fixedTake = !!plan.take && plan.states.length === 0 && takenAtFixedPrices(env, plan.take);
+  if (fixedTake) return [];
+  if (w === 'own-node') return [issue('CHAIN_TIME_OWN_NODE', { reason })];
+  const scale = timeScaleDaa(env, plan);
+  if (w === 'anchored') {
+    const tol = env.clock.toleranceDaa ?? null;
+    // the tolerance must be small against the order's own time scale: at most half of it
+    if (tol === null || (scale !== null && tol * 2n > scale)) return [issue('CHAIN_TIME_ANCHOR_TOO_OLD', { reason, tolerance: String((tol ?? 0n) / 10n), scale: String((scale ?? 0n) / 10n) })];
+    return [issue('CHAIN_TIME_ANCHORED', { reason })];
+  }
   const scheduled = intent.type === 'twap' || intent.type === 'dca' || intent.type === 'dutch';
   if (scheduled || orderUrgency(env, intent) === 'high' || plan.take) return [issue('CHAIN_TIME_UNVERIFIED_SHORT', { reason })];
   return [issue('CHAIN_TIME_UNVERIFIED', { reason })];
+}
+
+/** True when every order the take fills trades at a price no time changes (no decay, no auction). */
+function takenAtFixedPrices(env: PlanEnv, take: NonNullable<OrderPlan['take']>): boolean {
+  const now = env.clock.daa;
+  return take.steps.every((s) => s.fills.every((f) => {
+    const u = env.bookOrders?.get(f.covenantId.toLowerCase());
+    if (!u) return false;
+    try {
+      const d = BigInt(u.order.blockDaaScore ?? 0);
+      const a = env.kob.orderPriceAt(u.order.state, now, d);
+      return a !== null && a === env.kob.orderPriceAt(u.order.state, now + 864_000n, d) && a === env.kob.orderPriceAt(u.order.state, now > 864_000n ? now - 864_000n : 0n, d);
+    } catch {
+      return false;
+    }
+  }));
+}
+
+/**
+ * The order's own time scale (DAA): the shortest of its life, its decay and its slice interval over
+ * the orders the plan places, and 30 s for a take of an order whose price moves with time. Null when
+ * nothing in the plan is timed.
+ */
+function timeScaleDaa(env: PlanEnv, plan: Pick<OrderPlan, 'take' | 'states'>): bigint | null {
+  const now = env.clock.daa;
+  let scale: bigint | null = null;
+  const take = (v: bigint) => {
+    if (v > 0n && (scale === null || v < scale)) scale = v;
+  };
+  for (const o of plan.states) {
+    const s = o.state as unknown as Record<string, string | undefined>;
+    const n = (k: string) => (s[k] !== undefined ? BigInt(s[k]!) : 0n);
+    const expiry = n('expiryDaa');
+    if (expiry > now && expiry < 1n << 60n) take(expiry - now);
+    const slope = n('slope');
+    if (slope !== 0n) {
+      const span = n('price') > n('priceEnd') ? n('price') - n('priceEnd') : n('priceEnd') - n('price');
+      take(((span + (slope > 0n ? slope : -slope) - 1n) / (slope > 0n ? slope : -slope)) * (n('decayStep') || 1n));
+    }
+    take(n('interval'));
+  }
+  if (plan.take && !takenAtFixedPrices(env, plan.take)) take(300n);
+  return scale;
 }
 
 /**
@@ -123,7 +179,9 @@ export const REFERENCE_DIVERGENCE_BPS = 5_000n;
 export function envIssues(env: PlanEnv): PlanIssue[] {
   const out: PlanIssue[] = [];
   if (env.guardsUnavailable?.length) {
-    out.push(issue('GUARDS_UNAVAILABLE', { guards: env.guardsUnavailable.join(', ') }));
+    // a list longer than the app reads does not clear by waiting: said as such (R9B-L4)
+    if (env.guardsUnavailable.includes('list-too-long')) out.push(issue('GUARDS_LIST_TOO_LONG', { guards: env.guardsUnavailable.filter((g) => g !== 'list-too-long').join(', ') }));
+    else out.push(issue('GUARDS_UNAVAILABLE', { guards: env.guardsUnavailable.join(', ') }));
   }
   const ref = referencePrice(env.book);
   const last = env.lastFillPrice ?? null;

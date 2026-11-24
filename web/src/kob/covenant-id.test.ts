@@ -5,7 +5,7 @@ import { isGenesisBinding } from './covenant-id';
 
 const kob = loadKobNode();
 
-describe('the genesis covenant id, computed from bound data (R9FB2-1)', () => {
+describe('the genesis covenant id of kob-wasm, pinned to real placements (R9FB2-1)', () => {
   for (const name of ['create.ask', 'create.bid', 'create.condAsk', 'pair.create.ask', 'create.curve']) {
     it(`matches the id the consensus hash gives a real placement (${name})`, () => {
       const g = placeGolden(kob, name);
@@ -14,9 +14,9 @@ describe('the genesis covenant id, computed from bound data (R9FB2-1)', () => {
       expect(placed.length).toBeGreaterThan(0);
       for (const r of placed) {
         const out = tx.outputs.find((o) => o.covenant?.covenantId === r.covenantId)!;
-        expect(isGenesisBinding(tx, out.covenant!.authorizingInput, r.covenantId)).toBe(true);
+        expect(isGenesisBinding(kob, tx, out.covenant!.authorizingInput, r.covenantId)).toBe(true);
         // and not for another id
-        expect(isGenesisBinding(tx, out.covenant!.authorizingInput, 'ab'.repeat(32))).toBe(false);
+        expect(isGenesisBinding(kob, tx, out.covenant!.authorizingInput, 'ab'.repeat(32))).toBe(false);
       }
     });
   }

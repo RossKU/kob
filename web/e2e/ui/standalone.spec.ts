@@ -179,18 +179,14 @@ test.describe('standalone mode', () => {
     // carol's ask placed meanwhile.
     const carol = await placeOnChain(mock, 'carol', HIGH_ASK, 50n);
 
-    // A market buy trades now: with the indexer down nothing confirms the node's chain time, so it
-    // is not built on one node's word (R9FB3-1) and the ticket says why.
+    // A market buy is planned from that book after the node check (the best ask the indexer listed,
+    // which the node confirms), signed by the wallet and sent to the node. Its chain time is checked
+    // against the last verified time this browser saw before the outage (R9FB3-1), and its dates say so.
     await pickType(page, 'market', 'buy');
     await fillFields(page, { amount: '2' });
-    await expect(page.getByTestId('order-issues')).toContainText('No second source confirms the node', { timeout: 30_000 });
-    await expect(page.getByTestId('order-place')).toBeDisabled();
-    // A resting limit buy below the book is built, its dates marked unverified, and sent to the node.
-    await pickType(page, 'limit', 'buy');
-    await fillFields(page, { amount: '2', price: '0.01' });
     await clickPlace(page);
     const buy = await placedWithoutIndexer(mock, await waitSubmitted(page));
-    expect(BigInt(onChainTerms(buy)[0]!.state.price)).toBeLessThan(best);
+    expect(onChainTerms(buy)[0]!.state.price).toBe(best.toString());
     expect(wallet).not.toBeNull();
 
     // A matcher fills 10 of carol's ask with a real transaction: the fill is in the activity log

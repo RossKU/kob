@@ -81,7 +81,52 @@ describe('an amend with a price leaves a fixed-price order (R9FC2-1)', () => {
     const ok = (x: { blocking: { code: string }[] }) => x.blocking.map((i) => i.code);
     expect(ok(decodeSigning({ kob, built: good.built!, maker: MAKER.pk, registry: null }))).not.toContain('order-terms-invalid');
     const b = oldConstruction(snap, good.built!, want);
-    expect(ok(decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null, expected: { orders: [r.spec!.order] } }))).toContain('order-terms-invalid');
-    expect(ok(decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null }))).toContain('order-terms-invalid');
+    // the wasm's amend recovery refuses it by itself now (check_amend_terms: recover-failed); the
+    // decoder's own rule says so where the record is recovered
+    const blocked = (c: string[]) => c.includes('order-terms-invalid') || c.includes('recover-failed');
+    expect(blocked(ok(decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null, expected: { orders: [r.spec!.order] } })))).toBe(true);
+    expect(blocked(ok(decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null })))).toBe(true);
+  });
+});
+
+describe('the amend follows the builder\'s check_amend_terms', () => {
+  const base = () => BigInt((placeGolden(kob, 'create.ask').snapshots[0]!.order.state.state as unknown as { price: string }).price);
+  it('an active auction gets activeFrom 0, one not yet active keeps its start', () => {
+    const snap = auctionShaped('create.ask', base() * 2n, base());
+    const active = buildReplacement(snap, 'limit', { price: base() + 1000n }, { kob, nowDaa: 5_000n });
+    expect((active.spec!.order.state as unknown as Record<string, string>).activeFrom).toBe('0');
+    const later = buildReplacement(snap, 'limit', { price: base() + 1000n }, { kob, nowDaa: 500n });
+    expect((later.spec!.order.state as unknown as Record<string, string>).activeFrom).toBe('1000');
+  });
+  it('a sliced auction (TWAP / DCA with a slope) is not repriced: cancel and place again', () => {
+    const snap = auctionShaped('create.ask', base() * 2n, base());
+    (snap.order.state.state as unknown as Record<string, string>).interval = '100';
+    const r = buildReplacement(snap, 'limit', { price: base() + 1000n }, { kob, nowDaa: 5_000n });
+    expect(r.ok).toBe(false);
+    expect(r.issues.map((i) => i.code)).toContain('sliced-auction-not-amendable');
+  });
+});
+
+describe('R9FC2-1, both lines: the wasm recovery refuses a repriced auction that keeps its schedule, and the decoder\'s own rule still fires when it does not', () => {
+  it('first line blocks with the verifier\'s reason; with the recovery stubbed, order-terms-invalid blocks', () => {
+    const base = BigInt((placeGolden(kob, 'create.ask').snapshots[0]!.order.state.state as unknown as { price: string }).price);
+    const snap = auctionShaped('create.ask', base * 2n, base);
+    const want = base + base / 10n;
+    const r = buildReplacement(snap, 'limit', { price: want }, { kob, nowDaa: 5_000n });
+    const good = planCancelReplace(env(), snap, r.spec!);
+    const b = oldConstruction(snap, good.built!, want);
+    for (const s of [decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null, expected: { orders: [r.spec!.order] } }), decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null })]) {
+      const f = s.blocking.find((x) => x.code === 'recover-failed');
+      expect(f).toBeTruthy();
+      expect(String(f!.params?.reason ?? '')).not.toBe('');
+    }
+    // second line: the recovery as it was before this round, returning the old construction's state
+    const old = clone(snap.order.state) as OrderState & { state: Record<string, string> };
+    old.state.price = want.toString();
+    const recovered = kob.recoverAmends(good.built!.tx, good.built!.plans).map((x) => ({ ...x, order: old }));
+    const stub = { ...kob, recoverAmends: () => recovered } as typeof kob;
+    const s = decodeSigning({ kob: stub, built: b, maker: MAKER.pk, registry: null });
+    expect(s.blocking.map((x) => x.code)).not.toContain('recover-failed');
+    expect(s.blocking.map((x) => x.code)).toContain('order-terms-invalid');
   });
 });

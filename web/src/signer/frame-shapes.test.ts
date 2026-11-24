@@ -13,6 +13,7 @@ import { KAS as FKAS, OTHER_PK, TOK, keyUtxo as fKeyUtxo, makeEnv, market3x3, to
 import { snapshotOfRecovered } from '../testing/chain-fixtures';
 import { bundle, continuationAsGenesis } from '../testing/hostile-tx';
 import { summarize } from './summary';
+import { decodeSigning } from '../kob/decode';
 
 const kob = loadKobNode();
 const build = (name: string): BuiltTx => kob.build(goldenRequest(name, MAKER.pk) as never);
@@ -51,10 +52,12 @@ describe('R9FB2-1: a continuation bound to the genesis id of its order input is 
     it(name, () => {
       const honest = make();
       expect(frame(honest).problems).toBe(0);
-      const b = continuationAsGenesis(honest, orderInput(honest), genesisCovenantId);
+      const b = continuationAsGenesis(honest, orderInput(honest), (op, outs) => genesisCovenantId(kob, op, outs));
       const s = frame(b);
       expect(s.problems).toBeGreaterThan(0);
-      expect(s.problemCodes).toContain('order-spk-mismatch');
+      // the wasm's amend and sweep recovery refuses it by itself now (recover-failed / sweep-invalid);
+      // the decoder's own genesis test says so too where the record is recovered
+      expect(s.problemCodes.some((c) => ['order-spk-mismatch', 'recover-failed', 'sweep-invalid'].includes(c))).toBe(true);
     });
   }
 });
@@ -124,5 +127,67 @@ describe('R9FB2-8: a pair order is checked against the decimals the frame shows 
     const wrong = (covenantId: string, scale: bigint) => ({ covenantId, ticker: 'XX', decimals: Math.max(0, scale.toString().length - 1) + 2, source: 'declared' as const });
     expect(summarize(kob, b, MAKER.pk, [wrong(order.base.covId, order.base.scale)]).problemCodes).toContain('token-scale');
     expect(summarize(kob, b, MAKER.pk, [wrong(order.quote.covId, order.quote.scale)]).problemCodes).toContain('token-scale');
+  });
+});
+
+describe('a sale curve placed at its token creation, before its first sale, in the frame', () => {
+  it('its cancel is refused there (its custody names no token the frame could check), and passes the app path', async () => {
+    const { issueRaw } = await import('../kob/issue');
+    const { curveTable } = await import('../kob/curve');
+    const { planCancel } = await import('../kob/cancel');
+    const { snapshotOfRecovered } = await import('../testing/chain-fixtures');
+    const S = 100_000_000n;
+    const t = curveTable(kob, { amount: 900n * S, levels: 10, total: 100n * S, multipleMilli: 5000n, scale: S });
+    const plan = issueRaw(kob, {
+      name: 'Curve Token', ticker: 'CRV', decimals: 8, supply: (1000n * S).toString(),
+      holders: [{ owner: '00'.repeat(32), ownerScheme: 4, amount: (900n * S).toString() }, { owner: MAKER.pk, ownerScheme: 0, amount: (100n * S).toString() }],
+      funding: [{ transactionId: '07'.repeat(32), index: 1, amount: (500n * S).toString(), blockDaaScore: '5000', pubkey: MAKER.pk }],
+      network: 'testnet-10',
+      curve: { custody: 0, levelSize: t.levelSize.toString(), table: t.table.map(String), minFill: '1' },
+    } as never);
+    const rec = kob.recoverOrders(plan.built.tx)[0]!;
+    const snap = snapshotOfRecovered(rec, 6000n);
+    const c = planCancel({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10_000_000_000n, 201)], tokenUtxos: [], clock: { daa: 78_000_000n } }, snap);
+    expect(c.ok, JSON.stringify(c.issues)).toBe(true);
+    const s = frame(c.built!);
+    expect(s.problems).toBeGreaterThan(0);
+    expect(s.problemCodes).toContain('custody-unreleased');
+  });
+});
+
+describe('R9FB2-1, both lines: the wasm recovery refuses a genesis-bound amend, and the decoder\'s own test still fires when it does not', () => {
+  for (const name of ['amend.ask', 'amend.bid', 'kron.amend.ask', 'amend.curve']) {
+    it(name, () => {
+      const honest = build(name);
+      const at = orderInput(honest);
+      const b = continuationAsGenesis(honest, at, (op, outs) => genesisCovenantId(kob, op, outs));
+      const g = b.tx.outputs.find((o) => o.covenant?.authorizingInput === at)!.covenant!.covenantId;
+      // first line: the recovery refuses it, blocking in the app decode, the frame decode and the
+      // frame summary, with the verifier's reason carried
+      for (const s of [decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null, expected: { orders: [] } }), decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null })]) {
+        const f = s.blocking.find((x) => x.code === 'recover-failed');
+        expect(f).toBeTruthy();
+        expect(String(f!.params?.reason ?? '')).not.toBe('');
+      }
+      expect(frame(b).problemCodes).toContain('recover-failed');
+      // second line: a recovery that takes the claimed id (as the wasm did before this round) still
+      // meets the decoder's genesis test
+      const recovered = kob.recoverAmends(honest.tx, honest.plans).map((r) => ({ ...r, covenantId: g }));
+      const stub = { ...kob, recoverAmends: () => recovered } as typeof kob;
+      const s = decodeSigning({ kob: stub, built: b, maker: MAKER.pk, registry: null });
+      expect(s.blocking.map((x) => x.code)).not.toContain('recover-failed');
+      expect(s.blocking.map((x) => x.code)).toContain('order-spk-mismatch');
+      expect(summarize(stub, b, MAKER.pk, []).problemCodes).toContain('order-spk-mismatch');
+    });
+  }
+});
+
+describe('R9FB2-9: the decoder\'s info findings are shown in the frame', () => {
+  it('a sweep says what it sweeps as a note line', () => {
+    const snap = placeGolden(kob, 'create.ask').snapshots[0]!;
+    const b = planSweep(cancelEnv(), { ...snap, strays: [strayFor(snap, 4n, 92)] }).built!;
+    const s = frame(b);
+    expect(s.decoded!.info.length).toBeGreaterThan(0);
+    expect(s.lines.filter((l) => l.label === 'Note').length).toBe(s.decoded!.info.length);
   });
 });

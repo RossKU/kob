@@ -66,7 +66,7 @@ import type {
 import type { NodeInputFacts } from './node-verify';
 import { outpointKey, ownPlainInputs } from './node-verify';
 import { CODEC_OF_PROGRAM, isTokenProgram } from './programs.generated';
-import { KCC20_SCHEME_COVID, KCC20_SCHEME_P2SH, PLAIN_BORROW, borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf, programOfHash } from './token-state';
+import { KCC20_SCHEME_COVID, KCC20_SCHEME_P2SH, PLAIN_BORROW, acceptsAsSellCustody, borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf, programOfHash } from './token-state';
 import { recoverSweeps, type RecoveredSweep } from './sweep';
 import type { KobWasm } from './wasm';
 
@@ -508,7 +508,7 @@ export interface ExpectedSigning {
    * R9FB3-1). The decoder checks the built orders' times against it, projected to now by the browser
    * clock: an expiry already past, or an auction's start further than the margin from now, blocks.
    */
-  present?: { daa: bigint; unixSeconds: bigint; witness?: 'agreed' | 'unverified' | 'disagree' };
+  present?: { daa: bigint; unixSeconds: bigint; witness?: 'agreed' | 'anchored' | 'own-node' | 'unverified' | 'disagree' };
   /**
    * KAS moved into covenants (order outputs + custody token outputs), see `decodeSigning` for the
    * accepted definitions
@@ -1029,7 +1029,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   try {
     recovered = kob.recoverOrders(tx);
   } catch (e) {
-    add('recover-failed', `a placement record in the payload does not verify: ${e instanceof Error ? e.message : String(e)}`);
+    const reason = e instanceof Error ? e.message : String(e);
+    add('recover-failed', `a placement record in the payload does not verify: ${reason}`, { params: { record: 'placement', reason } });
   }
   let payload: SigningSummary['payload'] = null;
   if (tx.payload) {
@@ -1049,7 +1050,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     try {
       amends = kob.recoverAmends(tx, built.plans);
     } catch (e) {
-      add('recover-failed', `an in-place amend record in the payload does not verify: ${e instanceof Error ? e.message : String(e)}`);
+      // the verifier's own reason is carried to the user: a continuation that would start a new
+      // covenant, an amended price that keeps its old schedule (kob-protocol verify_amend)
+      const reason = e instanceof Error ? e.message : String(e);
+      add('recover-failed', `an in-place amend record in the payload does not verify: ${reason}`, { params: { record: 'amend', reason } });
     }
   }
   const amendByOutput = new Map(amends.map((a) => [a.output, a]));
@@ -2002,10 +2006,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const isCustody = (t: DecodedInput): boolean => {
         const plan = built.plans[t.index]!;
         const ps = (plan as { state?: unknown }).state as Record<string, unknown> | undefined;
-        if (!ps || big(String(ps.amount ?? '-1')) !== c.amount || ps.owner !== cov) return false;
+        if (!ps) return false;
         if (zero ? t.outpoint.txid.toLowerCase() !== d.outpoint.txid.toLowerCase() : t.token!.ref.covenantId !== c.token) return false;
-        if (family === 'kron') return true;
-        return isKcc20State(ps as never) && ps.owner_scheme === KCC20_SCHEME_COVID && borrowKeyOf(ps as never) === PLAIN_BORROW && (ext === null || ps.extension_commitment === ext);
+        // what the contracts accept as the custody (the borrow guard ignored): token-state.ts
+        return acceptsAsSellCustody(ps, { owner: cov, amount: c.amount, ext: family === 'kron' ? null : ext });
       };
       if (continues) {
         const spent = owned.filter(isCustody).length;
@@ -2031,7 +2035,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const bind = tx.outputs[o.output]?.covenant;
     const group = tx.outputs.filter((x) => x.covenant && bind && x.covenant.authorizingInput === bind.authorizingInput && x.covenant.covenantId === bind.covenantId).length;
     if (!bind || bind.authorizingInput !== from) add('order-spk-mismatch', `output ${o.output}: the continued order is not authorised by the order input ${from}`, { output: o.output, input: from });
-    else if (isGenesisBinding(tx, from, bind.covenantId)) add('order-spk-mismatch', `output ${o.output}: it starts a new covenant from input ${from}'s outpoint: it does not continue the order, which would end with everything it holds locked`, { output: o.output, input: from });
+    else if (isGenesisBinding(kob, tx, from, bind.covenantId)) add('order-spk-mismatch', `output ${o.output}: it starts a new covenant from input ${from}'s outpoint: it does not continue the order, which would end with everything it holds locked`, { output: o.output, input: from });
     else if (group !== 1) add('order-spk-mismatch', `output ${o.output}: ${group} outputs continue the order; an order continues as one output`, { output: o.output, input: from });
   }
   presentTimes();
@@ -2065,7 +2069,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
    * id of its outpoint (such a binding is, on chain, the input's real covenant id, or the tx is invalid).
    */
   function trulyContinues(i: number): boolean {
-    return tx.outputs.some((x) => x.covenant?.authorizingInput === i && !isGenesisBinding(tx, i, x.covenant.covenantId));
+    return tx.outputs.some((x) => x.covenant?.authorizingInput === i && !isGenesisBinding(kob, tx, i, x.covenant.covenantId));
   }
   /**
    * What the wallet's signature binds, judged without trusting the app (R9FB-1). It holds in the

@@ -71,11 +71,15 @@ export default {
   // The book is empty, so the reference is the last trade price (finding param basis = 'last').
   'issues.last.PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the last trade price ({reference}). Check for a typing error.',
   'issues.last.PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the last trade price ({reference}): unlikely to fill soon.',
+  'issues.GUARDS_LIST_TOO_LONG': 'There are more open orders here than this app reads in one go, so self-trade prevention and the price checks cannot run. Waiting does not clear this; the CLI can place the order.',
   'issues.GUARDS_UNAVAILABLE': "Could not read the token's guard data; try again in a moment.",
   'issues.MARKET_REFERENCE_DIVERGES': 'The book shows {reference} per token, the last fill {lastFill} ({percent}% apart), both from the indexer: check the price before signing.',
   'issues.MARKET_REFERENCE_SOURCE': 'Reference: {reference} per token (book checked against the node); worst fill {worst} per token.',
   'issues.CHAIN_TIME_DISAGREE': 'The node and the indexer disagree about the chain\'s time ({reason}): no order with an expiry or a start can be built until they agree. Try another node, or wait for the indexer to catch up.',
   'issues.CHAIN_TIME_UNVERIFIED_SHORT': 'No second source confirms the node\'s chain time ({reason}). An order that trades now or follows a schedule is not built on one node\'s word: place a resting limit, or connect an indexer.',
+  'issues.CHAIN_TIME_ANCHORED': 'The indexer cannot be asked: the node\'s chain time was checked against the last verified time this browser saw ({reason}). The dates are marked so.',
+  'issues.CHAIN_TIME_ANCHOR_TOO_OLD': 'The indexer cannot be asked, and the last verified chain time this browser saw is too old for this order: it is good to {tolerance} s, and this order counts in about {scale} s. Place an order with a longer life, or wait for the indexer.',
+  'issues.CHAIN_TIME_OWN_NODE': 'The chain time is from the node you named in the settings, unverified: the dates on the confirmation are marked so.',
   'issues.CHAIN_TIME_UNVERIFIED': 'No second source confirms the node\'s chain time ({reason}): the dates on the confirmation are marked "chain time unverified".',
   'issues.MARKET_START_VS_INDEXER': 'The order book price ({start} per token) is {percent}% {direction} the reference price of another indexer ({reference}, {other}): nothing can be sent at this price.',
   'issues.MARKET_REFERENCE_INDEXER_UNAVAILABLE': 'A further indexer did not answer ({others}): the start is checked without it.',
@@ -130,7 +134,7 @@ export default {
   // Pre-sign screen (SIGNING_ISSUE_CODES of decode.ts).
   // blocking
   'issues.malformed-built': 'Malformed transaction: inputs, signing plans and roles do not match. Do not sign it.',
-  'issues.recover-failed': 'A placement record does not verify: the orders this transaction creates cannot be trusted.',
+  'issues.recover-failed': 'A record of this transaction does not verify ({reason}): the orders it creates or changes cannot be trusted. Not signing.',
   'issues.order-spk-mismatch': 'Output {output}: the script does not match its placement record.',
   'issues.order-not-maker': '{where}The order belongs to another key ({maker}), not your wallet: this wallet cannot create or cancel it.',
   'issues.order-unrecorded': 'Output {output}: no valid placement record, so neither matchers nor you would see this order.',
@@ -225,6 +229,7 @@ export default {
   'issues.cancel.replacement-wrong-maker': 'The replacement order must belong to your wallet key.',
   'issues.cancel.replacement-wrong-token': 'The replacement order must trade the same token as the cancelled order.',
   'issues.cancel.stray-other-extension': 'A stray token ({amount}, {outpoint}) has another extension commitment and is left behind.',
+  'issues.cancel.twins-abandoned': '{count} stray token UTXO(s) identical to the custody ({amount}) do not fit into the transaction and are lost when the order closes; no sweep can move them.',
   'issues.cancel.strays-abandoned': '{count} stray token UTXO(s) ({amount}) do not fit into the transaction and are lost when the order closes.',
   'issues.cancel.stray-other-token': 'A stray of another token ({amount}) is not moved by this cancel.',
   'issues.cancel.strays-unknown': 'The stray tokens could not be read: any that exist are not moved and are lost when the order closes.',

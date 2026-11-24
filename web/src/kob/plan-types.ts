@@ -85,7 +85,9 @@ export interface Clock {
    * indexer's verified present within the margin), `unverified` (no second witness), `disagree`
    * (nothing timed is built). Absent: not judged (tests, or a clock read for display only).
    */
-  witness?: 'agreed' | 'unverified' | 'disagree';
+  witness?: 'agreed' | 'anchored' | 'own-node' | 'unverified' | 'disagree';
+  /** How far this DAA may be from the true present under its witness (DAA); null or absent when unbounded. */
+  toleranceDaa?: bigint | null;
   /** Why the witness is not `agreed`, in plain words. */
   witnessReason?: string | null;
 }
@@ -193,7 +195,7 @@ export interface PlanEnv {
    * on an empty book. Planning then reports GUARDS_UNAVAILABLE, an error, and the order waits for
    * the data.
    */
-  guardsUnavailable?: readonly ('own-orders' | 'book')[];
+  guardsUnavailable?: readonly ('own-orders' | 'book' | 'list-too-long')[];
   /**
    * Price in sompi per whole token of the newest fill. Indexer trades are a data path independent
    * of the book, so it cross-checks the book reference price.

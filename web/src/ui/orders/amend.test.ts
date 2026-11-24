@@ -89,7 +89,7 @@ describe('amend a plain limit sell (KobAsk)', () => {
     expect(codes({ price: price + 1n }, 100n)).toEqual(['price:price-off-tick']);
     // Any whole sompi per token is a valid price without a tick (the state price is per whole
     // token).
-    expect(codes({ price: price + 1n })).toEqual([]);
+    expect(codes({ price: price + 1n })).toEqual(['price:may-cross']);
     expect(codes({ amount: 0n })).toEqual(['amount:amount-not-positive']);
     expect(codes({ tip: -1n })).toEqual(['tip:tip-negative']);
     expect(codes({ tip: price })).toEqual(['tip:tip-exceeds-price']);
