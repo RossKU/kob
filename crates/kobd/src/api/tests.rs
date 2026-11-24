@@ -48,8 +48,9 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
         s.state = FollowerState::Following;
         s.node_daa = Some(1010);
         s.cursor_daa = 1000;
-        // The cursor block's verified time, a second ago: `lag_seconds` is its age.
-        s.cursor_time_unix_ms = Some(now_ms() - 1_000);
+        // The cursor block's time is known (readiness needs it) and not in the past, so the reads'
+        // present is the cursor itself whatever time a test takes; tests of the lag set their own.
+        s.cursor_time_unix_ms = Some(now_ms() + 60_000);
     });
     let mut cfg = ApiConfig::default();
     cfg.rate_limit.per_ip_rps = 0.0;
@@ -231,6 +232,14 @@ async fn health_answers_while_the_light_lane_is_busy() {
 async fn health_and_ready() {
     let e = env(|_| {});
     seed_all(&e.w);
+    // The node claims 10 DAA more than the cursor, and the cursor block's verified time is a second
+    // ago: `lag_seconds` is that age (the shared test environment leaves the cursor time unset, so
+    // the reads' present is the cursor itself).
+    e.state.health.update(|h| {
+        h.node_daa = Some(1000);
+        h.cursor_daa = 990;
+        h.cursor_time_unix_ms = Some(now_ms() - 1_000);
+    });
     let app = router(e.state.clone());
     let (s, v) = get(&app, "/v1/health").await;
     assert_eq!(s, StatusCode::OK);
