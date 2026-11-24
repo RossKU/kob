@@ -6,8 +6,8 @@ import { tableHash, type RegistryRow } from './table';
 /**
  * Turns the hints into the ones the frame may show.
  *
- * A hint with a `source` is already marked unverified. A registry hint, one with no source, is read
- * from the table when the table hashes to `pinned` and lists the token. The frame then takes the
+ * A token the table lists (the table hashing to `pinned`) takes the table's row, whatever the hint's
+ * `source`. Otherwise a hint with a `source` is already marked unverified. The frame then takes the
  * table's ticker and decimals, never the hint's.
  *
  * Any other registry hint becomes an `assumed` hint, with no ticker and no decimals. That covers no
@@ -18,10 +18,12 @@ import { tableHash, type RegistryRow } from './table';
 export function trustedHints(hints: readonly TokenHint[], rows: readonly RegistryRow[] | undefined, pinned: string | undefined): TokenHint[] {
   const listed = rows && pinned && tableHash(rows) === pinned ? new Map(rows.map((r) => [r.covenantId, r])) : null;
   return hints.map((h) => {
-    if (h.source) return h;
     const r = listed?.get(h.covenantId);
     const inverted = h.inverted ? { inverted: true } : {};
+    // a token the verified table lists takes its row whatever the hint's source (R9FB2-3): a
+    // 'declared' or 'program' hint must not give a listed token other decimals
     if (r) return { covenantId: h.covenantId, ticker: r.ticker, decimals: r.decimals, ...inverted };
+    if (h.source) return h;
     return { covenantId: h.covenantId, ticker: '', decimals: RAW_TOKEN_DECIMALS, source: 'assumed', ...inverted };
   });
 }
