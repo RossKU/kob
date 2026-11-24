@@ -177,10 +177,11 @@ describe('signer summary: decoded in the frame, net effect, order terms and fee'
   it('a token send: the tokens leave this key, KAS pays the fee', () => {
     const s = summarize(kob, buildSend(), MAKER_PK, [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 2 }]);
     expect(s.title).toBe('Send');
-    const token = s.lines.find((l) => l.label.startsWith('EXKCC'))!;
+    // the token is named by its whole id with where its ticker comes from (founder 2026-11-12)
+    const token = s.lines.find((l) => l.label.startsWith('7070707070707070707070707070707070707070707070707070707070707070 (EXKCC, 2 decimals, from the pinned token table)'))!;
     expect(token.value).toBe('−90 EXKCC'); // 9000 base units at 2 decimals
     expect(token.dir).toBe('out');
-    expect(s.lines.find((l) => l.label === 'EXKCC (70707070…70707070, 2 decimals as the app lists them) to other keys')?.value).toMatch(/^90 EXKCC to [0-9a-f]{8}…[0-9a-f]{8}$/); // the recipient is named (R8F2-I1)
+    expect(s.lines.find((l) => l.label === '7070707070707070707070707070707070707070707070707070707070707070 (EXKCC, 2 decimals, from the pinned token table) to other keys')?.value).toMatch(/^90 EXKCC to the key [0-9a-f]{64}$/); // the recipient is named, its whole key (R8F2-I1)
     expect(s.fee).toMatch(/ KAS$/);
   });
 
@@ -334,15 +335,15 @@ describe('G7 (b): a listed token is shown as listed only when the app sent the p
   }
 
   it('the pinned table: the ticker and its decimals are shown as the app lists them', () => {
-    expect(shown({})).toContain('EXKCC (70707070…70707070, 3 decimals as the app lists them)');
+    expect(shown({})).toContain('7070707070707070707070707070707070707070707070707070707070707070 (EXKCC, 3 decimals, from the pinned token table)');
   });
 
   it('a tampered table, no table, no pin, another pin: a token movement with no order is its raw amount, without the ticker', () => {
     const tampered: RegistryRow[] = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 2 }];
     for (const over of [{ registry: tampered, tokens: [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 2 }] }, { registry: null }, { hash: undefined }, { hash: tableHash(tampered) }]) {
       const t = shown(over);
-      expect(t, JSON.stringify(over)).toContain('70707070…70707070 (raw amount: nothing states its decimals)');
-      expect(t, JSON.stringify(over)).not.toContain('as the app lists them');
+      expect(t, JSON.stringify(over)).toContain('7070707070707070707070707070707070707070707070707070707070707070 (raw amounts: nothing states its decimals)');
+      expect(t, JSON.stringify(over)).not.toContain('from the pinned token table');
       expect(t, JSON.stringify(over)).not.toContain('EXKCC');
     }
   });
@@ -350,7 +351,7 @@ describe('G7 (b): a listed token is shown as listed only when the app sent the p
   it('a hint that contradicts the pinned table is shown as the table says (the app\'s ticker and decimals are not used)', () => {
     for (const hint of [{ covenantId: TOKEN_COV_ID, ticker: 'RUG', decimals: 8 }, { covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 6 }]) {
       const t = shown({ tokens: [hint] });
-      expect(t).toContain('EXKCC (70707070…70707070, 3 decimals as the app lists them)');
+      expect(t).toContain('7070707070707070707070707070707070707070707070707070707070707070 (EXKCC, 3 decimals, from the pinned token table)');
       expect(t).not.toContain('RUG');
     }
   });

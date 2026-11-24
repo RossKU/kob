@@ -37,6 +37,11 @@ import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './w
 export interface SummaryLine {
   label: string;
   value: string;
+  /**
+   * The value holds a whole id or key (never shortened in the middle, founder 2026-11-12): drawn in
+   * a monospace block that breaks over lines, so nothing of it is hidden.
+   */
+  mono?: boolean;
   /** `out` leaves this key and `in` comes to it. */
   dir: 'in' | 'out' | null;
 }
@@ -121,6 +126,9 @@ const SHOWN_AS_LINES = new Set<string>(['payment-out', 'transfer-out']);
  * would be 32 bits, which a token made to match it can copy.
  */
 const tokenName = (covenantId: Hex, hint: TokenHint | undefined, frame = false): string => {
+  // In the frame a token is named by its WHOLE covenant id (never shortened in the middle, founder
+  // 2026-11-12), with what is known of it and from where.
+  if (frame) return frameTokenName(covenantId, hint);
   // Nothing states its decimals. It is named by its covenant id, and the label says the amount is
   // raw.
   if (!hint || hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: longId(covenantId) });
@@ -137,13 +145,41 @@ const tokenName = (covenantId: Hex, hint: TokenHint | undefined, frame = false):
 };
 
 /**
- * A TokenRef from the app's hint. Its ticker and decimals are labels. Without a hint, amounts stay
- * in base units.
+ * Whether the frame can vouch for a ticker: the pinned registry table's row (a hint without a
+ * source, trusted-hints.ts) or the token's own declaration on chain. Any other ticker is the app's.
  */
-function refOfHint(covenantId: Hex, hints: TokenHint[], frame = false): TokenRef {
+const verifiedTicker = (h: TokenHint | undefined): string | null => (h && h.ticker && (!h.source || h.source === 'declared') ? h.ticker : null);
+
+/**
+ * A token in the frame: its whole covenant id, then what is known of it and from where, and a name
+ * the app gives it that the frame cannot vouch for, said to be the app's.
+ */
+function frameTokenName(covenantId: Hex, h: TokenHint | undefined): string {
+  const known = !h || h.source === 'assumed'
+    ? t('signer.token.assumed')
+    : h.source === 'scale'
+      ? t('signer.token.scale', { decimals: h.decimals })
+      : h.source === 'program'
+        ? t('signer.token.program', { decimals: h.decimals, source: h.convention ?? '' })
+        : h.source === 'issued'
+          ? t('signer.token.issued', { decimals: h.decimals })
+          : h.source === 'declared'
+            ? t('signer.token.declared', { ticker: h.ticker, decimals: h.decimals })
+            : t('signer.token.listed', { ticker: h.ticker, decimals: h.decimals });
+  const named = h?.appName ?? (h && h.ticker && !verifiedTicker(h) ? h.ticker : null);
+  const appName = named ? ` ${t('signer.token.appCalls', { ticker: named })}` : '';
+  return `${covenantId} (${known})${appName}`;
+}
+
+/**
+ * A TokenRef from the app's hint. Its ticker and decimals are labels. Without a hint, amounts stay
+ * in base units. In the frame the unit of every amount and price is a ticker the frame vouches for,
+ * else the plain word "token" ("token A" / "token B" on a pair order): never an id fragment and never
+ * the app's unverified ticker.
+ */
+function refOfHint(covenantId: Hex, hints: TokenHint[], frame = false, role?: 'A' | 'B'): TokenRef {
   const h = hints.find((x) => x.covenantId === covenantId);
-  // An assumed token's amounts carry its covenant id as their unit.
-  const ticker = h ? (h.ticker || longId(covenantId)) : null;
+  const ticker = frame ? (verifiedTicker(h) ?? (role ? t('signer.token.unitRole', { role }) : t('signer.token.unit'))) : h ? (h.ticker || longId(covenantId)) : null;
   return { covenantId, ticker, decimals: h?.decimals ?? null, display: tokenName(covenantId, h, frame), inRegistry: false, tradable: false };
 }
 
@@ -178,8 +214,10 @@ function withOrderScales(s: SigningSummary, hints: readonly TokenHint[]): TokenH
  * The hints as the confirmation model's registry lookup, which it uses for a pair order's quote
  * token B. Only the ticker and decimals are filled.
  */
-function hintRegistry(hints: TokenHint[]): TokenRegistry {
-  const byCovenantId = new Map(hints.map((h) => [h.covenantId, { covenantId: h.covenantId, ticker: h.ticker || longId(h.covenantId), decimals: h.decimals, tradable: false } as unknown as TokenInfo]));
+function hintRegistry(hints: TokenHint[], frame = false): TokenRegistry {
+  // a pair order's quote token B: in the frame its unit is a vouched ticker or "token B"
+  const tickerOf = (h: TokenHint) => (frame ? (verifiedTicker(h) ?? t('signer.token.unitRole', { role: 'B' })) : h.ticker || longId(h.covenantId));
+  const byCovenantId = new Map(hints.map((h) => [h.covenantId, { covenantId: h.covenantId, ticker: tickerOf(h), decimals: h.decimals, tradable: false, ...(frame ? { openList: true } : {}) } as unknown as TokenInfo]));
   return { network: '', templates: [], templateChecks: [], tokens: [], byCovenantId };
 }
 
@@ -195,11 +233,13 @@ function hintRegistry(hints: TokenHint[]): TokenRegistry {
 const SIGNED_TERM_DETAIL = new Set(['auction', 'entryStop', 'pairTrigger']);
 
 function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1], hints: TokenHint[], registry: TokenRegistry, terms = false): SummaryOrder {
-  const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints, terms), clock: null, time: (unix) => formatRowTime(Number(unix) * 1000, 0), registry };
+  const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints, terms, d.pair ? 'A' : undefined), clock: null, time: (unix) => formatRowTime(Number(unix) * 1000, 0), registry };
   const exit = d.entry?.exit ? orderSummary(d.entry.exit, { value: null, locked: null, deadline: null }, hints, registry, terms) : null;
+  // a pair order names both its tokens in full, in the order its lines use them (token A, token B)
+  const pairToken = terms && d.pair ? t('signer.token.pair', { a: frameTokenName(d.pair.base.covId, hints.find((h) => h.covenantId === d.pair!.base.covId)), b: frameTokenName(d.pair.quote.covId, hints.find((h) => h.covenantId === d.pair!.quote.covId)) }) : null;
   return {
     title: orderTitle(d, extra.deadline, f),
-    token: f.ref.display,
+    token: pairToken ?? f.ref.display,
     rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail && terms && SIGNED_TERM_DETAIL.has(r.id) ? `${r.value} (${r.detail})` : r.value, ...timeOf(r, d) })),
     exit: exit ? { ...exit, title: t('confirm.exitOf', { title: exit.title }) } : null,
   };
@@ -507,10 +547,11 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   // Every token figure carries its unit, as in "−2 EXKCC". A token nothing names has none to
   // carry. That is an assumed one, whose amount is raw and whose label is its covenant id.
   const unitOf = (hint: TokenHint | undefined): string => (hint && hint.source !== 'assumed' && hint.ticker ? ` ${tickerUnit(hint.ticker, hint.covenantId)}` : '');
-  // Whom a payment or transfer to other keys goes to: each key by 8 + 8 hex, and an output to a
+  // Whom a payment or transfer to other keys goes to: each WHOLE key (never shortened in the
+  // middle, founder 2026-11-12: a chosen head and tail is cheap to grind), and an output to a
   // script the decoder could not read as such (R8F2-I1).
   const to = (outs: readonly DecodedOutput[], amount: string): string => {
-    const keys = [...new Set(outs.flatMap((o) => (o.recipient ? [longId(o.recipient)] : [])))];
+    const keys = [...new Set(outs.flatMap((o) => (o.recipient ? [t('signer.shape.key', { key: o.recipient })] : [])))];
     if (outs.some((o) => !o.recipient)) keys.push(t('signer.net.unknownScript'));
     return keys.length ? t('signer.net.toKeysValue', { amount, keys: keys.join(', ') }) : amount;
   };
@@ -519,7 +560,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     const label = tokenName(tok.ref.covenantId, hint, terms);
     const amount = (v: bigint) => `${formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unitOf(hint)}`;
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
-    if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: to(s.outputs.filter((o) => o.kind === 'token-out' && o.token?.ref.covenantId === tok.ref.covenantId), amount(tok.toOthers)), dir: 'out' });
+    if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: to(s.outputs.filter((o) => o.kind === 'token-out' && o.token?.ref.covenantId === tok.ref.covenantId), amount(tok.toOthers)), dir: 'out', mono: true });
     // An unlock says what the wallet's creator lock held. The line above says it comes to this key.
     if (tok.unlocked > 0n) lines.push({ label: t('signer.net.unlocked', { token: label }), value: amount(tok.unlocked), dir: null });
   }
@@ -538,8 +579,9 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     // the id is the app's word (no signature covers an input's covenant id); the terms are the
     // order's bound state (R9FB2-4)
     const d = sp.description;
-    const value = terms && d ? t('signer.net.orderTerms', { id: longId(sp.covenantId!), terms: `${d.kind}, ${d.side}` }) : longId(sp.covenantId!);
-    lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value, dir: null });
+    // the whole covenant id (never shortened in the middle)
+    const value = terms && d ? t('signer.net.orderTerms', { id: sp.covenantId!, terms: `${d.kind}, ${d.side}` }) : sp.covenantId!;
+    lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value, dir: null, mono: true });
   }
   // A claim (bid-delivery-spec §7) says what the order bought, where it goes and the carrier added
   // to the order.
@@ -559,7 +601,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     const was = s.inputs[sp.input]?.amount;
     if (cont && was !== undefined && cont.value > was) lines.push({ label: t('signer.net.claimCarrier'), value: kas(cont.value - was), dir: null });
   }
-  if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: to(s.outputs.filter((o) => ['payment-out', 'token-out', 'unknown-covenant', 'unknown'].includes(o.kind)), kas(k.toOthers)), dir: 'out' });
+  if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: to(s.outputs.filter((o) => ['payment-out', 'token-out', 'unknown-covenant', 'unknown'].includes(o.kind)), kas(k.toOthers)), dir: 'out', mono: true });
   // A take says the resting orders it fills at their own prices, and the average price.
   if (s.take) {
     const tk = s.take;
@@ -570,7 +612,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   }
   const fromTokens = freedFromTokens(s);
   if (fromTokens > 0n) lines.push({ label: t('signer.net.fromTokens'), value: kas(fromTokens), dir: null });
-  const registry = hintRegistry(hints);
+  const registry = hintRegistry(hints, terms);
   const orders = s.orders.filter((o) => o.sweptFrom === undefined && o.claimedFrom === undefined).map((o) => {
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry, terms);
     return withDelivery(flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain, o, hints);
@@ -581,7 +623,15 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   if (terms) for (const f of s.info) lines.push({ label: t('signer.info'), value: issueText(f), dir: null });
   // the frame signs only its closed list of shapes, judged on bound data (signer/shapes.ts)
   if (terms && kob && built) {
-    const v = frameShape(s, built, s.maker, kob);
+    // token amounts as the token lines above name them: scaled with their stated source, else in
+    // smallest units of the whole id
+    const fmtToken = (cov: Hex, v: bigint): string => {
+      const hint = hints.find((h) => h.covenantId === cov);
+      // with no ticker the amount carries the token's own label, as the token line above names it
+      if (hint && hint.source !== 'assumed') return hint.ticker ? `${formatTokenAmount(v, hint.decimals)}${unitOf(hint)}` : `${formatTokenAmount(v, hint.decimals)} (${tokenName(cov, hint, true)})`;
+      return t('signer.shape.rawUnits', { amount: String(v), token: cov });
+    };
+    const v = frameShape(s, built, s.maker, kob, fmtToken);
     if (!v.ok) {
       found.push({ code: 'frame-shape' });
       lines.push({ label: t('signer.shape.refused'), value: v.reason, dir: null });

@@ -86,6 +86,12 @@ export interface TokenHint {
    * `KaspaRocket convention`. It is a label only.
    */
   convention?: string;
+  /**
+   * The name the app shows for a token the frame cannot vouch for (no ticker of its own: a program
+   * default, a price scale, nothing stated). The frame says it is the app's ("the app calls it …"),
+   * never uses it as a unit.
+   */
+  appName?: string;
 }
 
 /**
@@ -269,7 +275,8 @@ export function isBuiltTx(v: unknown): v is BuiltTx {
 }
 
 const isTokenHint = (v: unknown): v is TokenHint =>
-  isObj(v) && hasKeys(v, ['covenantId', 'ticker', 'decimals', 'inverted', 'source', 'convention']) && HEX32.test(String(v.covenantId)) && typeof v.ticker === 'string' && isIndex(v.decimals, 19) &&
+  isObj(v) && hasKeys(v, ['covenantId', 'ticker', 'decimals', 'inverted', 'source', 'convention', 'appName']) && HEX32.test(String(v.covenantId)) && typeof v.ticker === 'string' && isIndex(v.decimals, 19) &&
+  (v.appName === undefined || (typeof v.appName === 'string' && TICKER.test(v.appName))) &&
   (v.inverted === undefined || typeof v.inverted === 'boolean') &&
   (v.source === undefined || v.source === 'declared' || v.source === 'issued' || v.source === 'program' || v.source === 'scale' || v.source === 'assumed') &&
   // A program default's source is a short printable label, and only that source has one.

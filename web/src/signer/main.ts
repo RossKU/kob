@@ -346,9 +346,10 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const cells: Cells = { text: new Map(), times: [] };
   const list = el('dl', { class: 'lines', 'data-testid': 'signer-summary' });
   s.lines.forEach((l, i) => {
-    const dd = el('dd', {}, l.value);
+    // a whole id or key: monospace, broken over lines, never cut
+    const dd = el('dd', l.mono ? { class: 'mono' } : {}, l.value);
     cells.text.set(`l:${i}`, dd);
-    list.append(el('div', { class: `line ${l.dir ?? ''}` }, el('dt', {}, l.label), dd));
+    list.append(el('div', { class: `line ${l.dir ?? ''}${l.mono ? ' mono' : ''}` }, el('dt', {}, l.label), dd));
   });
   const fee = el('dd', { 'data-testid': 'signer-fee' }, s.fee);
   cells.text.set('fee', fee);

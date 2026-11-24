@@ -207,3 +207,52 @@ test.describe('the private-key frame: a take and a refusal', () => {
     if (TAG === 'after') await expect(signer(page).getByTestId('signer-problems')).toBeVisible();
   });
 });
+
+test.describe('the private-key frame: a send', () => {
+  test.use({ walletId: null, autoOpen: false });
+  const signer = (page: Page) => page.frameLocator('[data-testid="signer-frame"]');
+  test('a token send names the whole key it pays', async ({ appPage: page, mock }) => {
+    test.setTimeout(240_000);
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await fund(mock);
+    await openMarket(page, mock, { connect: false });
+    await page.getByTestId('wallet-connect-local-key').click();
+    await signer(page).getByTestId('signer-key').fill(TEST_KEYS.alice.secretKey);
+    await signer(page).getByTestId('signer-connect').click();
+    const kob = loadKobNode();
+    const built = kob.build(goldenRequest('send.tokens', TEST_KEYS.alice.pubkey) as never);
+    const msg = JSON.parse(JSON.stringify({ p: SIGNER_PROTOCOL, type: 'sign', id: 'send-1', built, tokens: [] }));
+    await page.evaluate((m) => {
+      document.querySelector<HTMLElement>('[data-testid="signer-overlay"]')!.hidden = false;
+      (document.querySelector('[data-testid="signer-frame"]') as HTMLIFrameElement).contentWindow!.postMessage(m, '*');
+    }, msg);
+    await expect(signer(page).getByTestId('signer-approve')).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(2_000);
+    await page.getByTestId('signer-frame').screenshot({ path: shot('r9-frame-send') });
+  });
+});
+
+test.describe('the private-key frame: a market buy of a token the frame cannot name', () => {
+  test.use({ walletId: null, autoOpen: false });
+  const signer = (page: Page) => page.frameLocator('[data-testid="signer-frame"]');
+  test('the unit is "token" and the token is named once, in full', async ({ appPage: page, mock }) => {
+    test.setTimeout(240_000);
+    await page.setViewportSize({ width: 1440, height: 1400 });
+    await fund(mock);
+    await openMarket(page, mock, { connect: false });
+    await page.getByTestId('wallet-connect-local-key').click();
+    await signer(page).getByTestId('signer-key').fill(TEST_KEYS.alice.secretKey);
+    await signer(page).getByTestId('signer-connect').click();
+    const kob = loadKobNode();
+    const built = kob.build(goldenRequest('create.bid.market', TEST_KEYS.alice.pubkey) as never);
+    // the app calls it TUSD, with no source the frame can vouch for (the founder's TN10 case)
+    const msg = JSON.parse(JSON.stringify({ p: SIGNER_PROTOCOL, type: 'sign', id: 'mkt-1', built, tokens: [{ covenantId: built.plans.length ? (kob.recoverOrders(built.tx)[0]!.order.state as { tokenCovId: string }).tokenCovId : '', ticker: '', decimals: 3, source: 'scale', ...(TAG.startsWith('before') ? {} : { appName: 'TUSD' }) }] }));
+    await page.evaluate((m) => {
+      document.querySelector<HTMLElement>('[data-testid="signer-overlay"]')!.hidden = false;
+      (document.querySelector('[data-testid="signer-frame"]') as HTMLIFrameElement).contentWindow!.postMessage(m, '*');
+    }, msg);
+    await expect(signer(page).getByTestId('signer-approve')).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(2_000);
+    await page.getByTestId('signer-frame').screenshot({ path: shot('r9-frame-market-buy-unnamed') });
+  });
+});

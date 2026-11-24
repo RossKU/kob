@@ -129,6 +129,10 @@ export default {
 
   'confirm.f.amount': 'Amount',
   'confirm.f.budget': 'KAS budget',
+  'confirm.f.buys': 'Buys with this budget',
+  'confirm.f.buysRange': 'at least {least} (at the worst price), up to {most} (at the start price)',
+  'confirm.f.buysAtLimit': 'up to {amount} at the limit price',
+  'confirm.f.buysHint': 'As many tokens as the budget pays for at the price of each fill, the tip included; what is not spent returns when the order ends.',
   'confirm.f.budgetAmount': 'Covers the amount at the limit price plus delivery carriers; the unused rest returns when the order ends',
   'confirm.f.limit': 'Limit price',
   'confirm.f.entryLimit': 'Entry limit price',

@@ -30,7 +30,6 @@
 import { isGenesisBinding } from '../kob/covenant-id';
 import type { DecodedInput, DecodedOutput, SigningSummary } from '../kob/decode';
 import { custodiesOf } from '../kob/order-facts';
-import { longId } from '../kob/registry';
 import type { BuiltTx, Hex, OrderState } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { formatKas } from '../kob/units';
@@ -38,16 +37,24 @@ import { t } from '../i18n';
 
 export type FrameShape = 'send' | 'place' | 'take' | 'end' | 'continue';
 
-export interface ShapeLine { label: string; value: string; dir: 'in' | 'out' | null }
+export interface ShapeLine { label: string; value: string; dir: 'in' | 'out' | null; mono?: boolean }
 export type ShapeVerdict = { ok: true; shape: FrameShape; lines: ShapeLine[] } | { ok: false; reason: string };
 
 const refuse = (reason: string): ShapeVerdict => ({ ok: false, reason });
 
-/** The KAS address-like label of an output's recipient (8 + 8 hex of the key, or "a script"). */
-const recipientOf = (o: DecodedOutput): string => (o.recipient ? longId(o.recipient) : t('signer.net.unknownScript'));
+/**
+ * Who an output pays: the recipient's whole public key (never shortened in the middle: a key with a
+ * chosen head and tail is cheap to grind), said to be a key. The frame does not encode an address,
+ * because the network prefix would be the app's word; a script it cannot read is said so.
+ */
+const recipientOf = (o: DecodedOutput): string => (o.recipient ? t('signer.shape.key', { key: o.recipient }) : t('signer.net.unknownScript'));
 
 /** Judges a decoded transaction's shape for the frame. */
-export function frameShape(s: SigningSummary, built: BuiltTx, maker: Hex, kob: KobWasm): ShapeVerdict {
+/** A token amount as the screen names it: scaled with its stated source, else smallest units of the whole id. */
+export type TokenFmt = (covenantId: Hex, amount: bigint) => string;
+const rawFmt: TokenFmt = (covenantId, amount) => t('signer.shape.rawUnits', { amount: String(amount), token: covenantId });
+
+export function frameShape(s: SigningSummary, built: BuiltTx, maker: Hex, kob: KobWasm, fmt: TokenFmt = rawFmt): ShapeVerdict {
   const tx = built.tx;
   const signed = s.inputs.filter((d) => d.willSign);
   const unsigned = s.inputs.filter((d) => !d.willSign);
@@ -75,12 +82,14 @@ export function frameShape(s: SigningSummary, built: BuiltTx, maker: Hex, kob: K
   const badCustody = s.outputs.find((o) => o.kind === 'custody' && !createdIds.has(custodyOf(o) ?? '') && !continuedIds.has(custodyOf(o) ?? ''));
   if (badCustody) return refuse(t('signer.shape.custodyElsewhere', { output: badCustody.index }));
   const lines: ShapeLine[] = [];
+  // set by a take: whether some filled order ends here (its payout then also returns what it held)
+  let someEnds = false;
   const paid = (os: readonly DecodedOutput[]) => {
     for (const o of os) {
       if (o.token && o.kind !== 'fill-payout') continue;
       // tokens delivered to a maker of an order this fills: their amount, from the bound output state
-      if (o.token) lines.push({ label: t('signer.shape.delivers'), value: t('signer.shape.deliversValue', { amount: String(o.token.amount), token: longId(o.token.ref.covenantId), to: recipientOf(o) }), dir: 'out' });
-      else if (o.value > 0n) lines.push({ label: t('signer.shape.pays'), value: t('signer.shape.paysValue', { amount: `${formatKas(o.value)} KAS`, to: recipientOf(o) }), dir: 'out' });
+      if (o.token) lines.push({ label: t('signer.shape.delivers'), value: t('signer.shape.deliversValue', { amount: fmt(o.token.ref.covenantId, o.token.amount), to: recipientOf(o) }), dir: 'out', mono: true });
+      else if (o.value > 0n) lines.push({ label: t('signer.shape.pays'), value: t(o.kind === 'fill-payout' ? (someEnds ? 'signer.shape.paysMakerEndsValue' : 'signer.shape.paysMakerValue') : 'signer.shape.paysValue', { amount: `${formatKas(o.value)} KAS`, to: recipientOf(o) }), dir: 'out', mono: true });
     }
   };
 
@@ -88,8 +97,35 @@ export function frameShape(s: SigningSummary, built: BuiltTx, maker: Hex, kob: K
     // take: fills of other makers' orders and nothing else of the wallet's
     if (own.length) return refuse(t('signer.shape.fillWithOwn'));
     if (created.length) return refuse(t('signer.shape.fillWithPlace'));
-    paid(fillOuts);
+    // Each output of a take is classified from bound data before anything is called a payment:
+    // - a true continuation of a filled order (its binding authorised by that order's input and not
+    //   the genesis id of its outpoint) stays in that order: its own remainder, funded by its inputs;
+    // - a token output owned by such a continuing order is its remaining custody;
+    // - an output paying a filled order's maker (P2PK) is a payment, named with the whole key;
+    // - anything else under a fill is refused, never a line.
+    const taken = new Set(others.map((d) => d.index));
+    const continuingTaken = new Set<string>();
+    for (const x of tx.outputs) {
+      const c = x.covenant;
+      if (c && taken.has(c.authorizingInput) && !isGenesisBinding(kob, tx, c.authorizingInput, c.covenantId)) continuingTaken.add(c.covenantId.toLowerCase());
+    }
+    let staysKas = 0n;
+    const staysTokens = new Map<Hex, bigint>();
+    for (const o of fillOuts.filter((x) => x.kind === 'fill-continue')) {
+      const c = tx.outputs[o.index]?.covenant;
+      const own = o.token ? continuingTaken.has(custodyOf(o) ?? '') : !!c && continuingTaken.has(c.covenantId.toLowerCase());
+      if (!own) return refuse(t('signer.shape.unknownOutput'));
+      if (o.token) staysTokens.set(o.token.ref.covenantId, (staysTokens.get(o.token.ref.covenantId) ?? 0n) + o.token.amount);
+      else staysKas += o.value;
+    }
+    for (const o of fillOuts.filter((x) => x.kind === 'fill-payout')) if (!o.recipient) return refuse(t('signer.shape.unknownOutput'));
+    someEnds = others.some((d) => !tx.outputs.some((x) => x.covenant?.authorizingInput === d.index && !isGenesisBinding(kob, tx, d.index, x.covenant.covenantId)));
+    paid(fillOuts.filter((x) => x.kind === 'fill-payout'));
     paid(payments);
+    // what moves between a filled order's inputs and its own continuation is not the wallet's: said
+    // apart, with no direction
+    if (staysKas > 0n) lines.push({ label: t('signer.shape.stays'), value: `${formatKas(staysKas)} KAS`, dir: null });
+    for (const [tok, v] of staysTokens) lines.push({ label: t('signer.shape.staysTokens'), value: fmt(tok, v), dir: null });
     // the fills' amount is the app's word (claimed arguments): it must be what the bound outputs give
     // the wallet (R9FB2-6), and the price line is the wallet's bound net, fee included
     if (s.take) {
@@ -97,7 +133,7 @@ export function frameShape(s: SigningSummary, built: BuiltTx, maker: Hex, kob: K
       const got = tok ? (tok.walletDelta < 0n ? -tok.walletDelta : tok.walletDelta) : 0n;
       if (got !== s.take.amount) return refuse(t('signer.shape.takeMismatch'));
       const kas = s.net.kas.walletDelta;
-      lines.push({ label: t('signer.shape.takeNet'), value: t('signer.shape.takeNetValue', { kas: `${formatKas(kas < 0n ? -kas : kas)} KAS`, tokens: String(got) }), dir: kas < 0n ? 'out' : 'in' });
+      lines.push({ label: t(kas < 0n ? 'signer.shape.takeNet' : 'signer.shape.takeNetIn'), value: t('signer.shape.takeNetValue', { kas: `${formatKas(kas < 0n ? -kas : kas)} KAS`, tokens: fmt(s.take.ref.covenantId, got) }), dir: kas < 0n ? 'out' : 'in' });
     }
     return { ok: true, shape: 'take', lines };
   }
@@ -127,7 +163,7 @@ export function frameShape(s: SigningSummary, built: BuiltTx, maker: Hex, kob: K
       }
       for (const c of held) {
         const kept = s.outputs.filter((o) => o.kind === 'custody' && custodyOf(o) === id && o.token!.ref.covenantId.toLowerCase() === c.token.toLowerCase()).reduce((a, o) => a + o.token!.amount, 0n);
-        if (kept > 0n && kept !== c.amount) return refuse(t('signer.shape.custodyShort', { id: longId(id), token: longId(c.token), amount: String(c.amount) }));
+        if (kept > 0n && kept !== c.amount) return refuse(t('signer.shape.custodyShort', { id, token: c.token, amount: String(c.amount) }));
       }
     }
     return { ok: true, shape: 'continue', lines };

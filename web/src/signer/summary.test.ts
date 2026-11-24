@@ -25,12 +25,13 @@ function build(name: string, edit: (state: Record<string, string>) => void = () 
 }
 
 describe('signer summary: audit round 2 (S1, S7)', () => {
-  it('S7: a cancel names the order it closes by 8 + 8 hex of its covenant id; a create names none', () => {
+  it('S7: a cancel names the order it closes by its whole covenant id (never shortened in the middle); a create names none', () => {
     const cancel = summarize(kob, build('cancel.ask'), MAKER_PK, HINTS);
     const closes = cancel.lines.filter((l) => l.label === 'Closes order');
     expect(closes).toHaveLength(1);
     // the id (the app's word) and the order's terms from its bound state (R9FB2-4)
-    expect(closes[0]!.value).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(the id is the app.s word\): KobAsk, sell$/);
+    expect(closes[0]!.value).toMatch(/^[0-9a-f]{64} \(the id is the app.s word\): KobAsk, sell$/);
+    expect(closes[0]!.mono).toBe(true);
     expect(summarize(kob, build('create.ask'), MAKER_PK, HINTS).lines.some((l) => l.label === 'Closes order')).toBe(false);
   });
   it('S1: a cancel spends inputs the wallet does not sign and says their KAS is the word of the node; a plain create does not', () => {
@@ -56,11 +57,11 @@ describe('signer summary: order terms', () => {
     expect(price(cheap.orders[0]!)).not.toBe(price(fair.orders[0]!));
   });
 
-  it('names the order, its side and its token by the covenant id (8 + 8 hex), and nests an if-done exit', () => {
+  it('names the order, its side and its token by its whole covenant id, and nests an if-done exit', () => {
     const s = summarize(kob, build('create.ask'), MAKER_PK, HINTS);
     expect(s.orders[0]!.title.toLowerCase()).toContain('sell');
-    expect(s.orders[0]!.token).toContain(`${TOKEN_COV_ID.slice(0, 8)}…${TOKEN_COV_ID.slice(-8)}`);
-    expect(s.lines.find((l) => l.label.startsWith('EXKCC'))?.label).toContain(`${TOKEN_COV_ID.slice(0, 8)}…`);
+    expect(s.orders[0]!.token).toContain(TOKEN_COV_ID);
+    expect(s.lines.find((l) => l.label.startsWith(TOKEN_COV_ID))?.label).toContain('EXKCC');
     const ifd = summarize(kob, build('create.ifdBid'), MAKER_PK, HINTS);
     expect(ifd.orders).toHaveLength(1);
     expect(ifd.orders[0]!.exit).not.toBeNull();
@@ -153,10 +154,11 @@ describe('signer summary: a token without a hint', () => {
   it('says its amounts and prices in whole tokens on the scale its order names, as the ticket did (TN10 2026-10-15 B-13, founder 2026-10-17)', () => {
     const s = summarize(kob, build('create.ask'), MAKER_PK, []);
     const rows = s.orders[0]!.rows;
-    expect(rows.find((r) => /amount/i.test(r.label))?.value).toMatch(/^10 [0-9a-f]{8}…[0-9a-f]{8}$/);
+    // the unit is the plain word "token"; the token is named once, by its whole id, above
+    expect(rows.find((r) => /amount/i.test(r.label))?.value).toBe('10 token');
     const price = rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
-    expect(price).toMatch(/KAS per [0-9a-f]{8}…[0-9a-f]{8}$/);
-    expect(s.orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(3 decimals, from its price scale\)$/);
+    expect(price).toMatch(/KAS per token$/);
+    expect(s.orders[0]!.token).toMatch(/^[0-9a-f]{64} \(3 decimals, from its price scale\)$/);
     expect(rows.map((r) => r.value).join(' ')).not.toMatch(/base unit/);
     // with the decimals known the price stays per whole token
     const known = summarize(kob, build('create.ask'), MAKER_PK, HINTS).orders[0]!.rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
@@ -181,7 +183,7 @@ describe('signer summary: prices that cannot be misread, the flipped view in its
     const s = summarize(kob, plan({ ...form('market', 'buy', { amount: '20' }), kas: true }), FIXTURE_MAKER, hint(true));
     const o = s.orders[0]!;
     expect(o.title).toBe('Sell KAS · market (auction)');
-    expect(o.token).toMatch(/^TUSD \(.+\) · on chain: Buy market order \(auction\)$/);
+    expect(o.token).toMatch(/^[0-9a-f]{64} \(TUSD, .+\) · on chain: Buy market order \(auction\)$/);
     const r = rows(o);
     expect(r['You sell']).toMatch(/^up to (19[.]\d\d|20[.]00) KAS$/);
     expect(r['You receive']).toMatch(/^7[.]\d+ TUSD$/);

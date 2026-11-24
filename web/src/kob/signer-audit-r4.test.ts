@@ -102,10 +102,10 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
   const limitSell = () => planCase('limit sell').built!;
   const tokenOf = (b: BuiltTx) => decode(b).orders[0]!.description.tokenCovId;
 
-  it('a listed token is named with its decimals "as the app lists them"', () => {
+  it('a listed token is named by its whole id, with its ticker and decimals from the pinned token table', () => {
     const b = limitSell();
     const s = summarize(kob, b, MAKER_PK, [{ covenantId: tokenOf(b), ticker: 'GOLD', decimals: 8 }]);
-    expect(s.orders[0]!.token).toMatch(/^GOLD \([0-9a-f]{8}…[0-9a-f]{8}, 8 decimals as the app lists them\)$/);
+    expect(s.orders[0]!.token).toMatch(/^[0-9a-f]{64} \(GOLD, 8 decimals, from the pinned token table\)$/);
   });
 
   it('the same order under another decimals hint is refused (the order quotes its price per 10^8 units)', () => {
@@ -131,11 +131,11 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
       const lie = [{ covenantId: cov, ticker: 'GOLD', decimals }];
       const pinned = frame(MAKER_SK, undefined, tableHash(table));
       const req = pinned.send({ type: 'sign', id: 'g7', built: b, tokens: lie, registry: table })!;
-      expect(req.summary.orders[0]!.token, `decimals ${decimals}`).toMatch(/^GOLD \([0-9a-f]{8}…[0-9a-f]{8}, 8 decimals as the app lists them\)$/);
+      expect(req.summary.orders[0]!.token, `decimals ${decimals}`).toMatch(/^[0-9a-f]{64} \(GOLD, 8 decimals, from the pinned token table\)$/);
       expect(req.summary.problems).toBe(0);
       const bare = frame(MAKER_SK);
       const shown = bare.send({ type: 'sign', id: 'g7', built: b, tokens: lie, registry: table })!;
-      expect(shown.summary.orders[0]!.token, `decimals ${decimals}, no pin`).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(8 decimals, from its price scale\)$/);
+      expect(shown.summary.orders[0]!.token, `decimals ${decimals}, no pin`).toMatch(/^[0-9a-f]{64} \(8 decimals, from its price scale\)$/);
     }
   });
 
@@ -146,7 +146,7 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
     const s = summarize(kob, bad, MAKER_PK, [{ covenantId: cov, ticker: 'GOLD', decimals: 9 }]);
     // consistent with itself, so it is not refused by the check; the frame says whose word the 9
     // decimals are
-    expect(s.orders[0]!.token).toContain('9 decimals as the app lists them');
+    expect(s.orders[0]!.token).toContain('GOLD, 9 decimals, from the pinned token table');
     expect(s.orders[0]!.rows.find((r) => /^Amount/.test(r.label))!.value).toBe('0.5 GOLD');
   });
 

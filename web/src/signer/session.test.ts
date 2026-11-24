@@ -317,11 +317,11 @@ describe('signer core: one-approval session', () => {
     // frame does not take
     const req = c.send({ ...open(p), registry: [{ ...TABLE[0]!, ticker: 'FAKE' }] })!;
     expect(req.summary.title).toBe('Merge token UTXOs without asking each time');
-    expect(req.summary.lines.find((l) => l.label === 'Token')?.value).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(raw amount: nothing states its decimals\)$/);
+    expect(req.summary.lines.find((l) => l.label === 'Token')?.value).toMatch(/^[0-9a-f]{64} \(raw amounts: nothing states its decimals\)$/);
     expect(req.summary.lines.find((l) => l.label === 'What')?.value).toBe('7 of your UTXOs into 1, to yourself. 2800000000 (raw amount) in total, unchanged.');
     c.core.reject('o1', 'user');
     const declared = c.send({ ...open(p, 'o2'), tokens: [{ covenantId: TOKEN.covenantId, ticker: 'DCL', decimals: 8, source: 'declared' }], registry: undefined })!;
-    expect(declared.summary.lines.find((l) => l.label === 'Token')?.value).toMatch(/^DCL \([0-9a-f]{8}…[0-9a-f]{8}, declared on chain, unverified\)$/);
+    expect(declared.summary.lines.find((l) => l.label === 'Token')?.value).toMatch(/^[0-9a-f]{64} \(DCL, 8 decimals, declared on chain\)$/);
     expect(declared.summary.lines.find((l) => l.label === 'What')?.value).toBe('7 of your UTXOs into 1, to yourself. 28 DCL in total, unchanged.');
   });
 

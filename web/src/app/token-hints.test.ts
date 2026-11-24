@@ -49,12 +49,12 @@ describe('signerTokenHints: a token the registry does not list (founder 2026-10-
     // The frame names it by its covenant id, and reads its amounts on the scale the order names:
     // the whole token the ticket used.
     const a = summarize(kob, ask, MAKER_PK, assumed);
-    expect(a.orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(3 decimals, from its price scale\)$/);
+    expect(a.orders[0]!.token).toMatch(/^[0-9a-f]{64} \(3 decimals, from its price scale\)$/);
     expect(a.orders[0]!.rows.map((r) => r.value).join(' ')).not.toMatch(/base units/);
     store({ [TOKEN_COV_ID]: { decimals: 3, ticker: 'XYZ', name: 'Xyz' } });
     const issued = signerTokenHints(kob, ask, MAKER_PK, empty, 'testnet-10');
     expect(issued).toEqual([{ covenantId: TOKEN_COV_ID, ticker: 'XYZ', decimals: 3, source: 'issued' }]);
-    expect(summarize(kob, ask, MAKER_PK, issued).orders[0]!.token).toMatch(/^XYZ \([0-9a-f]{8}…[0-9a-f]{8}, unverified\)$/);
+    expect(summarize(kob, ask, MAKER_PK, issued).orders[0]!.token).toMatch(/^[0-9a-f]{64} \(3 decimals, from this browser's creation of it\) the app calls it XYZ \(not verified by this signer\)$/);
     // a registry entry wins over the issuing browser's record
     expect(signerTokenHints(kob, ask, MAKER_PK, registry, 'testnet-10')).toEqual([{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3 }]);
     m.clear();
@@ -67,7 +67,7 @@ describe('signerTokenHints: a token the registry does not list (founder 2026-10-
     noteTokenProgram('mainnet', TOKEN_COV_ID, 'KaspaRocketToken11458');
     const hints = signerTokenHints(kob, ask, MAKER_PK, empty, 'mainnet');
     expect(hints).toEqual([{ covenantId: TOKEN_COV_ID, ticker: '', decimals: 3, source: 'program', convention: 'KaspaRocket convention' }]);
-    expect(summarize(kob, ask, MAKER_PK, hints).orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(3 decimals, KaspaRocket convention\)$/);
+    expect(summarize(kob, ask, MAKER_PK, hints).orders[0]!.token).toMatch(/^[0-9a-f]{64} \(3 decimals, KaspaRocket convention\)$/);
     resetDeclarationsForTests();
   });
 });

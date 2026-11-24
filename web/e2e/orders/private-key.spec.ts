@@ -118,8 +118,9 @@ test('connect with a private key in the signer frame, place and cancel an order 
   // the mock registry is not the table this bundle pins (registry/tokens.json, signer/table.ts):
   // the frame does not take its ticker or decimals from the app: it names the token by its covenant
   // id and reads it on the scale the order itself names
-  expect(shown.orders[0]!.rows).toMatchObject({ Amount: expect.stringMatching(/^2 [0-9a-f]{8}…[0-9a-f]{8}$/), 'Limit price': expect.stringMatching(/^0.027 KAS per [0-9a-f]{8}…[0-9a-f]{8}$/) });
-  expect(shown.orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} [(]8 decimals, from its price scale[)]$/);
+  // the unit is the plain word "token"; the token is named once, by its whole id (founder 2026-11-12)
+  expect(shown.orders[0]!.rows).toMatchObject({ Amount: '2 token', 'Limit price': '0.027 KAS per token' });
+  expect(shown.orders[0]!.token).toMatch(/^[0-9a-f]{64} [(]8 decimals, from its price scale[)]/);
   const placed = await placedBy(mock, await waitSubmitted(page));
   expect(shown.fee).toBe(feeText(placed.submission.fee));
   expect(placed.views[0].contract).toBe('KobAsk');
