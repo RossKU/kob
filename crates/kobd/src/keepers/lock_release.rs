@@ -166,7 +166,10 @@ fn build_one(d: &DueLock, k: &KeyUtxo, limits: ReleaseLimits, signer: &dyn Signe
     if built.sign.iter().any(|s| s.pubkey != signer.pubkey()) {
         return Err("the release asks a signature of another key".into());
     }
-    let back = built.tx.outputs.get(2).map(|o| o.value).unwrap_or(0);
+    // Output 2 counts only when it pays the operator's own P2PK script with no covenant: a release whose
+    // output 2 pays anyone else returns nothing to the operator and is skipped (R8F3-3).
+    let own = crate::matcher::wallet::p2pk_spk_string(&signer.pubkey());
+    let back = built.tx.outputs.get(2).filter(|o| o.script_public_key == own && o.covenant.is_none()).map(|o| o.value).unwrap_or(0);
     let profit = back as i64 - k.utxo.amount as i64;
     if profit < 0 {
         return Err(format!("the release would cost the operator {}", -profit));
