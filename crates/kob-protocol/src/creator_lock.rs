@@ -231,8 +231,15 @@ pub struct VerifiedLock {
     pub extension_commitment: [u8; 32],
     /// The token's supply (the sum of its genesis outputs), when every token output's state is
     /// proven.
+    ///
+    /// It is `None` too when the genesis holds a second extension class ([`VerifiedLock::other_class`]):
+    /// a share of supply across classes would count units that never trade as the token.
     #[serde(with = "crate::json::field")]
     pub supply: Option<u64>,
+    /// The genesis holds units of another extension class than the token's (the class of its first
+    /// proven output, which `amount` and `supply` count alone, R8F1b-1). Apps say so and show no
+    /// share of supply.
+    pub other_class: bool,
     /// An automatic lock's coin: the genesis's plain KAS output at the lock's address.
     pub coin: Option<LockedOutput>,
 }
@@ -352,16 +359,23 @@ pub fn verify_genesis_lock(
         let mut supply: u128 = 0;
         let mut amount: u128 = 0;
         let mut outputs = vec![];
-        let mut ext = [0u8; 32];
+        // The token's class is that of its first proven output: units of another class under the same
+        // covenant id never trade as the token (every order pins its class), so they count neither in
+        // the lock nor in the supply (R8F1b-1).
+        let mut class: Option<[u8; 32]> = None;
+        let mut other_class = false;
         for &k in &token_outputs {
             let Some(at) = scripts.iter().position(|s| *s == genesis.outputs[k].script_public_key) else { continue };
             proven += 1;
+            if *class.get_or_insert(states[at].extension()) != states[at].extension() {
+                other_class = true;
+                continue;
+            }
             let a = states[at].amount().max(0) as u128;
             supply += a;
             if let TokenState::Kcc20(s) = &states[at] {
                 if holds(s) && s.amount > 0 {
                     amount += a;
-                    ext = s.extension_commitment;
                     outputs.push(LockedOutput { index: k as u32, amount: s.amount as u64, value: genesis.outputs[k].value });
                 }
             }
@@ -370,7 +384,11 @@ pub fn verify_genesis_lock(
             continue;
         }
         if outputs.is_empty() {
-            return Err("no genesis output is held by the lock".into());
+            return Err(if other_class {
+                "no genesis output of the token's class is held by the lock (the genesis holds another extension class)".into()
+            } else {
+                "no genesis output is held by the lock".into()
+            });
         }
         let coin = match auto {
             None => None,
@@ -396,8 +414,9 @@ pub fn verify_genesis_lock(
             amount: u64::try_from(amount).map_err(|_| "the locked amount overflows")?,
             outputs,
             program: tid,
-            extension_commitment: ext,
-            supply: (proven == token_outputs.len()).then(|| u64::try_from(supply).ok()).flatten(),
+            extension_commitment: class.unwrap_or_default(),
+            supply: (proven == token_outputs.len() && !other_class).then(|| u64::try_from(supply).ok()).flatten(),
+            other_class,
             coin,
         });
     }

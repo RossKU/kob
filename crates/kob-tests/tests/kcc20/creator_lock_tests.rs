@@ -437,3 +437,68 @@ fn entry(u: &Utxo, spk: kaspa_consensus_core::tx::ScriptPublicKey) -> UtxoEntry 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
+
+/// R8F1b-1: a genesis whose locked output carries another extension class than the token's (the class of its first
+/// proven output) does not count in the lock or the supply: the lock of a class that never trades is not "a share of
+/// supply locked". The verified lock says that a second class exists, and shows no supply.
+#[test]
+fn a_lock_of_a_second_extension_class_is_not_counted() {
+    use kaspa_consensus_core::hashing::covenant_id::covenant_id;
+    use kaspa_consensus_core::tx::CovenantBinding;
+    const E2: [u8; 32] = [0x5e; 32];
+    for program in [IssueProgram::PublicMint, IssueProgram::Ref3x3] {
+        let l = launch(program);
+        let g = &l.plan.genesis;
+        let tpl = kob_protocol::artifacts::token_template(l.program);
+        // the locked output (1) becomes 99x the free supply of class E2, under a recomputed token id
+        let mut tx = g.tx.clone();
+        let big = TokenState::Kcc20(l.lock.state(99 * FREE as i64, E2));
+        let own_spk = tx.outputs[1].script_public_key.clone();
+        tx.outputs[1].script_public_key = big.spk_with(tpl);
+        let mut states = kob_protocol::genesis_states::decode(&tx.payload).unwrap();
+        let at = states.iter().position(|b| TokenState::decode_with(tpl, b).unwrap().spk_with(tpl) == own_spk).unwrap();
+        states[at] = big.encode();
+        tx.payload = kob_protocol::genesis_states::encode(&states).unwrap();
+        let auth = tx.outputs[0].covenant.unwrap().authorizing_input;
+        let group: Vec<(u32, TransactionOutput)> = tx
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.covenant.is_some_and(|b| b.authorizing_input == auth))
+            .map(|(k, o)| (k as u32, o.clone()))
+            .collect();
+        let id = covenant_id(tx.inputs[auth as usize].previous_outpoint, group.iter().map(|(k, o)| (*k, o)));
+        for (k, _) in &group {
+            tx.outputs[*k as usize].covenant = Some(CovenantBinding::new(auth, id));
+        }
+        let e = verify_genesis_lock(&tx, id, &l.lock, LockKind::Manual).unwrap_err();
+        assert!(e.contains("another extension class"), "{e}");
+        // a lock of the token's own class next to a second class: counted alone, and no share of supply is given
+        let mut tx2 = g.tx.clone();
+        let stray = TokenState::Kcc20(Kcc20State::p2pk(5 * FREE as i64, key(), E2));
+        tx2.outputs.push(TransactionOutput::with_covenant(
+            tx2.outputs[0].value,
+            stray.spk_with(tpl),
+            Some(CovenantBinding::new(auth, g.covenant_id)),
+        ));
+        let mut states2 = kob_protocol::genesis_states::decode(&tx2.payload).unwrap();
+        states2.push(stray.encode());
+        tx2.payload = kob_protocol::genesis_states::encode(&states2).unwrap();
+        let group2: Vec<(u32, TransactionOutput)> = tx2
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.covenant.is_some_and(|b| b.authorizing_input == auth))
+            .map(|(k, o)| (k as u32, o.clone()))
+            .collect();
+        let id2 = covenant_id(tx2.inputs[auth as usize].previous_outpoint, group2.iter().map(|(k, o)| (*k, o)));
+        for (k, _) in &group2 {
+            tx2.outputs[*k as usize].covenant = Some(CovenantBinding::new(auth, id2));
+        }
+        let lock = verify_genesis_lock(&tx2, id2, &l.lock, LockKind::Manual).unwrap();
+        assert_eq!((lock.amount, lock.supply, lock.other_class), (LOCKED, None, true));
+        // the genesis as issued: one class
+        let lock = verify_genesis_lock(&g.tx, g.covenant_id, &l.lock, LockKind::Manual).unwrap();
+        assert_eq!((lock.amount, lock.supply, lock.other_class), (LOCKED, Some(FREE + LOCKED), false));
+    }
+}
