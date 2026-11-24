@@ -107,6 +107,7 @@ CANCEL
   --fee-rate    sompi per gram (default 100)
   --allow-high-fee  pay a fee above the ceiling (default: a cancel paying more than 4 times the node's fee estimate on its mass is
                 refused: status `refused`, code FEE_ABOVE_CEILING, exit 1)
+  --max-fee     the most the cancel may pay in fees, in KAS (default 0.5KAS; no node estimate raises it)
   --priority-fee  also pay for the storage mass (KIP-9), as the web app's \"Pay the priority fee\": a higher fee, worth it only when blocks are
                 contended (charged at --fee-rate on the storage-inclusive mass)
   --out-dir     write <covenant id>.cancel.json (the signed transaction and its submitRequest) here
@@ -203,6 +204,7 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
             "--cancel" => a.cancel = true,
             k if crate::token::is_removed_key_flag(k) => return Err(crate::token::KEY_FLAG_REMOVED.into()),
             "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
+            "--max-fee" => crate::feecap::max_fee_arg(Some(&val("--max-fee")?))?,
             "--allow-high-fee" => a.allow_high_fee = true,
             "--dry-run" => a.dry_run = true,
             "--yes" | "-y" => a.yes = true,
@@ -1065,7 +1067,11 @@ fn summary(report: &Value, a: &Args) {
         }
     }
     for r in report["rejected"].as_array().into_iter().flatten() {
-        eprintln!("rejected    {}: {}", r["source"].as_str().unwrap_or(""), r["reason"].as_str().unwrap_or(""));
+        eprintln!(
+            "rejected    {}: {}",
+            crate::text::clean_long(r["source"].as_str().unwrap_or(""), 400),
+            crate::text::clean_long(r["reason"].as_str().unwrap_or(""), 400)
+        );
     }
     let s = &report["summary"];
     eprintln!(

@@ -143,7 +143,7 @@ pub fn subscribed(frame: &Value) -> (Vec<String>, Vec<String>) {
         frame
             .pointer(&format!("/data/{k}"))
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(crate::text::clean)).collect())
             .unwrap_or_default()
     };
     (list("channels"), list("errors"))

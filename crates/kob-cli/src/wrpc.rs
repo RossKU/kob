@@ -135,7 +135,8 @@ pub enum Reply {
 
 /// Interpret one text frame for request `id`.
 pub fn parse_reply(text: &str, id: u64) -> Result<Reply, WrpcError> {
-    let v: Value = serde_json::from_str(text).map_err(|e| WrpcError::Protocol(format!("not JSON ({e}): {text}")))?;
+    let v: Value = serde_json::from_str(text)
+        .map_err(|e| WrpcError::Protocol(format!("not JSON ({e}): {}", crate::text::clean_long(text, 400))))?;
     if v.get("id").and_then(Value::as_u64) != Some(id) {
         return Ok(Reply::Other);
     }
@@ -149,7 +150,7 @@ pub fn parse_reply(text: &str, id: u64) -> Result<Reply, WrpcError> {
     }
     match v.get("params") {
         Some(p) => Ok(Reply::Ok(p.clone())),
-        None => Err(WrpcError::Protocol(format!("response without params or error: {text}"))),
+        None => Err(WrpcError::Protocol(format!("response without params or error: {}", crate::text::clean_long(text, 400)))),
     }
 }
 
@@ -178,6 +179,11 @@ enum Link {
 impl Conn {
     /// Connect to `url` (`ws://host:port`, JSON wRPC port: 18110 mainnet, 18210 testnet-10).
     pub fn connect(url: &str, timeout: Duration) -> Result<Conn, WrpcError> {
+        if crate::nodelink::bridge::is_borsh_url(url) && url.starts_with("ws://") {
+            if let Some(host) = url.trim_start_matches("ws://").split(['/', '?']).next().and_then(|a| a.rsplit('@').next()) {
+                warn_plain(host.rsplit_once(':').map_or(host, |h| h.0));
+            }
+        }
         if crate::nodelink::bridge::is_borsh_url(url) {
             return Ok(Conn { link: Link::Borsh(crate::nodelink::client::BorshConn::connect(url, timeout)?), next_id: 1 });
         }
@@ -186,6 +192,7 @@ impl Conn {
         // socket with the same timeouts.
         if let Some(plain) = plain_target(url) {
             let t = plain.map_err(WrpcError::Socket)?;
+            warn_plain(&t.host);
             let stream = crate::tls::connect(false, &t.host, t.port, timeout)
                 .map_err(|e| WrpcError::Socket(format!("cannot connect to the node {} ({e})", shown(url))))?;
             let crate::tls::Stream::Plain(tcp) = stream else { unreachable!("a plain connection") };
@@ -264,6 +271,27 @@ impl Conn {
 }
 
 /// One-shot call: connect, send one request, return the response `params`.
+/// [`call`] asked of each node behind `url`: both nodes of the default pair, else the one node the
+/// user named (who is then trusted for it).
+/// One warning line per run when a node is reached over plain `ws://` on a host that is not this computer (R9FC-6):
+/// what it says (and any credential in the URL) is readable and changeable on the way.
+fn warn_plain(host: &str) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let h = host.trim_start_matches('[').trim_end_matches(']');
+    let loopback = h.eq_ignore_ascii_case("localhost") || h.parse::<std::net::IpAddr>().is_ok_and(|a| a.is_loopback());
+    if !loopback {
+        ONCE.call_once(|| eprintln!("warning: the node {} is reached over plain ws:// (not encrypted): anyone on the way can read and change its answers; use wss://", crate::text::clean_long(h, 200)));
+    }
+}
+
+pub fn call_each(url: &str, method: &str, params: Value, timeout: Duration) -> Result<Vec<Value>, WrpcError> {
+    if let Some(net) = crate::nodelink::resolver::network_of(url) {
+        return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::call_both(io, method, params, timeout))
+            .map(|[a, b]| vec![a, b]);
+    }
+    call(url, method, params, timeout).map(|v| vec![v])
+}
+
 pub fn call(url: &str, method: &str, params: Value, timeout: Duration) -> Result<Value, WrpcError> {
     if let Some(net) = crate::nodelink::resolver::network_of(url) {
         return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::call_any(io, method, params, timeout));

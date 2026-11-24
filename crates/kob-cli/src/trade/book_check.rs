@@ -126,6 +126,9 @@ struct Confirmed {
     tip: i64,
     min_fill: i64,
     scale: i64,
+    /// The price the order trades at now (`price_at` of its confirmed state at the clock), not the
+    /// start of its schedule (R9FC2-2).
+    now: i64,
     /// A curve's levels left: table index, price, base units.
     levels: Option<Vec<(usize, i64, i64)>>,
 }
@@ -239,7 +242,15 @@ fn judge(
     // A bid has no custody: its amount is believed up to what its confirmed KAS buys at its price.
     let cap = if price > 0 { (node_order.amount as i128 * s.scale() as i128 / price as i128).min(i64::MAX as i128) as i64 } else { 0 };
     let amount = custody.unwrap_or_else(|| i64_of(row.get("amount_left")).unwrap_or(1).min(cap));
-    Ok(Some(Confirmed { amount, tip, min_fill, scale: s.scale(), levels: curve }))
+    // An auction (crossing limit, Dutch, rising bid, TWAP / DCA slice) trades at its price now: the level is that
+    // price, from the confirmed state at the clock (R9FC2-2). The row's `price` is checked above only as identity.
+    let u = node_order.daa.min(i64::MAX as u64) as i64;
+    let now = match s {
+        AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.price_at(daa, u).ok_or("changed")?,
+        AnyState::KobBid(x) | AnyState::KobBidKron(x) => x.price_at(daa, u).ok_or("changed")?,
+        _ => price,
+    };
+    Ok(Some(Confirmed { amount, tip, min_fill, scale: s.scale(), now, levels: curve }))
 }
 
 /// The book of `m` at the clock `daa`, with the orders the node does not confirm left out.
@@ -332,8 +343,7 @@ impl SideCheck {
         self.confirmed += 1;
         let Some(levels) = &x.levels else {
             self.depth = self.depth.saturating_add(x.amount);
-            let price = i64_of(row.get("price")).unwrap_or(0);
-            self.kept.push(BookOrder { price, amount: x.amount, tip: x.tip, min_fill: Some(x.min_fill) });
+            self.kept.push(BookOrder { price: x.now, amount: x.amount, tip: x.tip, min_fill: Some(x.min_fill) });
             return;
         };
         // A curve: each level row counts at the price its confirmed state gives that level, at

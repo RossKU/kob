@@ -80,6 +80,34 @@ pub fn finish(c: &Common, signer: &Signer, mut r: Ready, units: &Units, argv_hin
     if let Some(m) = crate::feecap::Ceiling::from_answer(estimate.as_ref(), c.allow_high_fee).violation_of(&r.built) {
         r.issues.push(super::plan::error(crate::feecap::CODE, m));
     }
+    // Token facts from a registry file replace the build's (its review status, decimals, class, genesis check): said on
+    // every signing screen, and on mainnet signed only with --ack-registry-file (R9FC2-3).
+    if let Some(f) = &c.registry {
+        let name = crate::text::clean_long(&f.display().to_string(), 200);
+        if c.network == "mainnet" && !c.ack_registry_file {
+            r.issues.push(super::plan::error(
+                "REGISTRY_FILE_UNACKNOWLEDGED",
+                format!("token data from {name}, not the built-in registry: on mainnet pass --ack-registry-file to sign with it"),
+            ));
+        } else {
+            r.issues.push(super::plan::issue(
+                "REGISTRY_FILE",
+                super::plan::Severity::Warning,
+                format!("token data from {name}, not the built-in registry"),
+            ));
+        }
+    }
+    // A holdings list cut by its length (an outsider can lengthen it with dust): the plan used what was read, and says so (R9T-1).
+    for (cov, why) in super::data::take_cut_lists() {
+        r.issues.push(super::plan::issue(
+            "TOKEN_LIST_INCOMPLETE",
+            super::plan::Severity::Warning,
+            format!(
+                "your token UTXOs of {} were read only in part ({why}): the plan uses the ones read, each confirmed on the node",
+                to_hex(&cov)
+            ),
+        ));
+    }
     // The custody rules, checked on the transaction itself, independent of the builder (R8FX2-6).
     for m in show::custody_issues(&r.built) {
         r.issues.push(super::plan::error("CUSTODY_RULE", m));

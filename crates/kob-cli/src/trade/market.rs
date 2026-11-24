@@ -130,7 +130,7 @@ impl TokenMarket {
         if !program.is_token() {
             return Err(format!("{} is not a token program", program.name()));
         }
-        if decimals > 18 {
+        if decimals > MAX_DECIMALS {
             return Err(format!("{ticker}: decimals {decimals} out of range"));
         }
         let t = token_template(program);
@@ -356,6 +356,10 @@ pub fn declared_from_proof(cov: &[u8; 32], proof: &serde_json::Value) -> Result<
 ///
 /// A declared symbol equal to one of them in any case would make `2base` mean something other than
 /// base units, so it is no ticker.
+/// The most decimals a token may have (10^18 base units per whole token fit an i64 price scale): the bound of the
+/// markets and of every decimals an indexer row names (R9FC2-4).
+pub const MAX_DECIMALS: u32 = 18;
+
 const RESERVED_UNITS: [&str; 6] = ["base", "tok", "token", "tokens", "kas", "sompi"];
 
 /// A declared symbol as a ticker, when amounts can name it (`12.5SYM`).
@@ -428,7 +432,9 @@ pub fn indexer_tokens(v: &serde_json::Value) -> Result<Vec<TokenFacts>, String> 
                 // resolved here, with the checks against the scale of the market.
                 decimals: match t.get("decimals_source").and_then(|s| s.as_str()) {
                     Some("declaration" | "program") => None,
-                    _ => t.get("decimals").and_then(|d| d.as_u64()).map(|d| d as u32),
+                    // bounded where indexer rows are parsed (R9FC2-4): above the protocol's 18 decimals a value is no
+                    // decimals at all (unknown), never a wrapped or panicking unit
+                    _ => t.get("decimals").and_then(|d| d.as_u64()).filter(|d| *d <= MAX_DECIMALS as u64).map(|d| d as u32),
                 },
                 tpl_hash: h(t.get("template_hash")),
                 ext: h(t.get("extension_commitment")),

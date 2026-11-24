@@ -329,6 +329,13 @@ pub fn run(args: &[String]) -> i32 {
         };
         let m = market::resolve_with(key, &reg, &idx, Some(&open))?;
         let utxos = data::token_utxos(indexer, node, &c.network, &m, &signer.pubkey)?;
+        // a list cut by its length merges what was read: run it again for the rest (R9T-1)
+        for (cov, why) in data::take_cut_lists() {
+            eprintln!(
+                "note: your token UTXOs of {} were read only in part ({why}): this merges the ones read; run it again for the rest",
+                to_hex(&cov)
+            );
+        }
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
         let fee = c.fee_options();
         let links = plan(&m, &signer.pubkey, &utxos, &funding, &fee)?;

@@ -223,11 +223,16 @@ USAGE
   kob replace <COVENANT_ID> [--price P] [--amount AMOUNT] [--tip T] [--stop P] [--stop-limit P] [--add-kas KAS]
                             [--renew | --gtd WHEN]
   kob replace <COVENANT_ID> [...] [--take-profit P] [--exit-tip T] [--entry-stop P] [--trail-step P] [--trail-gap P]
-                            [--carrier KAS] [--ack-no-guards]
+                            [--carrier KAS] [--crossing reject|limit] [--ack-no-guards]
 
   plain limit orders (KobAsk / KobBid): --price, --tip, --amount (a sell; a buy keeps its KAS budget: --add-kas tops it
-  up), --renew (a fresh 90-day expiry) or --gtd WHEN (a new expiry). A sell that keeps its amount, or a buy, is amended
-  IN PLACE: same covenant id, the custody stays where it is, the order's own KAS pays the fee. Otherwise the order is
+  up), --renew (a fresh 90-day expiry) or --gtd WHEN (a new expiry). With --price the order trades at exactly that
+  price from then on: an order stored as an auction (a limit that crossed at placement, a Dutch sell, a rising bid)
+  becomes a fixed-price order at it (the screen shows the price it trades at, before and after); a TWAP / DCA with
+  auction slices is refused (cancel and place). A new price that crosses the node-checked book is refused, or with
+  --crossing limit fills at itself (a matcher keeps the difference); without a book it needs --ack-no-guards.
+  A sell that keeps its amount, or a buy, is amended IN PLACE: same covenant id, the custody stays where it is, the
+  order's own KAS pays the fee. Otherwise the order is
   cancelled and the replacement placed in the same transaction (custody, strays and any top-up tokens move to the new
   order). A cancel-replace ends the old covenant id, so it is refused while the order owns strays of other tokens or of
   another extension commitment: run `kob sweep <id>` first. Every changed term is listed, old and new; a re-planned order
@@ -306,6 +311,126 @@ fn active_from_of(s: &AnyState) -> i64 {
     }
 }
 
+/// `kob replace --price P` of a plain order (R9FC2-1): from then on it trades at exactly P.
+///
+/// An order stored as an auction (a limit that crossed at placement, a Dutch sell, a rising bid) keeps its start in
+/// `price` and its limit in `price_end`, with a slope from an origin long past: changing `price` alone would leave it
+/// trading at the old limit. So the amended order is a plain fixed-price order, with the schedule of a freshly placed
+/// limit ([`FIXED_PRICE`](super::plan::FIXED_PRICE)): price P, no slope, no end. A not-yet-active order keeps its
+/// activation; one already active has none, as a placed limit. A TWAP / DCA whose slices are auctions (`interval > 0`
+/// with a slope) is refused: each slice would still run its own auction from P, so it is cancelled and placed again.
+#[allow(clippy::too_many_arguments)]
+fn set_fixed_price(
+    price: &mut i64,
+    slope: &mut i64,
+    price_end: &mut i64,
+    decay_step: &mut i64,
+    active_from: &mut i64,
+    interval: i64,
+    p: i64,
+    now_daa: i64,
+) -> Result<Option<String>, String> {
+    if interval > 0 && *slope != 0 {
+        return Err("a TWAP / DCA whose slices are auctions cannot be given a new price in place: each slice would still 
+                    run its own auction from it. Cancel it and place it again"
+            .into());
+    }
+    let f = super::plan::FIXED_PRICE;
+    let note = (*slope != 0).then(|| {
+        "this order was an auction (its price moving towards its limit): with --price it becomes a fixed-price order that 
+         trades at exactly the new price from now on"
+            .to_string()
+    });
+    *price = p;
+    (*slope, *price_end, *decay_step) = (f.slope, f.price_end, f.decay_step);
+    if *active_from <= now_daa {
+        *active_from = 0;
+    }
+    Ok(note)
+}
+
+/// The price a plain order trades at, at DAA `t` (`price_at` of its state; `utxo_daa` is its UTXO's DAA score), and
+/// whether it moves (an auction or slices), for the screens (R9FC2-1).
+pub fn trades_at(s: &AnyState, t: i64, utxo_daa: i64) -> Option<(i64, bool)> {
+    match s {
+        AnyState::KobAsk(x) | AnyState::KobAskKron(x) => Some((x.price_at(t, utxo_daa)?, x.slope != 0)),
+        AnyState::KobBid(x) | AnyState::KobBidKron(x) => Some((x.price_at(t, utxo_daa)?, x.slope != 0)),
+        _ => None,
+    }
+}
+
+/// The price a plain order trades at now, before and after the replace, and its schedule when it has one: the screen
+/// never shows a `price` that is not the trading price (R9FC2-1).
+fn trade_lines(live: &Live, rep: &AnyState, now: i64, u: &TokenUnit) -> Vec<String> {
+    let px = |x: i64, s: &AnyState| units::price_per_whole(x, u, s.scale(), units::KAS_DECIMALS, "KAS");
+    let shown = |s: &AnyState, utxo_daa: i64| -> Option<String> {
+        let (q, moves) = trades_at(s, now, utxo_daa)?;
+        let limit = match s {
+            AnyState::KobAsk(x) | AnyState::KobAskKron(x) if moves => Some((x.price, x.price_end)),
+            AnyState::KobBid(x) | AnyState::KobBidKron(x) if moves => Some((x.price, x.price_end)),
+            _ => None,
+        };
+        Some(match limit {
+            Some((start, end)) => format!("{} now (an auction from {} to its limit {})", px(q, s), px(start, s), px(end, s)),
+            None => format!("{} (a fixed price)", px(q, s)),
+        })
+    };
+    let mut v = vec![];
+    if let Some(t) = shown(&live.order.state, live.order.utxo.block_daa_score as i64) {
+        v.push(format!("trades at, before: {t}"));
+    }
+    if let Some(t) = shown(rep, now) {
+        v.push(format!("trades at, after: {t}"));
+    }
+    v
+}
+
+/// The crossing rule of `kob replace --price` (R9FC2-1): a new price that crosses the node-checked book is refused
+/// (`--crossing reject`, the default) or kept as a fixed price that fills at itself, the matcher keeping the difference
+/// (`--crossing limit`). An amend is never turned into an auction: its price is the one given. Without a book the
+/// amend needs `--ack-no-guards`, as a placement.
+#[allow(clippy::too_many_arguments)]
+fn amend_crossing(
+    c: &Common,
+    node: &str,
+    indexer: &str,
+    m: &TokenMarket,
+    rep: &AnyState,
+    price: i64,
+    now: i64,
+    crossing: super::plan::Crossing,
+    ack_no_guards: bool,
+) -> Result<Vec<Issue>, Fail> {
+    let (side, tip) = match rep {
+        AnyState::KobAsk(x) | AnyState::KobAskKron(x) => (Side::Sell, x.tip),
+        AnyState::KobBid(x) | AnyState::KobBidKron(x) => (Side::Buy, x.tip),
+        _ => return Ok(vec![]),
+    };
+    let Some(v) = super::book_check::verified_book(indexer, node, &c.network, m, now, 0, false)? else {
+        if ack_no_guards {
+            return Ok(vec![issue(
+                "GUARDS_UNAVAILABLE_ACKNOWLEDGED",
+                Severity::Warning,
+                "amended without the crossing check (the indexer did not answer for the book)",
+            )]);
+        }
+        return Err("the book could not be checked for the new price (the indexer did not answer): pass --ack-no-guards to amend without the crossing check".into());
+    };
+    let Some(t) = super::plan::crossing_touch(&v.book, side, price, tip) else { return Ok(vec![]) };
+    match crossing {
+        super::plan::Crossing::Limit => Ok(vec![issue(
+            "MARKETABLE_LIMIT_FILLS_AT_LIMIT",
+            Severity::Warning,
+            format!("the new price crosses the market (best {} at {t}): it fills at your price; a matcher keeps the difference", if side == Side::Sell { "bid" } else { "ask" }),
+        )]),
+        _ => Err(format!(
+            "the new price crosses the market (best {} at {t}): refused, nothing signed. Pass --crossing limit to fill at your price (a matcher keeps the difference), or cancel and place it (a crossing placement starts as an auction)",
+            if side == Side::Sell { "bid" } else { "ask" }
+        )
+        .into()),
+    }
+}
+
 /// The replacement state and the KAS that it holds (`amend.ts` `buildReplacement`).
 pub fn replacement(live: &Live, i: &AmendInput, now_daa: i64, tick: i64) -> Result<(AnyState, i64, Vec<String>), String> {
     let value = live.order.utxo.amount as i64;
@@ -345,7 +470,18 @@ pub fn replacement(live: &Live, i: &AmendInput, now_daa: i64, tick: i64) -> Resu
                     if i.add_kas > 0 {
                         return Err("only a buy order takes --add-kas".into());
                     }
-                    x.price = on_tick("the price", i.price.unwrap_or(x.price))?;
+                    if let Some(p) = i.price {
+                        notes.extend(set_fixed_price(
+                            &mut x.price,
+                            &mut x.slope,
+                            &mut x.price_end,
+                            &mut x.decay_step,
+                            &mut x.active_from,
+                            x.interval,
+                            on_tick("the price", p)?,
+                            now_daa,
+                        )?);
+                    }
                     x.tip = i.tip.unwrap_or(x.tip);
                     if x.tip < 0 || x.tip >= x.price {
                         return Err("the tip must be at least zero and below the price".into());
@@ -361,7 +497,18 @@ pub fn replacement(live: &Live, i: &AmendInput, now_daa: i64, tick: i64) -> Resu
                             "a buy order keeps its KAS budget: the amount follows from the price (top it up with --add-kas)".into()
                         );
                     }
-                    x.price = on_tick("the price", i.price.unwrap_or(x.price))?;
+                    if let Some(p) = i.price {
+                        notes.extend(set_fixed_price(
+                            &mut x.price,
+                            &mut x.slope,
+                            &mut x.price_end,
+                            &mut x.decay_step,
+                            &mut x.active_from,
+                            x.interval,
+                            on_tick("the price", p)?,
+                            now_daa,
+                        )?);
+                    }
                     x.tip = i.tip.unwrap_or(x.tip);
                     if x.tip < 0 {
                         return Err("the tip cannot be negative".into());
@@ -537,6 +684,13 @@ pub fn build_replace(
         });
         return Ok((built, true, notes));
     }
+    if live.unlisted > 0 {
+        return Err(format!(
+            "the indexer counts {} stray UTXO(s) of this order that it does not list; a cancel-replace would leave them locked for ever: run `kob sweep {}` first, then replace",
+            live.unlisted,
+            to_hex(&live.cov)
+        ));
+    }
     if live.foreign > 0 {
         return Err(format!(
             "the order's covenant id owns {} stray UTXO(s) of other tokens, which a cancel-replace would leave locked for ever: run `kob sweep {}` first (the order stays live and they come back to you), then replace",
@@ -660,6 +814,7 @@ const REPLACE_VALUE_FLAGS: &[&str] = &[
     "--entry-stop",
     "--carrier",
     "--gtd",
+    "--crossing",
 ];
 
 /// Runs `kob replace`.
@@ -713,9 +868,28 @@ pub fn run_replace(args: &[String]) -> i32 {
         if input == AmendInput::default() && gtd.is_none() {
             return Err("nothing to change: give --price, --amount, --tip, --stop, --stop-limit, --add-kas, --renew or --gtd".into());
         }
-        let clock = data::clock(node)?;
+        // R9FC-1: never below the order's own UTXO; a new expiry needs the indexer's witness to agree
+        let clock = data::indexer_witness(indexer, data::clock(node)?.at_least([live.order.utxo.block_daa_score as i64]));
+        if clock.disputed && gtd.is_some() {
+            return Err("the node's and the indexer's view of the chain's time disagree: a new expiry is not set (try again)".into());
+        }
         let input = AmendInput { gtd: gtd.map(|w| gtd_daa(&clock, w)), ..input };
         let (rep, value, mut notes) = replacement(&live, &input, clock.daa, m.tick)?;
+        let mut cross_issues = vec![];
+        if let (Some(want), Some(now)) = (input.price, trades_at(&rep, clock.daa, clock.daa)) {
+            // R9FC2-1: the amended order trades at exactly the price given, from now on: checked on the state itself.
+            if now != (want, false) {
+                return Err("the amended order would not trade at the price given: nothing signed".into());
+            }
+            let crossing = match p.get("--crossing") {
+                None | Some("reject") => super::plan::Crossing::Reject,
+                Some("limit") => super::plan::Crossing::Limit,
+                Some(_) => {
+                    return Err(usage("--crossing of an amend is reject (the default) or limit; for an auction, cancel and place"))
+                }
+            };
+            cross_issues = amend_crossing(&c, node, indexer, m, &rep, want, clock.daa, crossing, p.has("--ack-no-guards"))?;
+        }
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
         let token_utxos = if rep.custodies().iter().any(|x| x.1 > 0) {
             data::token_utxos(indexer, node, &c.network, m, &signer.pubkey)?
@@ -736,7 +910,9 @@ pub fn run_replace(args: &[String]) -> i32 {
             lines.extend(super::place::leg_lines(&l, &px).into_iter().map(|l| format!("  {l}")));
         }
         lines.extend(changed_lines(&live.order.state, &rep, m, None));
+        lines.extend(trade_lines(&live, &rep, clock.daa, &u));
         let mut issues: Vec<Issue> = notes.into_iter().map(|n| issue("REPLACE_NOTE", Severity::Info, n)).collect();
+        issues.extend(cross_issues);
         issues.extend(ms.iter().filter_map(|m| m.listing_issue(true)));
         Ok((
             Ready {
@@ -843,7 +1019,7 @@ fn replan_replace(
     if ch == Changes::default() && p.get("--carrier").is_none() && gtd.is_none() {
         return Err("nothing to change: give a new price, stop, amount, tip, trail, --carrier, --renew or --gtd".into());
     }
-    let clock = data::clock(node)?;
+    let clock = data::indexer_witness(c.need_indexer()?, data::clock(node)?.at_least([live.order.utxo.block_daa_score as i64]));
     let expiry = s.expiry().map(|e| e.0).unwrap_or(0);
     // `--gtd` dates the replacement; the plan checks it as it checks `kob place --gtd`.
     let lifetime = match gtd {
@@ -1000,7 +1176,7 @@ fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
             }
             Ok(parsed) => {
                 for r in &parsed.rejected {
-                    eprintln!("rejected {}: {}", r.source, r.reason);
+                    eprintln!("rejected {}: {}", crate::text::clean_long(&r.source, 400), crate::text::clean_long(&r.reason, 400));
                     code = 1;
                 }
                 sources.extend(parsed.views.into_iter().map(|v| Source::View(Box::new(v))));
@@ -1148,7 +1324,7 @@ pub fn run_refund(args: &[String]) -> i32 {
         let node = c.need_node()?;
         let indexer = c.need_indexer()?;
         let live = data::live_order(indexer, node, &c.network, &cov)?;
-        let clock = data::clock(node)?;
+        let clock = data::clock(node)?.at_least([live.order.utxo.block_daa_score as i64]);
         let due = live.order.state.refund_due(live.order.utxo.block_daa_score as i64).ok_or("no refund time")?;
         if due > clock.daa {
             return Err(format!("not refundable before DAA {due} (now {}, about {} s)", clock.daa, (due - clock.daa) / 10).into());
@@ -1644,7 +1820,7 @@ pub fn run_take(args: &[String]) -> i32 {
         if carrier < super::place::MIN_CARRIER {
             return Err(usage("--carrier must be at least 0.08KAS"));
         }
-        let clock = data::clock(node)?;
+        let clock = data::clock(node)?.at_least([live.order.utxo.block_daa_score as i64]);
         let lock = (clock.daa - LOCK_MARGIN_DAA).max(0);
         let u = live.order.utxo.clone();
         let custody = || live.custody.clone().ok_or("the order's custody is unknown");
