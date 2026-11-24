@@ -320,7 +320,8 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
     await expect(appPage.getByTestId('first-order')).toHaveCount(0);
     await expect(appPage.getByTestId('first-order-entered')).toHaveCount(0);
-    await expect(appPage.getByTestId('badge-family')).toHaveAttribute('title', /first order set/);
+    // the scale is the indexer's market scale, said as its word (R9FB3-2)
+    await expect(appPage.getByTestId('badge-family')).toHaveAttribute('title', /the price scale the indexer reports for its market/);
   });
 
   test('an unknown covenant id is reported, not blank', async ({ appPage }) => {

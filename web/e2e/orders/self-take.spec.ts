@@ -269,8 +269,9 @@ test.describe('direct fill by time in force', () => {
     if (process.env.KOB_WM1_SHOT) await page.screenshot({ path: process.env.KOB_WM1_SHOT });
     expect(swept).toBe(true);
     await expect(popup).toHaveCount(0);
-    await expect(toast).toContainText(/^Fill from the book stopped: Filled \d+ EXKCC\. The next fill would pass the worst price shown \(0\.0258\d*\), so the rest is not placed\./);
-    const filled = BigInt(/Filled (\d+) EXKCC/.exec((await toast.textContent()) ?? '')![1]!);
+    // "sent", not "filled": the fills count once a block holds them (R9FB3-4)
+    await expect(toast).toContainText(/^Fill from the book stopped: Sent fills of \d+ EXKCC \(they count once a block holds them\)\. The next fill would pass the worst price shown \(0\.0258\d*\), so the rest is not placed\./);
+    const filled = BigInt(/Sent fills of (\d+) EXKCC/.exec((await toast.textContent()) ?? '')![1]!);
     await expect(page.getByTestId('order-take-step-2')).toHaveAttribute('data-state', 'failed');
     expect(await wallet!.calls()).toHaveLength(1);
     await expect.poll(() => tokensNow(mock)).toBe(before + filled * TOKEN);
