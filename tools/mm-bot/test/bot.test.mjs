@@ -2080,7 +2080,6 @@ test('an exact amend not found at either state stays in flight (R8T-4)', () => {
   bot.resolveInflight(s, { status: 'live', txid: 'f1'.repeat(32) });
   assert.equal(s.inflight.length, 0, 'the node holds it at its own outpoint');
 });
-
 // Round 9: quotes never rest as auctions; the CLI's new refusals are ordinary outcomes.
 test('quotes are placed and amended with --crossing reject; a level through the market waits, not counted as a refusal', { timeout: 120_000 }, async () => {
   reset();
@@ -2136,6 +2135,38 @@ test('a token list read in part is a lower bound, with one alert (R9T-1 at the C
     assert.equal(bot.state.tokenListCut, false);
   } finally {
     delete bot.kob.env.FAKE_KOB_TOKEN_CUT;
+    reset();
+  }
+});
+
+// R9T-2: a full fill that beats an in-place amend of a whole-fill ask frees the level at once.
+test('whole fills: an amend beaten by a full fill is settled on the node at once, and the level is placed again (R9T-2)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, calls } = setup({}, WHOLE);
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 4; i++) await bot.cycle();
+    const a = askIds(bot).sort()[0];
+    // Every amend waits in the mempool; the first ask is then bought in full at its old state.
+    bot.kob.env.FAKE_KOB_PENDING = '1';
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle();
+    delete bot.kob.env.FAKE_KOB_PENDING;
+    assert.ok(bot.state.orders[a].inflight.some((e) => e.kind === 'amend' && e.exact));
+    const c = chain();
+    delete c.orders[a];
+    c.ended[a] = 'filled';
+    c.mempool.amend = c.mempool.amend.filter((x) => x.id !== a); // its amend can never confirm now
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([a]);
+    const placed = places(calls).length;
+    age(bot);
+    await bot.cycle();
+    assert.equal(bot.state.orders[a], undefined, 'ended in the same cycle, not 90 min later');
+    assert.ok(places(calls).length > placed, 'its level is placed again');
+  } finally {
+    delete bot.kob.env.FAKE_KOB_PENDING;
     reset();
   }
 });

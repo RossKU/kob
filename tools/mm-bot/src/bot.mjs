@@ -434,7 +434,7 @@ export class Bot {
    * 'unknown', why }. An order whose amend was not seen is looked up under its state before the
    * amend as well.
    */
-  async nodeCheck(ids, hints = {}) {
+  async nodeCheck(ids, hints = {}, only = null) {
     const out = new Map(ids.map((id) => [id, { status: 'unknown', why: 'no record or template to look it up by' }]));
     const pass = async (list, pick, k) => {
       const prev = k > 0;
@@ -458,8 +458,8 @@ export class Bot {
     };
     // Every state the order can be in (statesOf): its own, the one before an amend not yet seen,
     // and those of the bot's transactions on it still in flight (R7T-1), one call each.
-    await pass(ids, (s) => s.own?.state, 0);
-    for (let k = 1; ; k++) {
+    await pass(ids, only ?? ((s) => s.own?.state), 0);
+    for (let k = 1; !only; k++) {
       const more = ids.filter((id) => out.get(id).status === 'gone' && this.statesOf(this.state.orders[id]).length > k);
       if (!more.length) break;
       const first = new Map(more.map((id) => [id, out.get(id)]));
@@ -711,6 +711,28 @@ export class Bot {
       if (r.status === 'live') return !(e.kind === 'place' || r.txid === e.txid || (e.input && r.txid !== e.input));
       return true;
     });
+  }
+
+  /**
+   * An exact in-place amend in flight whose order the node no longer shows (R9T-2: a full fill beat
+   * it): its input state is looked up first, then its own. Not found at its input, the order's
+   * outpoint is spent; still not found at its own state after that, the amend did not make it (it
+   * would have to be on the node by then), so it can never land, and the entry is settled at once.
+   * Read in this order, a confirmation between the two calls is found (R8T-4).
+   */
+  async settleBeatenAmends(id, s, tag) {
+    for (const e of (s.inflight ?? []).filter((x) => x.kind === 'amend' && x.exact && x.state && x.from)) {
+      if ((await this.lookAt(id, e.from)) !== 'gone') continue;
+      if ((await this.lookAt(id, e.state)) !== 'gone') continue;
+      s.inflight = s.inflight.filter((x) => x !== e);
+      this.log.info(`${tag}: its amend ${e.txid ?? ''} can no longer land: the order's outpoint is spent and the amend's state is not on the node`);
+    }
+  }
+
+  /** One lookup of order `id` at `state` on the node: 'live', 'gone' (verified) or 'unknown'. */
+  async lookAt(id, state) {
+    const r = (await this.nodeCheck([id], {}, () => state)).get(id);
+    return r.status === 'live' ? 'live' : r.status === 'gone' && r.verified ? 'gone' : 'unknown';
   }
 
   /** One alert per transaction of the bot's own still in flight past orderVisibleTimeoutSec (a hint, R7T-1). */
@@ -1077,6 +1099,7 @@ export class Bot {
       // nothing (the node cannot hold a state before its transaction confirms), so nothing ends.
       // A confirmed cancel ends it whatever was in flight: it spent the order.
       if (cancelled) s.inflight = [];
+      if (r.status === 'gone' && r.verified) await this.settleBeatenAmends(id, s, tag);
       this.resolveInflight(s, r);
       if (s.inflight?.length) {
         const exp = Math.max(s.expiresAt ?? 0, ...s.inflight.map((e) => e.expiresAt ?? 0)) || null;
