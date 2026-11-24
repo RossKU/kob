@@ -12,7 +12,7 @@
 // effect. A plain order of a KAS market that the app shows inverted (KAS/TOKEN) is said first as
 // the user placed it, for example sell KAS for tokens. Its chain-side terms follow. Every price
 // reads "X per Y", never as a pair notation.
-import { decodeSigning, type DecodedOrder, type SigningKind, type SigningSummary, type TokenRef } from '../kob/decode';
+import { decodeSigning, type DecodedOrder, type DecodedOutput, type SigningKind, type SigningSummary, type TokenRef } from '../kob/decode';
 import { spendsPreparation } from '../kob/issue';
 import { curveNumbersOfState, curveProblems, tablePreview } from '../kob/curve';
 import { decodeDeclaration } from '../kob/kcc23';
@@ -500,12 +500,19 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   // Every token figure carries its unit, as in "−2 EXKCC". A token nothing names has none to
   // carry. That is an assumed one, whose amount is raw and whose label is its covenant id.
   const unitOf = (hint: TokenHint | undefined): string => (hint && hint.source !== 'assumed' && hint.ticker ? ` ${tickerUnit(hint.ticker, hint.covenantId)}` : '');
+  // Whom a payment or transfer to other keys goes to: each key by 8 + 8 hex, and an output to a
+  // script the decoder could not read as such (R8F2-I1).
+  const to = (outs: readonly DecodedOutput[], amount: string): string => {
+    const keys = [...new Set(outs.flatMap((o) => (o.recipient ? [longId(o.recipient)] : [])))];
+    if (outs.some((o) => !o.recipient)) keys.push(t('signer.net.unknownScript'));
+    return keys.length ? t('signer.net.toKeysValue', { amount, keys: keys.join(', ') }) : amount;
+  };
   for (const tok of s.net.tokens) {
     const hint = hints.find((h) => h.covenantId === tok.ref.covenantId);
     const label = tokenName(tok.ref.covenantId, hint, terms);
     const amount = (v: bigint) => `${formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unitOf(hint)}`;
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
-    if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: amount(tok.toOthers), dir: 'out' });
+    if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: to(s.outputs.filter((o) => o.kind === 'token-out' && o.token?.ref.covenantId === tok.ref.covenantId), amount(tok.toOthers)), dir: 'out' });
     // An unlock says what the wallet's creator lock held. The line above says it comes to this key.
     if (tok.unlocked > 0n) lines.push({ label: t('signer.net.unlocked', { token: label }), value: amount(tok.unlocked), dir: null });
   }
@@ -541,7 +548,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     const was = s.inputs[sp.input]?.amount;
     if (cont && was !== undefined && cont.value > was) lines.push({ label: t('signer.net.claimCarrier'), value: kas(cont.value - was), dir: null });
   }
-  if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
+  if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: to(s.outputs.filter((o) => ['payment-out', 'token-out', 'unknown-covenant', 'unknown'].includes(o.kind)), kas(k.toOthers)), dir: 'out' });
   // A take says the resting orders it fills at their own prices, and the average price.
   if (s.take) {
     const tk = s.take;

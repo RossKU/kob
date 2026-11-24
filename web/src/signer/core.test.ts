@@ -180,7 +180,7 @@ describe('signer summary: decoded in the frame, net effect, order terms and fee'
     const token = s.lines.find((l) => l.label.startsWith('EXKCC'))!;
     expect(token.value).toBe('−90 EXKCC'); // 9000 base units at 2 decimals
     expect(token.dir).toBe('out');
-    expect(s.lines.find((l) => l.label === 'EXKCC (70707070…70707070, 2 decimals as the app lists them) to other keys')?.value).toBe('90 EXKCC');
+    expect(s.lines.find((l) => l.label === 'EXKCC (70707070…70707070, 2 decimals as the app lists them) to other keys')?.value).toMatch(/^90 EXKCC to [0-9a-f]{8}…[0-9a-f]{8}$/); // the recipient is named (R8F2-I1)
     expect(s.fee).toMatch(/ KAS$/);
   });
 
