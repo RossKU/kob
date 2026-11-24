@@ -198,9 +198,16 @@ function place(env: PlanEnv, d: Draft, pre: PlanIssue[]): OrderPlan {
 }
 
 
+/**
+ * The schedule fields of an order that trades at exactly its `price`, from the moment it is
+ * active: no auction (slope 0, no end price). A non-crossing limit is placed with it, and an amend
+ * with a price writes it (ui/orders/amend.ts), so the two cannot differ (R9FC2-1).
+ */
+export const FIXED_PRICE_SCHEDULE = { slope: 0n, priceEnd: 0n, decayStep: 1n } as const;
+
 const blank = (side: 'sell' | 'buy', amount: bigint, price: bigint, tip: bigint, minFill: bigint | undefined): Draft => ({
   side, amount, minFill: minFill ?? null, immediate: false, price, tip, tif: 0, activeFrom: 0n, requestedActiveFrom: null, expiryDaa: 0n, interval: 0n,
-  maxFill: 0n, slope: 0n, priceEnd: 0n, decayStep: 1n, deadline: null, fills: 1n, delivery: undefined, cls: 'resting', reach: price, expiryKind: 'gtc', expectedPrice: null, worstPrice: null,
+  maxFill: 0n, ...FIXED_PRICE_SCHEDULE, deadline: null, fills: 1n, delivery: undefined, cls: 'resting', reach: price, expiryKind: 'gtc', expectedPrice: null, worstPrice: null,
   limitPrice: price, activatesAt: null, notes: [],
 });
 

@@ -1394,6 +1394,16 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         const got = (os.state as { tokenCovId?: string }).tokenCovId;
         if (!want || got !== want) add('curve-terms-invalid', `output ${j}: the amend of an unbound curve names ${shortId(String(got))}, not the token of its custody`, { output: j });
       }
+      // an amend that changes the price of a limit stored as an auction must end the schedule: kept,
+      // the slope from an origin long past makes the order trade at its old limit at once (R9FC2-1).
+      // Judged on the signed states alone, so it holds in the frame too.
+      if (was && os.kind === was.kind && /^Kob(Ask|Bid)/.test(was.kind)) {
+        const ws = was.state as unknown as Record<string, string>;
+        const ns = os.state as unknown as Record<string, string>;
+        const repriced = ws.price !== ns.price;
+        const scheduleKept = BigInt(ns.slope ?? '0') !== 0n && ns.slope === ws.slope && ns.priceEnd === ws.priceEnd;
+        if (repriced && scheduleKept) add('order-terms-invalid', `output ${j}: the amend changes the price but keeps the old schedule (slope and end price): the order would trade at its old limit ${ws.priceEnd} at once, not at the new price`, { output: j });
+      }
       if (was && JSON.stringify(deliveryOf(was), bigReplacer) !== JSON.stringify(deliveryOf(os), bigReplacer)) add('order-terms-invalid', `output ${j}: the amend changes the order's delivery (mode, tip, threshold or bought), which an amend keeps`, { output: j });
       orders.push({ output: j, covenantId: am.covenantId, description, state: os, value, locked, deadline, verified, custody: null, custodies: [], amendedFrom: am.input, delivery: deliveryOf(os) });
       return { ...blank, kind: 'order', flagged: !verified, order: { covenantId: am.covenantId, description, verified, locked, deadline } };
