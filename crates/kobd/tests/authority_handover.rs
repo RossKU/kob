@@ -572,7 +572,7 @@ async fn an_authority_that_gives_the_chain_slower_than_real_time_is_handed_over(
         assert!(took < Duration::from_secs(10), "case {k}: {took:?}");
         let h = r.health.snapshot();
         assert!(h.blocks_applied_total >= blocks as u64, "case {k}: its answers applied");
-        let lag = h.lag_seconds(10, now_ms()).unwrap();
+        let lag = h.lag_seconds(now_ms()).unwrap();
         assert!(lag >= 2 * 3_600 - 60, "case {k}: lag_seconds {lag}: at least the cursor block's age");
         r.until(200, "caught up on the other node", |r| r.cursor() == Some(node.tip())).await;
         assert_eq!(r.source.board().authority(), 1, "case {k}");
@@ -602,7 +602,7 @@ async fn a_lone_authority_that_drips_the_chain_turns_the_health_failing_then_sta
     assert_eq!(h.last_progress_unix_ms, at, "no progress");
     let stale_after = kobd::indexer::status::STALE_AFTER_MS;
     assert!(!h.stale(at + stale_after) && h.stale(at + stale_after + 1));
-    let lag = h.lag_seconds(10, now_ms()).unwrap();
+    let lag = h.lag_seconds(now_ms()).unwrap();
     assert!(lag >= 2 * 3_600 - 60, "the node claims 1,000,000 DAA ahead, the cursor is 2 h old: {lag}");
     assert_eq!(r.source.board().authority(), 0);
 }
@@ -630,13 +630,13 @@ async fn honest_nodes_are_never_failing_by_the_pace_rule() {
     let nodes = vec![(spec("ws://10.10.0.1:18210", true), a.clone()), (spec("ws://10.10.0.2:18210", true), b.clone())];
     let r = run_with(node.anchor(), nodes, 2, Duration::from_millis(1), tolerant);
     r.steps(2).await;
-    let lag = r.health.snapshot().lag_seconds(10, now_ms()).unwrap();
+    let lag = r.health.snapshot().lag_seconds(now_ms()).unwrap();
     assert!(lag >= 800, "the real lag shows: {lag}");
     r.until(500, "caught up", |r| r.cursor() == Some(node.tip())).await;
     let h = r.health.snapshot();
     assert_eq!(r.source.board().authority(), 0, "never handed over");
     assert!(!h.stale(now_ms()) && now_ms() - h.last_progress_unix_ms < 5_000, "{h:?}");
-    assert!(h.lag_seconds(10, now_ms()).unwrap() < 60);
+    assert!(h.lag_seconds(now_ms()).unwrap() < 60);
 
     // a deep reorg from the fresh cursor
     node.reorg(500, vec![vec![]; 520]);

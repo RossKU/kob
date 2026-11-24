@@ -926,18 +926,21 @@ impl HealthSnapshot {
     }
 
     /// Lag behind the node in DAA score. At 10 DAA per second, one DAA is a tenth of a second.
+    ///
+    /// The node's position is its own unverified claim: `/v1/health` shows it as `lag_daa`, and no
+    /// verdict of the health (`ok`, `ready`, the lag alarms, `stale`, `lag_seconds`) uses it
+    /// (R7B-M1). The planning gates use it only next to the verified time ([`Self::caught_up`]).
     pub fn lag_daa(&self) -> Option<u64> {
         self.node_daa.map(|n| n.saturating_sub(self.cursor_daa))
     }
 
-    /// The lag in seconds that `/v1/health` reports at `now_ms`: the lag behind the node's DAA
-    /// score (`daa_per_second`), and at least the age of the cursor's chain block by the local
-    /// clock (R4C1-M1). The node's position is its own word, so a node that claims to be just
-    /// ahead of an old cursor does not hide the lag. A block stamped ahead of the local clock
-    /// counts as 0 s old. `None` while the node's position is unknown.
-    pub fn lag_seconds(&self, daa_per_second: u64, now_ms: u64) -> Option<u64> {
-        let age = self.cursor_time_unix_ms.map_or(0, |t| now_ms.saturating_sub(t) / 1_000);
-        self.lag_daa().map(|d| (d / daa_per_second.max(1)).max(age))
+    /// The lag in seconds that `/v1/health` reports at `now_ms`: the age of the cursor's chain
+    /// block by the local clock, the block's time as verified (its proven header), the quantity the
+    /// follower's progress rule judges. No node's claim enters it: neither one that is just ahead of
+    /// an old cursor (R4C1-M1) nor one far ahead of a current cursor (R7B-M1). A block stamped ahead
+    /// of the local clock counts as 0 s old. `None` while the cursor block's time is unknown.
+    pub fn lag_seconds(&self, now_ms: u64) -> Option<u64> {
+        self.cursor_time_unix_ms.map(|t| now_ms.saturating_sub(t) / 1_000)
     }
 
     /// Whether the store is caught up with the node.
@@ -1483,6 +1486,25 @@ mod tests {
             "{m}"
         );
         assert!(m.contains("kob_indexer_halted 0"));
+    }
+
+    /// R7B-M1: `lag_seconds` is the cursor block's age by the local clock alone. A node's DAA
+    /// claim far ahead does not raise it, one just ahead of an old cursor does not lower it, and
+    /// with the cursor block's time unknown it is unknown.
+    #[test]
+    fn a_node_daa_claim_does_not_move_lag_seconds() {
+        let now = 1_790_000_000_000;
+        let mut h = HealthSnapshot::new("testnet-10");
+        h.cursor_daa = 1_000;
+        h.node_daa = Some(1_000 + 1_300);
+        assert_eq!(h.lag_seconds(now), None);
+        h.cursor_time_unix_ms = Some(now - 2_000);
+        assert_eq!((h.lag_seconds(now), h.lag_daa()), (Some(2), Some(1_300)));
+        h.node_daa = Some(1_001);
+        h.cursor_time_unix_ms = Some(now - 7_200_000);
+        assert_eq!(h.lag_seconds(now), Some(7_200));
+        h.cursor_time_unix_ms = Some(now + 5_000);
+        assert_eq!(h.lag_seconds(now), Some(0), "a block stamped ahead of the local clock");
     }
 
     #[test]
