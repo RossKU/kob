@@ -187,13 +187,15 @@ export function useActivity(o: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sa?.version]);
 
-  // The chain's DAA score from the feed's health frames.
+  // The chain's DAA score from the feed's health frames: the indexer's verified cursor, never the
+  // node's `node_daa` claim, which could mark every row settled (R8B-L2). The rows' own
+  // `confirmations` from REST, which kobd counts from its verified present, move it too.
   useEffect(() => {
     const feed = standalone ? null : services.feed;
     if (!feed) return;
     return feed.on('health', (h) => {
-      const d = h.data as { node_daa?: number | null; cursor_daa?: number };
-      const daa = typeof d.node_daa === 'number' ? d.node_daa : typeof d.cursor_daa === 'number' ? d.cursor_daa : null;
+      const d = h.data as { cursor_daa?: number };
+      const daa = typeof d.cursor_daa === 'number' ? d.cursor_daa : null;
       if (daa !== null) store.noteChain(daa);
     });
   }, [services.feed, standalone, store]);

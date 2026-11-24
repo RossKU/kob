@@ -102,7 +102,8 @@ test.describe('sweep strays in place', () => {
   test('a cancel that would abandon strays offers "Sweep first": the sweep takes them, then the cancel', async ({ appPage: page, mock, wallet }) => {
     const [id] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 1 }]);
     // the 8/8 program: the custody and 7 strays fit one cancel, the eighth stray would be abandoned
-    for (let k = 1; k <= 8; k++) await mock.stray(id!, BigInt(k) * TOKEN);
+    // 2..9 tokens: none is a twin of the 1-token custody, which a sweep leaves (R8FX-1)
+    for (let k = 1; k <= 8; k++) await mock.stray(id!, BigInt(k + 1) * TOKEN);
     await openOrders(page, mock);
     await page.getByTestId(`order-cancel-${id}`).click();
     const dialog = page.getByTestId('sweep-first-dialog');
@@ -114,7 +115,7 @@ test.describe('sweep strays in place', () => {
     const [sweep] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(sweep!.submission.records.map((r) => r.type)).toContain('sweep');
     expect((await mock.order(id!)).status).toBe('open');
-    expect(await balanceOf(mock, 'EXKCC')).toBe(36n * TOKEN);
+    expect(await balanceOf(mock, 'EXKCC')).toBe(44n * TOKEN);
 
     const follow = page.getByTestId('orders-sweep-followup');
     await expect(follow).toBeVisible();
@@ -126,6 +127,6 @@ test.describe('sweep strays in place', () => {
     const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(cancel!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
     expect((await mock.order(id!)).status).toBe('cancelled');
-    expect(await balanceOf(mock, 'EXKCC')).toBe(37n * TOKEN);
+    expect(await balanceOf(mock, 'EXKCC')).toBe(45n * TOKEN);
   });
 });

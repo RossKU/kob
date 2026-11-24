@@ -2,7 +2,7 @@
 import type { VNode } from 'preact';
 import { describe, expect, it } from 'vitest';
 import type { Intent } from '../../kob/plan';
-import { DUST_LINE_SOMPI, NO_FLASH, nextDustFlash, wouldBeDust, type DustFlash } from './dust-hint';
+import { DUST_LINE_SOMPI, NO_FLASH, dustLineOf, nextDustFlash, wouldBeDust, type DustFlash } from './dust-hint';
 import { HelpToggle } from './HelpToggle';
 
 const SCALE = 1000n; // base units per whole token
@@ -10,8 +10,12 @@ const LINE = DUST_LINE_SOMPI; // 0.5 KAS
 const limit = (side: 'buy' | 'sell', amount: bigint, price: bigint) => ({ type: 'limit', side, amount, price }) as unknown as Intent;
 
 describe('wouldBeDust: one fill worth less than half the listing minimum to a taker', () => {
-  it('is half the listing minimum the app knows (1 KAS)', () => {
+  it('is half the listing minimum the app knows (1 KAS), or half of the indexer minimum (R8B-L4)', () => {
     expect(LINE).toBe(50_000_000n);
+    expect(dustLineOf(500_000_000n)).toBe(250_000_000n);
+    expect(dustLineOf(0n)).toBe(LINE);
+    // under a 5 KAS minimum a 1 KAS order is dust
+    expect(wouldBeDust(limit('sell', SCALE, 100_000_000n), SCALE, dustLineOf(500_000_000n))).toBe(true);
   });
 
   it('a plain ask and bid: at the line not dust, just under dust, just over not', () => {
@@ -29,8 +33,11 @@ describe('wouldBeDust: one fill worth less than half the listing minimum to a ta
     expect(wouldBeDust(twap, SCALE)).toBe(true);
     expect(wouldBeDust({ ...twap, sliceAmount: SCALE } as Intent, SCALE)).toBe(false);
     expect(wouldBeDust({ ...twap, type: 'dca' } as Intent, SCALE)).toBe(true);
-    // a slice auction whose end is higher is valued at it (the generous side): not dust
-    expect(wouldBeDust({ ...twap, priceEnd: 600_000_000n } as Intent, SCALE)).toBe(false);
+    // a slice auction is valued at its lower end, as kobd values the window (R8B-L4): a sell slice of
+    // 1 token starting at 0.6 KAS and decaying to 0.4 KAS is dust
+    const decaying = { ...twap, sliceAmount: SCALE, price: 600_000_000n, priceEnd: 40_000_000n } as Intent;
+    expect(wouldBeDust(decaying, SCALE)).toBe(true);
+    expect(wouldBeDust({ ...decaying, priceEnd: 60_000_000n } as Intent, SCALE)).toBe(false);
   });
 
   it('unsure is no: no price or amount yet, a kind that never rests, nothing at all', () => {

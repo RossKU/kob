@@ -247,7 +247,8 @@ export async function verifyPairBook(deps: PairBookDeps, orders: readonly OrderV
   const dropped: DroppedBookOrder[] = [];
   const want = deps.depth ?? 0n;
   const satisfied = (s: (typeof sides)[number]): boolean =>
-    s.next >= Math.min(s.cands.length, BOOK_CHECK_MAX_ROWS) || (s.confirmed >= BOOK_CHECK_MIN_CONFIRMED && s.depth >= want);
+    // a side already unread stops being read: the book is unavailable anyway (R8B-I3)
+    s.unread || s.next >= Math.min(s.cands.length, BOOK_CHECK_MAX_ROWS) || (s.confirmed >= BOOK_CHECK_MIN_CONFIRMED && s.depth >= want);
   for (let round = 0; round < BOOK_CHECK_ROUNDS; round++) {
     const batch = sides.flatMap((s) => (satisfied(s) ? [] : s.cands.slice(s.next, Math.min(s.next + BOOK_CHECK_PER_SIDE, BOOK_CHECK_MAX_ROWS)).map((row) => ({ s, row }))));
     if (!batch.length) break;

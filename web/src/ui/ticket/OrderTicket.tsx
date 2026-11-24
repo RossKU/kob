@@ -12,7 +12,7 @@
 // a card of the notifications at the top right.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { DUST_LINE_SOMPI, NO_FLASH, nextDustFlash, wouldBeDust, type DustFlash } from './dust-hint';
+import { NO_FLASH, dustLineOf, nextDustFlash, wouldBeDust, type DustFlash } from './dust-hint';
 import { HelpToggle } from './HelpToggle';
 import { useServices, useWallet } from '../../app/context';
 import { kasTitleOf, sompiToUsd, usdTextFit } from '../../app/fiat';
@@ -680,8 +680,10 @@ export function OrderTicket(props: OrderTicketProps) {
   // An order or a slice worth less than DUST_LINE_SOMPI to a taker is not shown in the public KAS
   // book (dust-hint.ts). The help of what sets its size says so, and the "?" flashes once when the
   // order entered turns dust. Pair books have no dust range.
-  const dustHelp = quote ? null : t('ticket.help.dust', { min: formatKas(DUST_LINE_SOMPI) });
-  const dustFlash = (dustRef.current = nextDustFlash(dustRef.current, !quote && wouldBeDust(built.intent, ctx.scale)));
+  // The line is half the indexer's own listing minimum when its health names one (R8B-L4).
+  const dustLine = dustLineOf(minOrderValueOf(indexerStatus.health).sompi);
+  const dustHelp = quote ? null : t('ticket.help.dust', { min: formatKas(dustLine) });
+  const dustFlash = (dustRef.current = nextDustFlash(dustRef.current, !quote && wouldBeDust(built.intent, ctx.scale, dustLine)));
   const typeHelp = `${t(typeKey(form.type, 'help'), { name })}${dustHelp && form.type === 'limit' ? ` ${dustHelp}` : ''}`;
   // The side as the shown pair names it. Buying KAS in KAS/TOKEN is selling the token.
   const shownSide: Side = inverted ? oppositeSide(form.side) : form.side;

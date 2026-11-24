@@ -551,7 +551,9 @@ export class HttpIndexer implements IndexerApi {
         await this.sleep(Math.min(this.maxBackoffMs, retryAfter * 1000 * (1 + 0.5 * this.random())), o.signal);
         continue;
       }
-      const retryable = !overloaded && (res.status === 429 || (res.status === 503 && retryAfter !== undefined));
+      // kobd's per-second read budget (read_budget) refuses the same computation again: a retry a
+      // second later only spends another budget (R8B-I2).
+      const retryable = !overloaded && errorCodeOf(body) !== 'read_budget' && (res.status === 429 || (res.status === 503 && retryAfter !== undefined));
       if (retryable && retries < this.maxRetries) {
         const wait = Math.min(this.maxBackoffMs, retryAfter !== undefined ? retryAfter * 1000 : 500 * 2 ** retries);
         retries++;

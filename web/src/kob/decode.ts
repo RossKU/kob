@@ -1924,12 +1924,20 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   // nothing can move a custody left unspent. The check reads only the signed order input's state and
   // the token inputs' plan states, which their scripts bind, so it holds with no node facts too (the
   // private-key frame). Where the tokens then go is held by the output checks.
+  //
+  // A spend that keeps the order alive (a sweep, an amend in place, a claim that continues it) must
+  // leave every custody its state holds: a custody input of exactly that state is refused unless an
+  // output owned by the same covenant id takes the same amount of the token again (R8FX-1). Otherwise
+  // the order would live on holding its amount with no custody, and nothing could fill, refund or
+  // cancel it. A twin of the custody's state is not told apart from the custody by the bytes, so it
+  // is refused too: a sweep leaves twins, and a cancel takes them.
+  const continuedCustodyMoved = new Set<number>();
   for (const d of inputs) {
     const o = d.order;
     const st = orderStates.get(d.index);
     const cov = o?.covenantId ?? null;
     if (!o || !st || !cov || (o.action !== 'cancel' && o.action !== 'refund')) continue;
-    if (sweepByInput.has(d.index) || amends.some((a) => a.input === d.index) || tx.outputs.some((x) => x.covenant?.covenantId === cov)) continue;
+    const continues = sweepByInput.has(d.index) || amends.some((a) => a.input === d.index) || tx.outputs.some((x) => x.covenant?.covenantId === cov);
     let held: { token: Hex; amount: bigint }[];
     try {
       held = custodiesOf(st, kob).filter((c) => c.amount > 0n);
@@ -1952,6 +1960,15 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         if (family === 'kron') return true;
         return isKcc20State(ps as never) && ps.owner_scheme === KCC20_SCHEME_COVID && borrowKeyOf(ps as never) === PLAIN_BORROW && (ext === null || ps.extension_commitment === ext);
       };
+      if (continues) {
+        const spent = owned.filter(isCustody).length;
+        const again = outputs.filter((x) => x.token && x.token.owner === cov && x.token.amount === c.amount && (zero || x.token.ref.covenantId === c.token)).length;
+        if (spent > again) {
+          continuedCustodyMoved.add(d.index);
+          add('sweep-custody-spent', `input ${d.index}: the transaction moves the custody of order ${cov} (on-chain amount ${c.amount} of token ${c.token}), which the order keeps: it would live on with no custody, and nothing could fill, refund or cancel it`, { input: d.index });
+        }
+        continue;
+      }
       if (!owned.some(isCustody)) {
         add('custody-unreleased', `input ${d.index}: the ${o.action} ends order ${cov} but does not spend the custody its state holds (on-chain amount ${c.amount} of token ${c.token}${ext ? `, class ${ext}` : ''}): those tokens could never be moved again`, { input: d.index, params: { amount: c.amount } });
       }
@@ -1965,12 +1982,12 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     // "unchanged" only when the continuation also keeps the order input's KAS: an unfunded sweep's
     // fee comes out of the carrier, and a plan may move KAS between the order and the wallet
     const v = s.sweptTo?.value;
-    if (s.sweptTo && v && v.now !== v.was) {
+    if (s.sweptTo && v && v.now !== v.was && !continuedCustodyMoved.has(s.input)) {
       const { output, utxos } = s.sweptTo;
       add('swept-in-place-kas', `input ${s.input}: the order continues at output ${output} under the same script (price, amount and custody), holding ${formatKas(v.now)} KAS instead of ${formatKas(v.was)} KAS; only its ${utxos} stray token UTXO(s) move back to you`, {
         input: s.input, output, params: { utxos, now: formatKas(v.now), was: formatKas(v.was) },
       });
-    } else if (s.sweptTo) {
+    } else if (s.sweptTo && !continuedCustodyMoved.has(s.input)) {
       add('swept-in-place', `input ${s.input}: the order continues unchanged at output ${s.sweptTo.output} (same script: price, amount and custody); only its ${s.sweptTo.utxos} stray token UTXO(s) move back to you`, {
         input: s.input, output: s.sweptTo.output, params: { utxos: s.sweptTo.utxos },
       });

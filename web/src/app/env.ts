@@ -1,7 +1,7 @@
 // Builds the planners' environment (PlanEnv and CancelEnv) from live services. That is the node
 // clock and UTXOs, the indexer book and own orders, and the token tracker. Every dependency comes
 // through `Services` and nothing touches the DOM, so tests can use fakes.
-import type { BookOrderView, LevelView, OrderView } from '../data/indexer-types';
+import type { BookOrderView, LevelView, OrderView, PairBookView, PairLevelView } from '../data/indexer-types';
 import { incompleteAsNull } from '../data/indexer';
 import { declaredToken } from '../data/token-declarations';
 import type { CancelEnv } from '../kob/cancel';
@@ -258,7 +258,7 @@ export async function readHoldingsPart(
     ? Promise.resolve(own())
     : s.indexer && !o.offline
       ? // A list cut at its page bound is not read: self-trade prevention needs every own order.
-        s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }, { priority: 'high' }).then(incompleteAsNull, async (e: unknown) => {
+        s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active', limit: 200 }, { priority: 'high', maxPages: OWN_LIST_PAGES }).then(incompleteAsNull, async (e: unknown) => {
           // The indexer is down. Once standalone mode is on, its book lists the wallet's orders,
           // and the failed read starts its check.
           return c && typeof c.readFailed === 'function' && (await c.readFailed(e)) ? own() : null;
@@ -266,6 +266,42 @@ export async function readHoldingsPart(
       : Promise.resolve([]);
   const [tokenUtxos, orders] = await Promise.all([s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: token.covenantId, program: token.program }), mine]);
   return { tokenUtxos, ownOrders: orders ? ownOrderRefs(market, orders) : null };
+}
+
+/**
+ * Pages of 200 of the wallet's own active orders of one token the ticket reads for self-trade
+ * prevention: 10,000 orders. A list cut there is not read (R8B-L3). Only orders that name the wallet
+ * as maker make it long, and a maker with more live orders of one token than that is refused until
+ * some end.
+ */
+export const OWN_LIST_PAGES = 50;
+
+/** Pages of 200 active orders read per token for the pair ticket's book check. */
+export const PAIR_LIST_PAGES = 20;
+
+/**
+ * The resting pair orders of A/B for the pair book check, or null when they cannot be known. A pair
+ * order is listed under both of its tokens, so the active orders of A and of B are read side by
+ * side, at most PAIR_LIST_PAGES of 200 each. A complete list of either holds every pair order of
+ * A/B. When both are cut (more than 4,000 active orders of each token), what was read is used only
+ * if it holds, on each side, at least as many A/B pair orders as the indexer's own pair book counts
+ * in its direct and entry levels; otherwise the book is unavailable. Many orders of one token can
+ * no longer shut the pair ticket (R8B-M2); only flooding both tokens while the pair's own orders are
+ * old can, and then the order waits, it is never planned against a book that may miss them
+ * (R7B-L3). The indexer's pair book names no covenant ids, so its orders cannot be read one by one.
+ */
+async function pairOrdersOf(indexer: NonNullable<Services['indexer']>, a: Hex, b: Hex, pv: PairBookView): Promise<OrderView[] | null> {
+  const list = (token: Hex) => indexer.allOrders({ token, status: 'active', limit: 200 }, { priority: 'high', maxPages: PAIR_LIST_PAGES }).catch(() => null);
+  const [la, lb] = await Promise.all([list(a), list(b)]);
+  const whole = [la, lb].find((l) => l && !l.truncated);
+  if (whole) return whole;
+  if (!la && !lb) return null;
+  const byId = new Map<Hex, OrderView>();
+  for (const v of [...(la ?? []), ...(lb ?? [])]) byId.set(v.covenant_id, v);
+  const read = [...byId.values()];
+  const ofPair = (side: 'ask' | 'bid') => read.filter((v) => v.pair && v.pair.base.toLowerCase() === a.toLowerCase() && v.pair.quote.toLowerCase() === b.toLowerCase() && v.pair.side === side).length;
+  const named = (levels: readonly PairLevelView[]) => levels.filter((l) => l.source !== 'route').reduce((n, l) => n + Math.max(0, Math.trunc(Number(l.orders) || 0)), 0);
+  return ofPair('ask') >= named(pv.asks) && ofPair('bid') >= named(pv.bids) ? read : null;
 }
 
 /**
@@ -437,7 +473,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
     indexer && !o.offline
       ? Promise.all([
           indexer.pairBook(a.covenantId, b.covenantId, { depth: 100 }, { priority: 'high' }).catch(() => null),
-          indexer.allOrders({ maker: wallet.pubkey, token: a.covenantId, status: 'active' }, { priority: 'high' }).then(incompleteAsNull, () => null),
+          indexer.allOrders({ maker: wallet.pubkey, token: a.covenantId, status: 'active', limit: 200 }, { priority: 'high', maxPages: OWN_LIST_PAGES }).then(incompleteAsNull, () => null),
           kasReferenceOf(indexer, a),
           kasReferenceOf(indexer, b),
         ])
@@ -473,8 +509,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
       // The planners get what the node confirms (app/pair-book.ts). That is the resting pair
       // orders one by one, and the route from the two KAS books.
       const hasOrders = [...pv.asks, ...pv.bids].some((l) => l.source !== 'route');
-      // Cut at its page bound, the list may miss pair orders, so it is not read (R7B-L3).
-      const listed = hasOrders && indexer ? await indexer.allOrders({ token: a.covenantId, status: 'active', limit: 200 }, { priority: 'high' }).then(incompleteAsNull, () => null) : [];
+      const listed = hasOrders && indexer ? await pairOrdersOf(indexer, a.covenantId, b.covenantId, pv) : [];
       if (listed === null) guardsUnavailable.push('book');
       else {
         const checked = await verifyPairBook(

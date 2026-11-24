@@ -17,6 +17,8 @@ export function noteSentences(notes: readonly SignerNote[]): string[] {
         ? t('signer.hint.congestion')
         : n.kind === 'straysLost'
           ? t('signer.hint.straysLost', { utxos: n.utxos })
+          : n.kind === 'straysUnchecked'
+            ? t('signer.hint.straysUnchecked')
         : t('signer.hint.farThrough', { percent: formatUnits(BigInt(n.bps), 2, { maxFraction: 1 }) }),
   );
 }

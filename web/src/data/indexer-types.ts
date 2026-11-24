@@ -487,6 +487,8 @@ export interface OrderView {
   /** Mode 1: the bought-custody, checked against `bought`. */
   bought_custody?: CustodyView;
   strays?: TokenUtxoView[];
+  /** Present only when the order has more live strays than `strays` lists: how many (up to 10,000). */
+  strays_total?: number;
   last_block: number; last_daa: number; confirmations: number | null; settled: boolean;
   expired: boolean;
   children?: Hex[];
