@@ -238,34 +238,9 @@ contract KobIfdAskKron(
     // cPre and cSuf are the KobCondBidKron template prefix and suffix, for a
     // fill. ev and tk are the evidence ask and its custody, for an unarmed
     // stop entry. t is the auction time, proven by CLTV.
-    // BEGIN GENERATED span check (scripts/gen-span-check.mjs): do not edit
-    // R10CC-1: the state span runs as script and is read at fixed offsets, by this order and by other scripts.
-    // It must be data only: each of its 23 fields a direct push of its fixed length (561 bytes in all),
-    // as the compiler encodes the state. The values are free.
-    // Every entry but the maker's cancel calls it first.
-    function spanIsData() {
-        int me = this.activeInputIndex;
-        int base = OpTxInputScriptSigLen(me) - this.bytecodeSize + 1;
-        byte[] h = OpTxInputScriptSigSubstr(me, base + 0, base + 1) + OpTxInputScriptSigSubstr(me, base + 33, base + 34)
-            + OpTxInputScriptSigSubstr(me, base + 66, base + 67) + OpTxInputScriptSigSubstr(me, base + 99, base + 100)
-            + OpTxInputScriptSigSubstr(me, base + 108, base + 109) + OpTxInputScriptSigSubstr(me, base + 117, base + 118)
-            + OpTxInputScriptSigSubstr(me, base + 126, base + 127) + OpTxInputScriptSigSubstr(me, base + 135, base + 136)
-            + OpTxInputScriptSigSubstr(me, base + 144, base + 145) + OpTxInputScriptSigSubstr(me, base + 153, base + 154)
-            + OpTxInputScriptSigSubstr(me, base + 162, base + 163) + OpTxInputScriptSigSubstr(me, base + 171, base + 172)
-            + OpTxInputScriptSigSubstr(me, base + 180, base + 181) + OpTxInputScriptSigSubstr(me, base + 189, base + 190)
-            + OpTxInputScriptSigSubstr(me, base + 198, base + 199) + OpTxInputScriptSigSubstr(me, base + 207, base + 208)
-            + OpTxInputScriptSigSubstr(me, base + 216, base + 217) + OpTxInputScriptSigSubstr(me, base + 225, base + 226)
-            + OpTxInputScriptSigSubstr(me, base + 234, base + 235) + OpTxInputScriptSigSubstr(me, base + 243, base + 244)
-            + OpTxInputScriptSigSubstr(me, base + 252, base + 253) + OpTxInputScriptSigSubstr(me, base + 261, base + 262)
-            + OpTxInputScriptSigSubstr(me, base + 270, base + 273);
-        require(h == byte[](0x202020080808080808080808080808080808080808084d2001));
-    }
-    // END GENERATED span check
-
     entry settle(byte[8] nb, int tokenIn, int tokOut, int exitOut, byte[] cPre, byte[] cSuf, int ev, int tk, int t) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
         require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
-        spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -571,7 +546,6 @@ contract KobIfdAskKron(
     entry close() {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
         require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
-        spanIsData();
         int self = this.activeInputIndex;
         require(amountLeft == 0);
         int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
@@ -594,7 +568,6 @@ contract KobIfdAskKron(
     entry update(int ev, int tk) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
         require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
-        spanIsData();
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);

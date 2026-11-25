@@ -200,7 +200,7 @@ contract KobPair(
     // R10CC-1: the state span runs as script and is read at fixed offsets, by this order and by other scripts.
     // It must be data only: each of its 35 fields a direct push of its fixed length (483 bytes in all),
     // as the compiler encodes the state. The values are free.
-    // Every entry but the maker's cancel calls it first.
+    // The fill entry, the one stop readers take as evidence, calls it first (its other entries do not).
     function spanIsData() {
         int me = this.activeInputIndex;
         int base = OpTxInputScriptSigLen(me) - this.bytecodeSize + 1;

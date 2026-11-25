@@ -38,7 +38,7 @@ contract TokenSwapKron_swap(
 
     // :: linked templates
     byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0xc4feaee15a4f2151c58667f60c4b8e36b0dc834ff2c2b63b1d9018954f72f0e5);
-    byte[32] constant gen__kob_orders_kron__kob_bid_kron_template_const = byte[32](0x70962538aae9485be879f68c5ded6e8111ec2b60987748d4705744c4125bee31);
+    byte[32] constant gen__kob_orders_kron__kob_bid_kron_template_const = byte[32](0x6325c554e6f758314595b97127c2f61d583a08aae8d6caa40f090e4d8909203a);
 
     // :: state layouts
     struct KasToTokenState {

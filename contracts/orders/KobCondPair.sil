@@ -613,45 +613,10 @@ contract KobCondPair(
     // only an armed stop leg with bandDaa > 0 reads. form is read in mode 2
     // only. An update uses none of custIn, tTplIn, t, sOut, tOut, leg and
     // form.
-    // BEGIN GENERATED span check (scripts/gen-span-check.mjs): do not edit
-    // R10CC-1: the state span runs as script and is read at fixed offsets, by this order and by other scripts.
-    // It must be data only: each of its 43 fields a direct push of its fixed length (579 bytes in all),
-    // as the compiler encodes the state. The values are free.
-    // Every entry but the maker's cancel calls it first.
-    function spanIsData() {
-        int me = this.activeInputIndex;
-        int base = OpTxInputScriptSigLen(me) - this.bytecodeSize + 1;
-        byte[] h = OpTxInputScriptSigSubstr(me, base + 0, base + 1) + OpTxInputScriptSigSubstr(me, base + 33, base + 34)
-            + OpTxInputScriptSigSubstr(me, base + 42, base + 43) + OpTxInputScriptSigSubstr(me, base + 75, base + 76)
-            + OpTxInputScriptSigSubstr(me, base + 108, base + 109) + OpTxInputScriptSigSubstr(me, base + 117, base + 118)
-            + OpTxInputScriptSigSubstr(me, base + 126, base + 127) + OpTxInputScriptSigSubstr(me, base + 135, base + 136)
-            + OpTxInputScriptSigSubstr(me, base + 144, base + 145) + OpTxInputScriptSigSubstr(me, base + 177, base + 178)
-            + OpTxInputScriptSigSubstr(me, base + 210, base + 211) + OpTxInputScriptSigSubstr(me, base + 219, base + 220)
-            + OpTxInputScriptSigSubstr(me, base + 228, base + 229) + OpTxInputScriptSigSubstr(me, base + 237, base + 238)
-            + OpTxInputScriptSigSubstr(me, base + 270, base + 271) + OpTxInputScriptSigSubstr(me, base + 279, base + 280)
-            + OpTxInputScriptSigSubstr(me, base + 288, base + 289) + OpTxInputScriptSigSubstr(me, base + 297, base + 298)
-            + OpTxInputScriptSigSubstr(me, base + 306, base + 307) + OpTxInputScriptSigSubstr(me, base + 315, base + 316)
-            + OpTxInputScriptSigSubstr(me, base + 324, base + 325) + OpTxInputScriptSigSubstr(me, base + 333, base + 334)
-            + OpTxInputScriptSigSubstr(me, base + 342, base + 343) + OpTxInputScriptSigSubstr(me, base + 351, base + 352)
-            + OpTxInputScriptSigSubstr(me, base + 360, base + 361) + OpTxInputScriptSigSubstr(me, base + 369, base + 370)
-            + OpTxInputScriptSigSubstr(me, base + 378, base + 379) + OpTxInputScriptSigSubstr(me, base + 387, base + 388)
-            + OpTxInputScriptSigSubstr(me, base + 396, base + 397) + OpTxInputScriptSigSubstr(me, base + 405, base + 406)
-            + OpTxInputScriptSigSubstr(me, base + 414, base + 415) + OpTxInputScriptSigSubstr(me, base + 423, base + 424)
-            + OpTxInputScriptSigSubstr(me, base + 432, base + 433) + OpTxInputScriptSigSubstr(me, base + 441, base + 442)
-            + OpTxInputScriptSigSubstr(me, base + 450, base + 451) + OpTxInputScriptSigSubstr(me, base + 483, base + 484)
-            + OpTxInputScriptSigSubstr(me, base + 492, base + 493) + OpTxInputScriptSigSubstr(me, base + 501, base + 502)
-            + OpTxInputScriptSigSubstr(me, base + 510, base + 511) + OpTxInputScriptSigSubstr(me, base + 543, base + 544)
-            + OpTxInputScriptSigSubstr(me, base + 552, base + 553) + OpTxInputScriptSigSubstr(me, base + 561, base + 562)
-            + OpTxInputScriptSigSubstr(me, base + 570, base + 571);
-        require(h == byte[](0x20082020080808082020080808200808080808080808080808080808080808080808200808082008080808));
-    }
-    // END GENERATED span check
-
     entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut, int leg, int evA, int evB, int tk, int evMode,
                  int upd, int k, int form) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
         require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
-        spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);

@@ -789,8 +789,8 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   (`kobd/src/matcher/candidate.rs` `excluded_by_expiry`, applied at `:652`, and for pairs `matcher/pair.rs:660`), and a
   batch's evidence is only a fill of those candidates (`matcher/batch.rs` `evidence_in` / `evidence_for`). So the gap
   is open only to a party that builds the transaction by hand, which the self-trade limit above already concedes.
-- **What `minTouch` guarantees** (since the 2026-11-25 generation, audit R10CC-1). Every entry of every order template
-  except its maker's cancel first checks that its own state span is data only (each field a direct push of its fixed
+- **What `minTouch` guarantees** (since the 2026-11-25 generation, audit R10CC-1). The fill entry of every evidence kind
+  (`KobAsk`, `KobBid`, `KobPair` and the KRON twins) first checks that its own state span is data only (each field a direct push of its fixed
   length, `spanIsData`, generated from the compiled state). So an evidence order's own code runs on the state its bytes
   show, and the fill amount the readers read from its signature script is the amount its code fills: an accepted
   evidence fill trades at least `minTouch` base units at its quote, exactly as the reader sees it. Before it, a

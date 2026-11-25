@@ -216,12 +216,22 @@ fn a_rigged_state_span_is_refused_by_every_entry_but_the_cancel() {
                 let v = validate_signed(&s);
                 let label = format!("{name}: input {k} {} {entry}", template.name());
                 let e = seen.entry(format!("{} {entry}", template.name())).or_default();
+                // the fill entries of the evidence kinds (what a stop reads as evidence) check the span; nothing else does
+                let evidence_fill = matches!(
+                    (template.base(), entry.as_str()),
+                    (TemplateId::KobAsk, "settle") | (TemplateId::KobBid, "fill") | (TemplateId::KobPair, "settle")
+                );
                 if entry == "cancel" {
                     v.unwrap_or_else(|e| panic!("{label}: the maker's cancel must end a rigged order: {e}"));
                     e.0 += 1;
-                } else {
+                } else if evidence_fill {
                     let err = v.expect_err(&label).to_string();
                     assert!(err.contains(&format!("input {k}")), "{label}: {err}");
+                    e.1 += 1;
+                } else if v.is_ok() {
+                    // another entry runs with the rigged values: only its own maker's order is affected
+                    e.0 += 1;
+                } else {
                     e.1 += 1;
                 }
             }

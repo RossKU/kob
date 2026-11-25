@@ -359,39 +359,9 @@ contract KobCondBid(
     // evidence bid, read only when the stop leg fills unarmed. t is the
     // auction time, proven by CLTV and read only by an armed stop leg with
     // bandDaa > 0. form is the delivery form, read in mode 2 only.
-    // BEGIN GENERATED span check (scripts/gen-span-check.mjs): do not edit
-    // R10CC-1: the state span runs as script and is read at fixed offsets, by this order and by other scripts.
-    // It must be data only: each of its 33 fields a direct push of its fixed length (417 bytes in all),
-    // as the compiler encodes the state. The values are free.
-    // Every entry but the maker's cancel calls it first.
-    function spanIsData() {
-        int me = this.activeInputIndex;
-        int base = OpTxInputScriptSigLen(me) - this.bytecodeSize + 1;
-        byte[] h = OpTxInputScriptSigSubstr(me, base + 0, base + 1) + OpTxInputScriptSigSubstr(me, base + 33, base + 34)
-            + OpTxInputScriptSigSubstr(me, base + 66, base + 67) + OpTxInputScriptSigSubstr(me, base + 99, base + 100)
-            + OpTxInputScriptSigSubstr(me, base + 108, base + 109) + OpTxInputScriptSigSubstr(me, base + 117, base + 118)
-            + OpTxInputScriptSigSubstr(me, base + 150, base + 151) + OpTxInputScriptSigSubstr(me, base + 159, base + 160)
-            + OpTxInputScriptSigSubstr(me, base + 168, base + 169) + OpTxInputScriptSigSubstr(me, base + 177, base + 178)
-            + OpTxInputScriptSigSubstr(me, base + 186, base + 187) + OpTxInputScriptSigSubstr(me, base + 195, base + 196)
-            + OpTxInputScriptSigSubstr(me, base + 204, base + 205) + OpTxInputScriptSigSubstr(me, base + 213, base + 214)
-            + OpTxInputScriptSigSubstr(me, base + 222, base + 223) + OpTxInputScriptSigSubstr(me, base + 231, base + 232)
-            + OpTxInputScriptSigSubstr(me, base + 240, base + 241) + OpTxInputScriptSigSubstr(me, base + 249, base + 250)
-            + OpTxInputScriptSigSubstr(me, base + 258, base + 259) + OpTxInputScriptSigSubstr(me, base + 267, base + 268)
-            + OpTxInputScriptSigSubstr(me, base + 276, base + 277) + OpTxInputScriptSigSubstr(me, base + 285, base + 286)
-            + OpTxInputScriptSigSubstr(me, base + 294, base + 295) + OpTxInputScriptSigSubstr(me, base + 303, base + 304)
-            + OpTxInputScriptSigSubstr(me, base + 312, base + 313) + OpTxInputScriptSigSubstr(me, base + 321, base + 322)
-            + OpTxInputScriptSigSubstr(me, base + 354, base + 355) + OpTxInputScriptSigSubstr(me, base + 363, base + 364)
-            + OpTxInputScriptSigSubstr(me, base + 372, base + 373) + OpTxInputScriptSigSubstr(me, base + 381, base + 382)
-            + OpTxInputScriptSigSubstr(me, base + 390, base + 391) + OpTxInputScriptSigSubstr(me, base + 399, base + 400)
-            + OpTxInputScriptSigSubstr(me, base + 408, base + 409);
-        require(h == byte[](0x202020080820080808080808080808080808080808080808082008080808080808));
-    }
-    // END GENERATED span check
-
     entry settle(byte[8] nb, int tokIn, int leg, int ev, int t, int form) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
         require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
-        spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -666,7 +636,6 @@ contract KobCondBid(
     entry update(int ev, int tk) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
         require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
-        spanIsData();
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
@@ -743,7 +712,6 @@ contract KobCondBid(
     entry refund() {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
         require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
-        spanIsData();
         int self = this.activeInputIndex;
         int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
         if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }

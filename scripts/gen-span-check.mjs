@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generates the state-span check of every order template (TPLGEN, audit R10CC-1).
+// Generates the state-span check of the evidence order templates (TPLGEN, audit R10CC-1).
 //
 // A template's bytes are `0x6b ‖ state ‖ 0x6c ‖ code`: the state span runs as script, and its fields are read at
 // fixed offsets, by the order's own code and by other scripts (stop readers over evidence orders, pair legs). The
@@ -8,7 +8,8 @@
 // exactly as the compiler encodes the state; the values are free.
 //
 // The header positions are read from the compiled artifact itself (its canonical state span), never written by hand.
-// The function sits in each source between the markers below, and every non-cancel entry calls it first.
+// It is in the evidence kinds only (KobAsk, KobBid, KobPair and the KRON KobAskKron, KobBidKron), whose fill entry
+// calls it first: the only scripts another order reads as facts. The function sits between the markers below.
 //
 //   node scripts/gen-span-check.mjs          rewrite the generated blocks from contracts/artifacts
 //   node scripts/gen-span-check.mjs --check  exit 1 if a block differs from what the artifacts give
@@ -25,22 +26,12 @@ const END = '    // END GENERATED span check';
 
 // The order sources and the artifact whose span they are checked against (a D0 build shares its source's layout).
 const SOURCES = [
+  // the evidence kinds: the stop readers (touchAsk, touch, touchBid, the pair evLeg / rd) read their fill as evidence
   'orders/KobAsk.sil',
   'orders/KobBid.sil',
-  'orders/KobCondAsk.sil',
-  'orders/KobCondBid.sil',
-  'orders/KobCondPair.sil',
-  'orders/KobCurveAsk.sil',
-  'orders/KobIfdAsk.sil',
-  'orders/KobIfdBid.sil',
-  'orders/KobIfdPair.sil',
   'orders/KobPair.sil',
   'orders/kron/KobAskKron.sil',
   'orders/kron/KobBidKron.sil',
-  'orders/kron/KobCondAskKron.sil',
-  'orders/kron/KobCondBidKron.sil',
-  'orders/kron/KobIfdAskKron.sil',
-  'orders/kron/KobIfdBidKron.sil',
 ];
 
 /** The headers of a canonical state span: [offset, header bytes] per field. */
@@ -92,7 +83,7 @@ function block(name) {
     dynamic
       ? '    // (the table) of every byte left before the code, as the compiler encodes the state. The values are free.'
       : '    // as the compiler encodes the state. The values are free.',
-    "    // Every entry but the maker's cancel calls it first.",
+    "    // The fill entry, the one stop readers take as evidence, calls it first (its other entries do not).",
     dynamic ? '    function spanIsData(int rsLen) {' : '    function spanIsData() {',
     '        int me = this.activeInputIndex;',
     `        int base = OpTxInputScriptSigLen(me) - ${dynamic ? 'rsLen' : 'this.bytecodeSize'} + 1;`,
