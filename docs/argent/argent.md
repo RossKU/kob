@@ -21,10 +21,10 @@ artifact id you reviewed; do not pin a file name or a branch.
 
 | App | Artifact id (`id` field of `artifact.json`) |
 |---|---|
-| `KOBOrders` | `54c49534499a18293a45cc2f6ed20aa24631c7ca7a881d8a629941431322d086` |
-| `KOBOrdersKron` | `5264aa3d58e3ee2f54f2279ab635f16f10b491b4db4c5167ca7c55025bef2086` |
+| `KOBOrders` | `1d0aa40e8302b27c5601cc46139b936f101fddcdf700823ba4c6a02463b81d9e` |
+| `KOBOrdersKron` | `e1c73b72cde101646dc6b4882f441015136bafb3beca91693326483694b88dd4` |
 | `KOBToken` | `364f6518d3ae5a31d0fcf768c9a1cc5d6e187cb2d03787dee8d8e9088ffec39f` |
-| `KobRouter` | `01301f9a63ae2b4fce47add08f4d63755879c0eb8477d981adf30976eac85258` |
+| `KobRouter` | `912f8112f9f1572505689f51db27357638012a033272e2a80aa2940405a9a52f` |
 
 Actor-type handles (the template hash of the hand-written program: blake3 over prefix and suffix
 around the state span, the same value silverc reports as `template_hash`):
@@ -91,7 +91,7 @@ Two ways to name a KOB order kind in `observes`. Both compile-checked examples l
 ### Closed ICC (recommended)
 
 ```
-import "./KOBOrders/artifact.json" id "54c49534499a18293a45cc2f6ed20aa24631c7ca7a881d8a629941431322d086";
+import "./KOBOrders/artifact.json" id "1d0aa40e8302b27c5601cc46139b936f101fddcdf700823ba4c6a02463b81d9e";
 
 actor PriceGate owns PriceGateState {
     entry spend(cov_id ask_covid, int n, sig s)

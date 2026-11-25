@@ -175,7 +175,8 @@ contract KobAsk(
     // R10CC-1: the state span runs as script and is read at fixed offsets, by this order and by other scripts.
     // It must be data only: each of its 20 fields a direct push of its fixed length (276 bytes in all),
     // as the compiler encodes the state. The values are free.
-    // The fill entry, the one stop readers take as evidence, calls it first (its other entries do not).
+    // The fill entry, the one stop readers take as evidence, calls it first. The other entries refuse a
+    // signature script that starts with the fill's 0x08 push (R11T-1), so no other entry passes for a fill.
     function spanIsData() {
         int me = this.activeInputIndex;
         int base = OpTxInputScriptSigLen(me) - this.bytecodeSize + 1;
@@ -195,7 +196,7 @@ contract KobAsk(
 
     entry settle(byte[8] nb, int tokenIn, int tokOut, int t) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -213,7 +214,7 @@ contract KobAsk(
         byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
         require(byte[32](tin.slice(10, 42)) == selfId);
-        require(tin.slice(43, 79) == byte[](0x040100200000000000000000000000000000000000000000000000000000000000000000)); // row 2: scheme 4, borrowing off, zero guard
+        require(tin.slice(43, 79) == byte[](0x04010020) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])); // row 2: scheme 4, borrowing off, zero guard
         // A KCC-20 token is (covenant id, program, extension commitment).
         // Units of the same covenant id with another commitment are another
         // token.
@@ -362,7 +363,10 @@ contract KobAsk(
     // maker routes the custody and any strays.
     entry cancel(sig s) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
+        // R11T-1: a signature script that starts with the 8-byte push 0x08 is what a stop reads as
+        // a fill. It runs only through the fill entry, whose span check proves no code hid in the state.
+        require(OpTxInputScriptSigSubstr(this.activeInputIndex, 0, 1) != byte[](0x08));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);

@@ -791,7 +791,10 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   is open only to a party that builds the transaction by hand, which the self-trade limit above already concedes.
 - **What `minTouch` guarantees** (since the 2026-11-25 generation, audit R10CC-1). The fill entry of every evidence kind
   (`KobAsk`, `KobBid`, `KobPair` and the KRON twins) first checks that its own state span is data only (each field a direct push of its fixed
-  length, `spanIsData`, generated from the compiled state). So an evidence order's own code runs on the state its bytes
+  length, `spanIsData`, generated from the compiled state), and every other entry of those kinds (their cancels, and the
+  bids' refunds) refuses a signature script that starts with the fill's 8-byte push `0x08`, the only part of the signature
+  script a reader checks (audit R11T-1: the span runs before the dispatch, so without that rule a rigged order could pass
+  a fill-shaped signature script through its cancel). So an evidence order's own code runs on the state its bytes
   show, and the fill amount the readers read from its signature script is the amount its code fills: an accepted
   evidence fill trades at least `minTouch` base units at its quote, exactly as the reader sees it. Before it, a
   hand-built evidence order could carry code in a field the readers skip and swap that amount, so a fill of one unit

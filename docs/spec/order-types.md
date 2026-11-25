@@ -207,7 +207,8 @@ each pair template is one template for both families of each of its tokens (its 
 Every entry refuses a transaction on a KIP-21 user lane (`OpTxSubnetId` must be native). The fill entry of each
 evidence kind (`KobAsk`, `KobBid`, `KobPair` and the KRON twins: the fills a stop reads) first checks that the
 order's own state span is data only (each field a direct push of its fixed length), so a hand-built order with code in
-its state is never evidence (2026-11-25 generation; audit R10CC-1).
+its state is never evidence (2026-11-25 generation; audit R10CC-1). Their other entries (cancel, and the bids' refund)
+refuse a signature script that starts with the fill's 8-byte push `0x08`, so no other entry passes for a fill (R11T-1).
 Known limit: `KobBid`'s refund slot (`refundTo`) accepts any input without a covenant id, including another program's
 script; no KOB script combines with a bid that way today (2026-11-25 contract review).
 

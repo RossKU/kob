@@ -283,7 +283,7 @@ contract KobIfdPair(
             got = int(byte[8](st.slice(36, 44)));
         } else {
             require(byte[32](st.slice(10, 42)) == me);
-            require(st.slice(43, 79) == byte[](0x040100200000000000000000000000000000000000000000000000000000000000000000)); // row 2: scheme 4, borrowing off, zero guard
+            require(st.slice(43, 79) == byte[](0x04010020) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])); // row 2: scheme 4, borrowing off, zero guard
             got = int(byte[8](st.slice(1, 9)));
             gx = st.slice(47, 112);
             require(byte[32](st.slice(80, 112)) == ext);
@@ -601,7 +601,7 @@ contract KobIfdPair(
     entry fill(byte[8] nb, int aIn, int bIn, int aTplIn, int bTplIn, int exitOut, int amt, byte[] cPre, byte[] cSuf,
                int evA, int evB, int tk, int evMode, int t, int aOut, int bOut, int xc, int upd) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -1120,7 +1120,7 @@ contract KobIfdPair(
     // maker routes the custodies and any strays.
     entry cancel(sig s) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);

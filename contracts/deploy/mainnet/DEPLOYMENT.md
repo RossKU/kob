@@ -16,22 +16,22 @@ every network.
 
 | Template | Template hash | prefix / suffix |
 |---|---|---|
-| KobAsk | `c4feaee15a4f2151c58667f60c4b8e36b0dc834ff2c2b63b1d9018954f72f0e5` | 1 / 1832 |
-| KobBid | `39f6f767f4fdd712287084cec7db4dbbad831e246568753ee2e01c3260bba9e5` | 1 / 2882 |
-| KobCondAsk | `bfaf406fe1f14f0f554a63f93addefa2e74c61ac8252f7e270dadfdd570f8211` | 1 / 3630 |
-| KobCondBid | `46feb0d09ccadee63b2b9c64805dca0be46dcba80ad838dae00c3643ea7e7e99` | 1 / 4469 |
-| KobIfdBid | `a2a7bfe5651a4d127f9c2133b7bd4393af4d1b37fa0f44aa207fc17b6370fdc5` | 1 / 3351 |
-| KobIfdAsk | `87c16b1f953bece3db5f8602ebc0abce19df839f5d577795e0b5a6f85b5a2c3b` | 1 / 4855 |
-| KobPair | `215986284c6b85a62e32aaaec1b07339239d8da5f744d792b88813f0610064d0` | 1 / 3916 |
-| KobCondPair | `78309a1773d549e862e8b66ba51fc8ed00f3b9406400dd3df653a991280df4b7` | 1 / 7381 |
-| KobIfdPair | `221fc23765fb6a91734bcb8835247996ba650cd4c303c4fae3afb70e58fa82fa` | 1 / 8561 |
-| KobCurveAsk | `7edb91c12380a529ff0bdb392fb42991fe2eb7c6858d340f48aea681de310a0b` | 1 / 2263 |
-| KobAskKron | `173d56d1c70368ef88f08574a0bfe19b83b7796f30e00028629d94ae155e359f` | 1 / 1618 |
-| KobBidKron | `6325c554e6f758314595b97127c2f61d583a08aae8d6caa40f090e4d8909203a` | 1 / 1631 |
-| KobCondAskKron | `1f7c152bf9c239a7f1e73e37516c59f159b2c41eda62cc74b097fa90515bcfc3` | 1 / 3242 |
-| KobCondBidKron | `ba92e2bc69e7bb5a08615cd0e2eb9cf0c49879a9630cd0ec7086ef877cddc33c` | 1 / 3127 |
-| KobIfdBidKron | `bb357292363f6d2336a08624b73a5337530b7cea21ee70fdcf5c473f08c00667` | 1 / 3038 |
-| KobIfdAskKron | `51657ee16fef679892c8363aee0ecf96d40353f48b2d496d2886f1854dc940a8` | 1 / 4179 |
+| KobAsk | `a862bae7d96a4e9c26cffc26a0698743d518f93cb3ab0e938c24bee151d1dcbb` | 1 / 1805 |
+| KobBid | `6b49052379c72e41f0dd933a96b31229928a735119ce7d98ce0912c33c7336aa` | 1 / 2870 |
+| KobCondAsk | `ac72c259a31992c4a85ecd0a0d9cc9945301dc3a2df2c7168e8db822fef6b724` | 1 / 3584 |
+| KobCondBid | `15173978b64e403dee8efbae510b7da294b6db697edc32d79d18654237521f78` | 1 / 4429 |
+| KobIfdBid | `16aff5f78e62f87b7b6687a7da8045819aebeb5c6f0f243885ea51375ab0f8ba` | 1 / 3311 |
+| KobIfdAsk | `2f50eb0280e736c013a7bc705a1407557d1db6543aca80719003020984b432b5` | 1 / 4799 |
+| KobPair | `e6d7c73718e0bf4f4697573e60e1c40b6a230d5084f6da9b0e3fc0aa574bb112` | 1 / 3889 |
+| KobCondPair | `c286be3ee16993d939df19c6158809cdb39e4fe861b1880b6d962a8cd5f98192` | 1 / 7345 |
+| KobIfdPair | `e5cbc65216f086a7cc8c284c10e7d287221f816375fa830d8c32623545598ade` | 1 / 8493 |
+| KobCurveAsk | `b30fba5089e8f740210368c4c68f18070f9d02ed808f218644e0f926a5faf020` | 1 / 2227 |
+| KobAskKron | `6a3a18b043a13312afc925d33467a2b30d2c7ce0a64ff11aa8e4d621c59bfccb` | 1 / 1607 |
+| KobBidKron | `cc7420bd6c97576b44f5bd60970c02c8606a5ea45fb0ee4342470eaadc085e7f` | 1 / 1619 |
+| KobCondAskKron | `b57a25a6cb6aaf1362eaea872880bdefc0b2ddef1bd50560f5162f9c77525492` | 1 / 3212 |
+| KobCondBidKron | `b5d85939752dfc2b6713b3993d89c51b805cce677c2d9e9d4372dd4dad4eec8e` | 1 / 3087 |
+| KobIfdBidKron | `0e34fd309d637af241af23c2cc7da8361d6c5daa127eac332d08573933517163` | 1 / 2998 |
+| KobIfdAskKron | `949e86e18702d0e20529f6b48be04f2e7bc916a5a45a3ccc8d73ebcfc854ffb1` | 1 / 4139 |
 
 Lock templates: every automatic creator lock template (`KobLockAuto`) a build ever issued. A lock lasts up to 10 years,
 so this list only grows, and every build reads and releases each one (docs/spec/template-retirement.md, "Lock templates").

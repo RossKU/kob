@@ -307,7 +307,7 @@ contract KobCondAsk(
     // t is the auction time, read only by an armed stop leg with bandDaa > 0.
     entry settle(byte[8] nb, int tokenIn, int tokOut, int leg, int ev, int tk, int t) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -325,7 +325,7 @@ contract KobCondAsk(
         byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
         require(byte[32](tin.slice(10, 42)) == selfId);
-        require(tin.slice(43, 79) == byte[](0x040100200000000000000000000000000000000000000000000000000000000000000000)); // row 2: scheme 4, borrowing off, zero guard
+        require(tin.slice(43, 79) == byte[](0x04010020) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])); // row 2: scheme 4, borrowing off, zero guard
         // A KCC-20 token is (covenant id, program, extension commitment).
         // Units of the same covenant id with another commitment are another
         // token.
@@ -526,7 +526,7 @@ contract KobCondAsk(
     // The keeper may take up to keeperTip from this UTXO's value.
     entry update(int ev, int tk) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
@@ -580,7 +580,7 @@ contract KobCondAsk(
     // maker routes the custody and any strays.
     entry cancel(sig s) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);

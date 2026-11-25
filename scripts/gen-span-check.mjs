@@ -83,7 +83,8 @@ function block(name) {
     dynamic
       ? '    // (the table) of every byte left before the code, as the compiler encodes the state. The values are free.'
       : '    // as the compiler encodes the state. The values are free.',
-    "    // The fill entry, the one stop readers take as evidence, calls it first (its other entries do not).",
+    "    // The fill entry, the one stop readers take as evidence, calls it first. The other entries refuse a",
+    "    // signature script that starts with the fill's 0x08 push (R11T-1), so no other entry passes for a fill.",
     dynamic ? '    function spanIsData(int rsLen) {' : '    function spanIsData() {',
     '        int me = this.activeInputIndex;',
     `        int base = OpTxInputScriptSigLen(me) - ${dynamic ? 'rsLen' : 'this.bytecodeSize'} + 1;`,

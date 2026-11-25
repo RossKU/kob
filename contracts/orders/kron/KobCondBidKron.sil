@@ -285,7 +285,7 @@ contract KobCondBidKron(
     // read only by an armed stop leg with bandDaa > 0.
     entry settle(byte[8] nb, int tokenTplIn, int leg, int ev, int t) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -469,7 +469,7 @@ contract KobCondBidKron(
     // the evidence fill at input ev, as KobCondBid.update.
     entry update(int ev, int tk) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
@@ -532,7 +532,7 @@ contract KobCondBidKron(
     // maker routes the escrow and any strays.
     entry cancel(sig s) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);
@@ -543,7 +543,7 @@ contract KobCondBidKron(
     // has no tif, so it has no IOC kill.
     entry refund() {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         int self = this.activeInputIndex;
         int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
         if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }

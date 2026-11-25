@@ -15,7 +15,8 @@ The switch date is announced separately.
 
 - **Native lane only.** Every order refuses a transaction on a user subnetwork lane (KIP-21). No KOB tool builds one; it
   kept the indexer from having to prove such lanes.
-- **Evidence is data.** The fill of an ask, a bid or a pair order checks that the order's own state is plain data.
+- **Evidence is data.** The fill of an ask, a bid or a pair order checks that the order's own state is plain data, and
+  their cancels and refunds refuse a signature script shaped like a fill.
   A hand-built order could hide code in a field a stop does not read and make a one-token fill count as any size of
   print, arming or trailing a stop with almost no capital.
 - **Custody guard.** A sell order's custody must have a zero borrow guard. A unit someone sent with another guard could

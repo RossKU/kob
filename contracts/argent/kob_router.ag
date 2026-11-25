@@ -96,8 +96,8 @@
 // in `swap2`.
 
 import "./kcc20_8x8.ag";
-import "./KOBOrders/artifact.json" id "54c49534499a18293a45cc2f6ed20aa24631c7ca7a881d8a629941431322d086";
-import "./KOBOrdersKron/artifact.json" id "5264aa3d58e3ee2f54f2279ab635f16f10b491b4db4c5167ca7c55025bef2086";
+import "./KOBOrders/artifact.json" id "1d0aa40e8302b27c5601cc46139b936f101fddcdf700823ba4c6a02463b81d9e";
+import "./KOBOrdersKron/artifact.json" id "e1c73b72cde101646dc6b4882f441015136bafb3beca91693326483694b88dd4";
 
 const int MAX_SOMPI = 2900000000000000000;
 const byte SIGHASH_ALL = 0x01;

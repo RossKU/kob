@@ -616,7 +616,7 @@ contract KobCondPair(
     entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut, int leg, int evA, int evB, int tk, int evMode,
                  int upd, int k, int form) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -785,7 +785,7 @@ contract KobCondPair(
             } else {
                 require(sFamily == FAM_KCC20);
                 require(byte[32](tin.slice(10, 42)) == selfId);
-                require(tin.slice(43, 79) == byte[](0x040100200000000000000000000000000000000000000000000000000000000000000000)); // row 2: scheme 4, borrowing off, zero guard
+                require(tin.slice(43, 79) == byte[](0x04010020) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])); // row 2: scheme 4, borrowing off, zero guard
                 held = int(byte[8](tin.slice(1, 9)));
                 gx = tin.slice(47, 112);
                 // A KCC-20 token is (covenant id, program, extension
@@ -1180,7 +1180,7 @@ contract KobCondPair(
     // maker routes the custody and any strays.
     entry cancel(sig s) {
         // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
-        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
+        require(OpTxSubnetId() == byte[20](byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[4])));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);
