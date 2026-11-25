@@ -14,7 +14,7 @@ const GTC_EXIT = 1n << 62n;
 const GTC = CLOCK.daa + 77_760_000n;
 const ZERO = '0'.repeat(64);
 const SCALE = 1_000n;
-const KT = 2_200_000n; // keeper tip of the reference program (kob-wasm keeperTips)
+const KT = 2_300_000n; // keeper tip of the reference program (kob-wasm keeperTips)
 const RT = '3600000'; // refund tip of the reference program (keeper_tips.json)
 
 const buyFirst = (over: Partial<Extract<CondIntent, { type: 'ifd' }>> = {}): CondIntent => ({

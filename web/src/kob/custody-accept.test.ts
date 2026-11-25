@@ -43,17 +43,18 @@ describe('acceptsAsSellCustody', () => {
   });
 });
 
+// Since the pre-mainnet templates (TPLGEN row 2) a current order pins a zero guard: kob-protocol
+// refuses to release a guarded unit as its custody. A retired order's cancel still takes one
+// (kob-protocol tests/custody_class.rs).
 describe('a cancel releasing a custody with a borrow guard', () => {
-  it('builds and decodes with no custody finding (the maker gets a plain unit)', async () => {
+  it('is refused for an order of the current templates', async () => {
     const { planCancel } = await import('./cancel');
-    const { decodeSigning } = await import('./decode');
     const { MAKER, keyUtxo } = await import('../testing/chain-fixtures');
     const snap = placeGolden(kob, 'create.ask').snapshots[0]!;
     const guarded = { ...(snap.custody!.state as Kcc20State), borrow_guard: '11'.repeat(32) } as TokenState;
     const p = planCancel({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10_000_000_000n, 201)], tokenUtxos: [], clock: { daa: 78_000_000n } }, { ...snap, custody: { ...snap.custody!, state: guarded } });
-    expect(p.ok, JSON.stringify(p.issues)).toBe(true);
-    const s = decodeSigning({ kob, built: p.built!, maker: MAKER.pk, registry: null });
-    expect(s.blocking.map((b) => b.code)).toEqual([]);
+    expect(p.ok).toBe(false);
+    expect(JSON.stringify(p.issues)).toMatch(/not exactly the one its order pins/);
   });
 });
 
