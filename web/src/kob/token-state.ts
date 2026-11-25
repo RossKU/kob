@@ -145,16 +145,19 @@ export const extensionMatches = (s: TokenState, ext: Hex | null): boolean => isK
  * Whether a token unit is the sell custody of order `owner` as the CONTRACTS accept it (R9 custody
  * comparison, shared with kob-protocol's cancel, position cancel and refund): owned by the order's
  * covenant id (KCC-20 scheme 4, KRON id_type 2), borrow scheme 0, the extension the state pins, the
- * custody's exact amount. The borrow GUARD is ignored: the order covenants' custody checks ignore
- * it, so a unit with a guard is released by a cancel like the exact one and reaches the maker as a
- * plain unit. A bought custody, and the custody a fill spends, must be exact (`custodyState`).
+ * custody's exact amount. The borrow GUARD depends on the order's template: the current templates
+ * pin a zero guard (TPLGEN row 2, kob-protocol `check_ending_custody`), so a unit with another
+ * guard is no custody of theirs; the retired templates of the cancel-only table (`want.retired`)
+ * ignore it, so their cancel releases a guarded unit like the exact one and the maker gets a plain
+ * unit. A bought custody, and the custody a fill spends, must be exact (`custodyState`).
  * `ext` null accepts any class (KRON has none). The token covenant id is the caller's to compare.
  */
-export function acceptsAsSellCustody(s: unknown, want: { owner: Hex; amount: bigint; ext: Hex | null }): boolean {
+export function acceptsAsSellCustody(s: unknown, want: { owner: Hex; amount: bigint; ext: Hex | null; retired: boolean }): boolean {
   if (!s || typeof s !== 'object') return false;
   const st = s as Record<string, unknown>;
   if (st.owner !== want.owner || String(st.amount ?? '') !== want.amount.toString()) return false;
   if (isKronState(st as never)) return st.id_type === KRON_ID_COVID;
   if (!isKcc20State(st as never)) return false;
+  if (!want.retired && String(st.borrow_guard ?? '').toLowerCase() !== ZERO32) return false;
   return st.owner_scheme === KCC20_SCHEME_COVID && Number(st.borrow_scheme) === 0 && (want.ext === null || st.extension_commitment === want.ext);
 }

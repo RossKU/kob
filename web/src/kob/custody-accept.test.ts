@@ -1,5 +1,6 @@
 // The sell custody the contracts accept (token-state.ts acceptsAsSellCustody): the borrow guard is
-// ignored, as the order covenants ignore it; everything else must match.
+// ignored by a retired template only (the current ones pin a zero guard, TPLGEN row 2); everything
+// else must match.
 import { describe, expect, it } from 'vitest';
 import { acceptsAsSellCustody, custodyState } from './token-state';
 import { snapshotCheck, outpointKey, type NodeInputFact } from './node-verify';
@@ -13,25 +14,35 @@ const EXT = 'cd'.repeat(32);
 const exact = custodyState('kcc20', 100n, O, EXT) as Kcc20State;
 
 describe('acceptsAsSellCustody', () => {
-  it('ignores the borrow guard only', () => {
-    expect(acceptsAsSellCustody(exact, { owner: O, amount: 100n, ext: EXT })).toBe(true);
-    expect(acceptsAsSellCustody({ ...exact, borrow_guard: '11'.repeat(32) }, { owner: O, amount: 100n, ext: EXT })).toBe(true);
-    expect(acceptsAsSellCustody({ ...exact, borrow_scheme: 1 }, { owner: O, amount: 100n, ext: EXT })).toBe(false);
-    expect(acceptsAsSellCustody({ ...exact, extension_commitment: '99'.repeat(32) }, { owner: O, amount: 100n, ext: EXT })).toBe(false);
-    expect(acceptsAsSellCustody({ ...exact, amount: '99' }, { owner: O, amount: 100n, ext: EXT })).toBe(false);
-    expect(acceptsAsSellCustody({ ...exact, owner_scheme: 0 }, { owner: O, amount: 100n, ext: EXT })).toBe(false);
-    expect(acceptsAsSellCustody({ ...exact, owner: '00'.repeat(32) }, { owner: O, amount: 100n, ext: EXT })).toBe(false);
-    expect(acceptsAsSellCustody(custodyState('kron', 5n, O, null), { owner: O, amount: 5n, ext: null })).toBe(true);
+  it('a retired template ignores the borrow guard only; a current one requires a zero guard', () => {
+    expect(acceptsAsSellCustody(exact, { owner: O, amount: 100n, ext: EXT, retired: false })).toBe(true);
+    expect(acceptsAsSellCustody({ ...exact, borrow_guard: '11'.repeat(32) }, { owner: O, amount: 100n, ext: EXT, retired: false })).toBe(false);
+    expect(acceptsAsSellCustody(custodyState('kron', 5n, O, null), { owner: O, amount: 5n, ext: null, retired: false })).toBe(true);
+    expect(acceptsAsSellCustody(exact, { owner: O, amount: 100n, ext: EXT, retired: true })).toBe(true);
+    expect(acceptsAsSellCustody({ ...exact, borrow_guard: '11'.repeat(32) }, { owner: O, amount: 100n, ext: EXT, retired: true })).toBe(true);
+    expect(acceptsAsSellCustody({ ...exact, borrow_scheme: 1 }, { owner: O, amount: 100n, ext: EXT, retired: true })).toBe(false);
+    expect(acceptsAsSellCustody({ ...exact, extension_commitment: '99'.repeat(32) }, { owner: O, amount: 100n, ext: EXT, retired: true })).toBe(false);
+    expect(acceptsAsSellCustody({ ...exact, amount: '99' }, { owner: O, amount: 100n, ext: EXT, retired: true })).toBe(false);
+    expect(acceptsAsSellCustody({ ...exact, owner_scheme: 0 }, { owner: O, amount: 100n, ext: EXT, retired: true })).toBe(false);
+    expect(acceptsAsSellCustody({ ...exact, owner: '00'.repeat(32) }, { owner: O, amount: 100n, ext: EXT, retired: true })).toBe(false);
+    expect(acceptsAsSellCustody(custodyState('kron', 5n, O, null), { owner: O, amount: 5n, ext: null, retired: true })).toBe(true);
   });
 
-  it('the node check takes a custody with a borrow guard, confirmed under its own script', () => {
+  it('the node check of a current order takes only the exact custody: a claimed guarded one is checked as the exact one', () => {
     const snap = placeGolden(kob, 'create.ask').snapshots[0]!;
     const guarded = { ...(snap.custody!.state as Kcc20State), borrow_guard: '11'.repeat(32) } as TokenState;
     const withGuard = { ...snap, custody: { ...snap.custody!, state: guarded } };
     const check = snapshotCheck(kob, withGuard);
     const facts = new Map<string, NodeInputFact>(check.refs.map((r) => [outpointKey(r.transactionId, r.index), { amount: 1_000n, scriptPublicKey: r.scriptPublicKey, covenantId: r === check.refs[0] ? snap.covenantId : snap.custody!.covenantId! }]));
     const done = check.finish(facts);
-    expect((done.custody!.state as Kcc20State).borrow_guard).toBe('11'.repeat(32));
+    // a current template pins a zero guard: the exact state is the one the node confirms
+    expect((done.custody!.state as Kcc20State).borrow_guard).toBe('00'.repeat(32));
+    // the node holding the guarded unit under its own script is no custody of a current order
+    const c1 = snapshotCheck(kob, withGuard);
+    const f1 = new Map<string, NodeInputFact>(c1.refs.map((r) => [outpointKey(r.transactionId, r.index), { amount: 1_000n, scriptPublicKey: r.scriptPublicKey, covenantId: r === c1.refs[0] ? snap.covenantId : snap.custody!.covenantId! }]));
+    const k1 = c1.refs.find((r) => r.transactionId === snap.custody!.transactionId && r.index === snap.custody!.index)!;
+    f1.set(outpointKey(k1.transactionId, k1.index), { amount: 1_000n, scriptPublicKey: kob.tokenScriptPublicKey('KCC20Ref', guarded), covenantId: snap.custody!.covenantId! });
+    expect(() => c1.finish(f1)).toThrow(/custody/);
     // a custody of another class is still no custody
     const other = { ...snap, custody: { ...snap.custody!, state: { ...guarded, extension_commitment: '99'.repeat(32) } as TokenState } };
     const c2 = snapshotCheck(kob, other);

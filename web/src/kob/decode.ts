@@ -2024,8 +2024,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         const ps = (plan as { state?: unknown }).state as Record<string, unknown> | undefined;
         if (!ps) return false;
         if (zero ? t.outpoint.txid.toLowerCase() !== d.outpoint.txid.toLowerCase() : t.token!.ref.covenantId !== c.token) return false;
-        // what the contracts accept as the custody (the borrow guard ignored): token-state.ts
-        return acceptsAsSellCustody(ps, { owner: cov, amount: c.amount, ext: family === 'kron' ? null : ext });
+        // what the contracts accept as the custody (the borrow guard ignored by a retired template only): token-state.ts
+        return acceptsAsSellCustody(ps, { owner: cov, amount: c.amount, ext: family === 'kron' ? null : ext, retired: built.plans[d.index]?.kind === 'retiredCancel' });
       };
       if (continues) {
         const spent = owned.filter(isCustody).length;

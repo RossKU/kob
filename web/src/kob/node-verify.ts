@@ -252,9 +252,9 @@ export function snapshotCheck(kob: KobWasm, snap0: OrderSnapshot): SnapshotCheck
   const custodyState0 = snap.custody ? expectedCustody(0) : null;
   const prefundState = snap.prefund && prefundToken ? expectedCustody(1) : null;
   // The custody the contracts accept (token-state.ts acceptsAsSellCustody): the exact state, or the
-  // claimed one when it differs from it only in what the contracts ignore (the borrow guard). Its
-  // script is then that state's, and the node confirms it.
-  const claimedCustody = snap.custody && custodyState0 && acceptsAsSellCustody(snap.custody.state, { owner: snap.covenantId, amount: BigInt((custodyState0 as { amount: string }).amount), ext: (custodyState0 as { extension_commitment?: Hex }).extension_commitment ?? null }) ? (snap.custody.state as TokenState) : null;
+  // claimed one when it differs from it only in what the contracts ignore (the borrow guard, under a
+  // retired template only). Its script is then that state's, and the node confirms it.
+  const claimedCustody = snap.custody && custodyState0 && acceptsAsSellCustody(snap.custody.state, { owner: snap.covenantId, amount: BigInt((custodyState0 as { amount: string }).amount), ext: (custodyState0 as { extension_commitment?: Hex }).extension_commitment ?? null, retired: !!snap.retired }) ? (snap.custody.state as TokenState) : null;
   const custodyHeld = claimedCustody ?? custodyState0;
   const custodySpk = custodyHeld ? tokenSpk(kob, tplOf(custodyToken), custodyHeld) : null;
   const prefundSpk = prefundState ? tokenSpk(kob, tplOf(prefundToken), prefundState) : null;

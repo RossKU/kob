@@ -126,6 +126,14 @@ describe('the maker\'s cancel of an order under a retired template', () => {
     expect(s.net.tokens.reduce((a, t) => a + t.toMaker, 0n)).toBe(plan.tokensReturned);
   });
 
+  it('its cancel releases a custody with a borrow guard (a retired template ignores the guard; a current one pins zero)', async () => {
+    const { snap } = await snapshotOf('create.condAsk', COND_ASK_F1);
+    const guarded = { ...snap.custody!, state: { ...snap.custody!.state, borrow_guard: '11'.repeat(32) } as typeof snap.custody.state };
+    const plan = planCancel(env(), { ...snap, custody: guarded });
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    checkCancel(plan.built!, plan.expected);
+  });
+
   it('cancel all takes several of them in one transaction', async () => {
     const a = (await snapshotOf('create.bid', BID, 0x61)).snap;
     const b = (await snapshotOf('create.bid', BID, 0x62)).snap;
