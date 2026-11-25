@@ -203,6 +203,17 @@ pub struct TxRecord {
 /// not the junk. The processor reports it as `payload:undecodable`.
 pub const UNDECODABLE_PAYLOAD: &[u8] = b"KOB1\xff";
 
+/// Stand-in stored for a KOB1 payload whose ORDER record holds a state that does not decode or validate
+/// (`kob_protocol::Error::State` from the payload decoder). The processor reports it as `payload:state_span`, within
+/// the same bound as [`UNDECODABLE_PAYLOAD`].
+///
+/// A record spells a state as its fields, and the decoder rebuilds the canonical span from them, so a record never
+/// carries a span with opcodes in a field's bytes. An order output whose script holds such a span (the P2SH of a
+/// rigged span) is refused by the placement rule that its script is the P2SH of the rebuilt span; a reveal or an
+/// import decodes with the same re-encode check (`kob_protocol::state::AnyState::decode`). So kobd never lists,
+/// plans or offers an order whose span is not byte for byte the canonical pushes (`tests/state_span.rs`).
+pub const BAD_STATE_PAYLOAD: &[u8] = b"KOB1\xfe";
+
 /// Most transactions recorded per reorg window (the chain blocks the store holds) only for a KOB1
 /// payload that does not decode (`payload:undecodable`). A KOB placement of this build always
 /// decodes, so these are junk or a broken client, and the first ones show it.
@@ -211,12 +222,17 @@ pub const MAX_UNDECODABLE_IN_WINDOW: i64 = 256;
 /// Whether the rejects of the stored chain blocks hold fewer than [`MAX_UNDECODABLE_IN_WINDOW`]
 /// `payload:undecodable`. One bounded read of the partial index `rejects_undecodable`.
 fn undecodable_room(conn: &Connection) -> DbResult<bool> {
-    let n: i64 = conn
-        .prepare_cached(
-            "SELECT COUNT(*) FROM (SELECT 1 FROM rejects WHERE reason = 'payload:undecodable' \
-             AND block_seq >= (SELECT COALESCE(MIN(seq), 0) FROM blocks) LIMIT ?1)",
-        )?
-        .query_row([MAX_UNDECODABLE_IN_WINDOW], |r| r.get(0))?;
+    let mut n = 0i64;
+    // `payload:state_span` shares the bound; each is one bounded read of its partial index
+    for reason in ["payload:undecodable", "payload:state_span"] {
+        let k: i64 = conn
+            .prepare_cached(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM rejects WHERE reason = ?2 \
+                 AND block_seq >= (SELECT COALESCE(MIN(seq), 0) FROM blocks) LIMIT ?1)",
+            )?
+            .query_row(rusqlite::params![MAX_UNDECODABLE_IN_WINDOW, reason], |r| r.get(0))?;
+        n += k;
+    }
     Ok(n < MAX_UNDECODABLE_IN_WINDOW)
 }
 
@@ -1126,6 +1142,7 @@ impl Extractor<'_> {
         // five-byte stand-in that the processor rejects.
         let mut kept: Vec<Record> = vec![];
         let mut undecodable = false;
+        let mut bad_state = false;
         let mut junk_placement = false;
         if has_kob1 {
             match payload::decode(&tx.payload.0) {
@@ -1166,6 +1183,11 @@ impl Extractor<'_> {
                 Ok(None) => {}
                 // A KOB1 payload that does not decode is recorded as a reject, within a bound when
                 // that is all the transaction is (below).
+                // An ORDER record whose state span is not canonical (or does not validate): never an order.
+                Err(kob_protocol::Error::State(_)) => {
+                    undecodable = true;
+                    bad_state = true;
+                }
                 Err(_) => undecodable = true,
             }
         }
@@ -1310,7 +1332,9 @@ impl Extractor<'_> {
             let spk = spent_of(inp).map(|u| u.script_public_key.0.as_slice()).unwrap_or(&[]);
             inputs[i].reveal = reveal_of(i, inp, spk).filter(is_evidence_fill);
         }
-        let payload = if undecodable {
+        let payload = if bad_state {
+            BAD_STATE_PAYLOAD.to_vec()
+        } else if undecodable {
             UNDECODABLE_PAYLOAD.to_vec()
         } else if kept.is_empty() {
             vec![]

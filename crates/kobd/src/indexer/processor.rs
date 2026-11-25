@@ -1273,6 +1273,13 @@ impl Processor {
             Err(_) if rec.payload == super::record::UNDECODABLE_PAYLOAD => {
                 return self.record_reject(conn, seq, &rec.txid, "payload:undecodable", delta);
             }
+            Err(_) if rec.payload == super::record::BAD_STATE_PAYLOAD => {
+                return self.record_reject(conn, seq, &rec.txid, "payload:state_span", delta);
+            }
+            // a record of a store written before the stand-in, or a payload checked at apply time
+            Err(kob_protocol::Error::State(e)) => {
+                return self.record_reject(conn, seq, &rec.txid, &format!("payload:state_span: {e}"), delta);
+            }
             Err(e) => return self.record_reject(conn, seq, &rec.txid, &format!("payload:{e}"), delta),
         };
         // The release that the placement announces, when it is newer than this build. It drives the

@@ -263,6 +263,8 @@ CREATE TABLE IF NOT EXISTS rejects (
 CREATE INDEX IF NOT EXISTS rejects_block ON rejects (block_seq);
 -- The undecodable KOB1 payloads of the stored chain blocks, which the extractor bounds (`record::MAX_UNDECODABLE_IN_WINDOW`).
 CREATE INDEX IF NOT EXISTS rejects_undecodable ON rejects (block_seq) WHERE reason = 'payload:undecodable';
+-- the same for the ORDER records whose state span is not canonical (`record::BAD_STATE_PAYLOAD`), which share the bound
+CREATE INDEX IF NOT EXISTS rejects_state_span ON rejects (block_seq) WHERE reason = 'payload:state_span';
 
 -- Token UTXOs of tracked tokens (allowlisted, or traded by an order when the allowlist is not required) whose state the
 -- indexer could PROVE: the creating transaction's transfer leader (KCC-20 `next_states`, KRON columns) reveals the state of
