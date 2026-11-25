@@ -613,22 +613,24 @@ pub(crate) fn ensure_token_presence(conn: &Connection) -> DbResult<()> {
              DELETE FROM token_presence WHERE token_id = {token} AND value <= 0;"
         )
     };
+    // the triggers are created once (their bodies are this build's), so an open with nothing to change writes nothing
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS token_presence (token_id INTEGER PRIMARY KEY, value INTEGER NOT NULL); \
          CREATE INDEX IF NOT EXISTS token_presence_rank ON token_presence (value DESC, token_id); \
-         DROP TRIGGER IF EXISTS book_live_presence_ins; DROP TRIGGER IF EXISTS book_live_presence_upd; \
-         DROP TRIGGER IF EXISTS book_live_presence_del; \
-         CREATE TRIGGER book_live_presence_ins AFTER INSERT ON book_live BEGIN {} END; \
-         CREATE TRIGGER book_live_presence_upd AFTER UPDATE ON book_live BEGIN {} {} END; \
-         CREATE TRIGGER book_live_presence_del AFTER DELETE ON book_live BEGIN {} END; \
-         DELETE FROM token_presence; \
-         INSERT INTO token_presence (token_id, value) SELECT token_id, SUM({}) FROM book_live GROUP BY token_id HAVING SUM({}) > 0;",
+         CREATE TRIGGER IF NOT EXISTS book_live_presence_ins AFTER INSERT ON book_live BEGIN {} END; \
+         CREATE TRIGGER IF NOT EXISTS book_live_presence_upd AFTER UPDATE ON book_live BEGIN {} {} END; \
+         CREATE TRIGGER IF NOT EXISTS book_live_presence_del AFTER DELETE ON book_live BEGIN {} END;",
         add("NEW.token_id", value("NEW")),
         add("OLD.token_id", format!("-{}", value("OLD"))),
         add("NEW.token_id", value("NEW")),
         add("OLD.token_id", format!("-{}", value("OLD"))),
-        value("book_live"),
-        value("book_live"),
+    ))?;
+    // recounted from the rows, written only where a row differs (the lean rewrite's check of free pages)
+    conn.execute_batch(&format!(
+        "DELETE FROM token_presence WHERE token_id NOT IN (SELECT token_id FROM book_live GROUP BY token_id HAVING SUM({v}) > 0); \
+         INSERT INTO token_presence (token_id, value) SELECT token_id, SUM({v}) FROM book_live WHERE true GROUP BY token_id \
+         HAVING SUM({v}) > 0 ON CONFLICT(token_id) DO UPDATE SET value = excluded.value WHERE value != excluded.value;",
+        v = value("book_live")
     ))?;
     Ok(())
 }
