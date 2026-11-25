@@ -189,6 +189,12 @@ pub struct TxRecord {
     /// unknown. It is flagged by bit 28 of the encoded `pos`. A frame holding one is written as
     /// record-log format 5 (`recordlog::FORMAT_IN_VALUE`).
     pub in_value: Option<u64>,
+    /// The user lane of a transaction on a lane other than the native one: the 4 namespace bytes of its subnetwork id
+    /// (KIP-21). Such a transaction only ends what the store tracks (R9-K, `docs/spec/indexer-lanes.md`): its record
+    /// holds its inputs and its covenant outputs, nothing else, and the processor closes every tracked output it spends
+    /// with the reason `spent_on_other_lane`. `None` for a native transaction. It is flagged by bit 27 of the encoded
+    /// `pos`. A frame holding one is written as record-log format 6 (`recordlog::FORMAT_LANE`).
+    pub lane: Option<[u8; 4]>,
 }
 
 /// Stand-in stored for a KOB1 payload that did not decode.
@@ -196,6 +202,17 @@ pub struct TxRecord {
 /// It is `KOB1` and a version byte no reader supports. The record keeps the fact of the reject,
 /// not the junk. The processor reports it as `payload:undecodable`.
 pub const UNDECODABLE_PAYLOAD: &[u8] = b"KOB1\xff";
+
+/// Stand-in stored for a KOB1 payload whose ORDER record holds a state that does not decode or validate
+/// (`kob_protocol::Error::State` from the payload decoder). The processor reports it as `payload:state_span`, within
+/// the same bound as [`UNDECODABLE_PAYLOAD`].
+///
+/// A record spells a state as its fields, and the decoder rebuilds the canonical span from them, so a record never
+/// carries a span with opcodes in a field's bytes. An order output whose script holds such a span (the P2SH of a
+/// rigged span) is refused by the placement rule that its script is the P2SH of the rebuilt span; a reveal or an
+/// import decodes with the same re-encode check (`kob_protocol::state::AnyState::decode`). So kobd never lists,
+/// plans or offers an order whose span is not byte for byte the canonical pushes (`tests/state_span.rs`).
+pub const BAD_STATE_PAYLOAD: &[u8] = b"KOB1\xfe";
 
 /// Most transactions recorded per reorg window (the chain blocks the store holds) only for a KOB1
 /// payload that does not decode (`payload:undecodable`). A KOB placement of this build always
@@ -205,12 +222,17 @@ pub const MAX_UNDECODABLE_IN_WINDOW: i64 = 256;
 /// Whether the rejects of the stored chain blocks hold fewer than [`MAX_UNDECODABLE_IN_WINDOW`]
 /// `payload:undecodable`. One bounded read of the partial index `rejects_undecodable`.
 fn undecodable_room(conn: &Connection) -> DbResult<bool> {
-    let n: i64 = conn
-        .prepare_cached(
-            "SELECT COUNT(*) FROM (SELECT 1 FROM rejects WHERE reason = 'payload:undecodable' \
-             AND block_seq >= (SELECT COALESCE(MIN(seq), 0) FROM blocks) LIMIT ?1)",
-        )?
-        .query_row([MAX_UNDECODABLE_IN_WINDOW], |r| r.get(0))?;
+    let mut n = 0i64;
+    // `payload:state_span` shares the bound; each is one bounded read of its partial index
+    for reason in ["payload:undecodable", "payload:state_span"] {
+        let k: i64 = conn
+            .prepare_cached(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM rejects WHERE reason = ?2 \
+                 AND block_seq >= (SELECT COALESCE(MIN(seq), 0) FROM blocks) LIMIT ?1)",
+            )?
+            .query_row(rusqlite::params![MAX_UNDECODABLE_IN_WINDOW, reason], |r| r.get(0))?;
+        n += k;
+    }
     Ok(n < MAX_UNDECODABLE_IN_WINDOW)
 }
 
@@ -240,6 +262,8 @@ const KCC23_FLAG: u64 = 1 << 30;
 const PAYER_FLAG: u64 = 1 << 29;
 /// Set in the encoded `pos` when the record has an input-value section ([`TxRecord::in_value`]).
 const IN_VALUE_FLAG: u64 = 1 << 28;
+/// Set in the encoded `pos` when the record is of a user-lane transaction ([`TxRecord::lane`]).
+const LANE_FLAG: u64 = 1 << 27;
 /// The longest payer script kept, in bytes.
 ///
 /// A standard script public key is at most 37 bytes with its version. A longer one is not kept.
@@ -389,7 +413,8 @@ impl TxRecord {
                 | if self.holds.is_empty() { 0 } else { HOLDS_FLAG }
                 | if self.kcc23.is_none() { 0 } else { KCC23_FLAG }
                 | if self.payer.is_none() { 0 } else { PAYER_FLAG }
-                | if self.in_value.is_none() { 0 } else { IN_VALUE_FLAG },
+                | if self.in_value.is_none() { 0 } else { IN_VALUE_FLAG }
+                | if self.lane.is_none() { 0 } else { LANE_FLAG },
         );
         w.bytes(&self.payload);
         w.var(self.inputs.len() as u64);
@@ -445,6 +470,9 @@ impl TxRecord {
         if let Some(v) = self.in_value {
             w.var(v);
         }
+        if let Some(l) = &self.lane {
+            w.raw(l);
+        }
     }
 
     /// Adds the templates the record uses to a frame's tables.
@@ -474,7 +502,8 @@ impl TxRecord {
         let has_kcc23 = raw_pos & KCC23_FLAG != 0;
         let has_payer = raw_pos & PAYER_FLAG != 0;
         let has_in_value = raw_pos & IN_VALUE_FLAG != 0;
-        let pos = (raw_pos & !(HOLDS_FLAG | KCC23_FLAG | PAYER_FLAG | IN_VALUE_FLAG)) as u32;
+        let has_lane = raw_pos & LANE_FLAG != 0;
+        let pos = (raw_pos & !(HOLDS_FLAG | KCC23_FLAG | PAYER_FLAG | IN_VALUE_FLAG | LANE_FLAG)) as u32;
         let payload = r.bytes()?.to_vec();
         let n_in = r.count(34)?;
         let mut inputs = Vec::with_capacity(n_in);
@@ -525,7 +554,8 @@ impl TxRecord {
             None
         };
         let in_value = if has_in_value { Some(r.var()?) } else { None };
-        Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer, in_value })
+        let lane = if has_lane { Some(<[u8; 4]>::try_from(r.raw(4)?).expect("4 bytes")) } else { None };
+        Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer, in_value, lane })
     }
 
     /// The record of a transaction relevant only for its KCC-23 declaration section.
@@ -544,6 +574,7 @@ impl TxRecord {
             kcc23: Some(d),
             payer: None,
             in_value: None,
+            lane: None,
         }
     }
 
@@ -764,6 +795,21 @@ pub struct PreTx {
     pub placements: HashMap<Vec<u8>, Result<Vec<payload::RecoveredOrder>, String>>,
 }
 
+/// The lane of `tx` when it is neither the native nor the coinbase lane: the 4 namespace bytes of its subnetwork id
+/// (KIP-21 user lanes are `[namespace(4), 0×16]`).
+///
+/// KOB state is created only by native-lane transactions (R9-K, `docs/spec/indexer-lanes.md`). A user-lane transaction
+/// can only end what the store tracks: it spends a tracked output, which is closed with the reason
+/// `spent_on_other_lane`. Its KOB1 payload is not read, and nothing it creates is tracked. A transaction with no
+/// subnetwork id is taken as native (the chain proof refuses one without a 20-byte id).
+pub fn user_lane(tx: &Tx) -> Option<[u8; 4]> {
+    if is_coinbase(tx) {
+        return None;
+    }
+    let b: &[u8; 20] = tx.subnetwork_id.as_ref()?.0.as_slice().try_into().ok()?;
+    (*b != [0u8; 20]).then(|| [b[0], b[1], b[2], b[3]])
+}
+
 /// Whether `tx` is on the coinbase lane (subnetwork id `[1, 0, ...]`): a block's coinbase.
 ///
 /// KOB never reads one. Its payload is the block's blue score and miner data, chosen by consensus, so it may start
@@ -781,7 +827,7 @@ impl PreTx {
     ///
     /// It is `None` for a transaction without a KOB1 payload or covenant input / output.
     pub fn compute(tx: &Tx) -> Option<PreTx> {
-        if is_coinbase(tx) {
+        if is_coinbase(tx) || user_lane(tx).is_some() {
             return None;
         }
         let has_kob1 = tx.payload.0.starts_with(payload::MAGIC);
@@ -858,6 +904,7 @@ fn raw_record(tx: &Tx) -> TxRecord {
         kcc23: None,
         payer: None,
         in_value: None,
+        lane: None,
     }
 }
 
@@ -868,7 +915,7 @@ pub fn precompute(blocks: &[&[Tx]], threads: usize) -> PreBatch {
     let txs: Vec<&Tx> = blocks
         .iter()
         .flat_map(|b| b.iter())
-        .filter(|t| !is_coinbase(t))
+        .filter(|t| !is_coinbase(t) && user_lane(t).is_none())
         .filter(|t| {
             t.payload.0.starts_with(payload::MAGIC)
                 || t.outputs.iter().any(|o| o.covenant.is_some())
@@ -997,6 +1044,59 @@ impl Extractor<'_> {
         self.extract_with(tx, pos, None)
     }
 
+    /// The record of a user-lane transaction ([`user_lane`]): `None` unless it spends an output the store tracks. It
+    /// holds every input (a tracked one with the store's covenant id and, for an order, its reveal) and the covenant
+    /// outputs, from which the processor names what remains on chain of an order it closes. No payload, no token or
+    /// holding section, no KCC-23 section: nothing a user-lane transaction creates is tracked.
+    fn extract_other_lane(&self, tx: &Tx, pos: u32, lane: [u8; 4]) -> DbResult<Option<TxRecord>> {
+        let tracked: Vec<Option<TrackedIn>> = tx
+            .inputs
+            .iter()
+            .map(|i| tracked_in(self.conn, &i.previous_outpoint.transaction_id, i.previous_outpoint.index))
+            .collect::<DbResult<_>>()?;
+        if tracked.iter().all(Option::is_none) {
+            return Ok(None);
+        }
+        let mut inputs = Vec::with_capacity(tx.inputs.len());
+        for (inp, tracked) in tx.inputs.iter().zip(tracked) {
+            let prev = &inp.previous_outpoint;
+            let mut rec = RecIn { txid: prev.transaction_id, index: prev.index, cov: None, daa: 0, reveal: None };
+            match tracked {
+                Some(TrackedIn::Order { cov, spk, daa }) => {
+                    rec.cov = Some(cov);
+                    rec.daa = u64::try_from(daa).unwrap_or(0);
+                    rec.reveal = parse_reveal(&inp.signature_script.0, &spk);
+                }
+                Some(TrackedIn::Token { cov }) => rec.cov = Some(cov),
+                None => {}
+            }
+            inputs.push(rec);
+        }
+        let outputs = tx
+            .outputs
+            .iter()
+            .map(|o| match &o.covenant {
+                Some(c) => {
+                    RecOut { value: o.value, spk: o.script_public_key.0.clone(), cov: Some((c.authorizing_input, c.covenant_id)) }
+                }
+                None => RecOut { value: o.value, spk: vec![], cov: None },
+            })
+            .collect();
+        Ok(Some(TxRecord {
+            txid: tx.verbose_data.transaction_id,
+            pos,
+            payload: vec![],
+            inputs,
+            outputs,
+            tok_outs: vec![],
+            holds: vec![],
+            kcc23: None,
+            payer: None,
+            in_value: None,
+            lane: Some(lane),
+        }))
+    }
+
     /// [`Extractor::extract`] with the transaction's precomputed pure work ([`PreTx`]).
     ///
     /// Without it, everything is computed here.
@@ -1004,6 +1104,10 @@ impl Extractor<'_> {
         // A coinbase is never read (R9C1-M1).
         if is_coinbase(tx) {
             return Ok(None);
+        }
+        // A user-lane transaction only ends what the store tracks (R9-K).
+        if let Some(lane) = user_lane(tx) {
+            return self.extract_other_lane(tx, pos, lane);
         }
         let reveal_of = |i: usize, inp: &TxInput, spk: &[u8]| -> Option<Reveal> {
             match pre.and_then(|p| p.reveals.get(&(i as u32))) {
@@ -1038,6 +1142,7 @@ impl Extractor<'_> {
         // five-byte stand-in that the processor rejects.
         let mut kept: Vec<Record> = vec![];
         let mut undecodable = false;
+        let mut bad_state = false;
         let mut junk_placement = false;
         if has_kob1 {
             match payload::decode(&tx.payload.0) {
@@ -1078,6 +1183,11 @@ impl Extractor<'_> {
                 Ok(None) => {}
                 // A KOB1 payload that does not decode is recorded as a reject, within a bound when
                 // that is all the transaction is (below).
+                // An ORDER record whose state span is not canonical (or does not validate): never an order.
+                Err(kob_protocol::Error::State(_)) => {
+                    undecodable = true;
+                    bad_state = true;
+                }
                 Err(_) => undecodable = true,
             }
         }
@@ -1222,7 +1332,9 @@ impl Extractor<'_> {
             let spk = spent_of(inp).map(|u| u.script_public_key.0.as_slice()).unwrap_or(&[]);
             inputs[i].reveal = reveal_of(i, inp, spk).filter(is_evidence_fill);
         }
-        let payload = if undecodable {
+        let payload = if bad_state {
+            BAD_STATE_PAYLOAD.to_vec()
+        } else if undecodable {
             UNDECODABLE_PAYLOAD.to_vec()
         } else if kept.is_empty() {
             vec![]
@@ -1237,7 +1349,7 @@ impl Extractor<'_> {
         let spends_order = inputs.iter().any(|i| i.daa > 0 || i.reveal.is_some());
         let payer = if spends_order { payer_of(tx) } else { None };
         let in_value = if spends_order { in_value_of(tx) } else { None };
-        Ok(Some(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer, in_value }))
+        Ok(Some(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer, in_value, lane: None }))
     }
 }
 
@@ -1275,6 +1387,7 @@ mod tests {
             kcc23: None,
             payer: Some([&[0u8, 0, 0x20][..], &[7u8; 32], &[0xac]].concat()),
             in_value: Some(u64::MAX - 1),
+            lane: None,
         };
         let mut w = Writer::new();
         rec.encode(&mut w);
@@ -1318,6 +1431,7 @@ mod tests {
             kcc23: None,
             payer: None,
             in_value: None,
+            lane: None,
         };
         let mut w = Writer::new();
         rec.encode(&mut w);
@@ -1357,6 +1471,7 @@ mod tests {
                 kcc23: None,
                 payer: None,
                 in_value: None,
+                lane: None,
             };
             let mut w = Writer::new();
             rec.encode(&mut w);

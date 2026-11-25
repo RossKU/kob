@@ -3476,6 +3476,9 @@ async fn every_public_read_ends_at_the_read_budget() {
         format!("/v1/orders?maker={}&token={t}&status=active&limit=200", h(MAKER)),
         format!("/v1/orders?maker={}&token={t}&status=cancelled&limit=200", h(MAKER)),
         format!("/v1/pairs/{}/{}/orders?limit=200", h(BASE), h(QUOTE)),
+        format!("/v1/pairs/{}/{}/orders?maker={}&limit=200", h(BASE), h(QUOTE), h(MAKER)),
+        format!("/v1/token-utxos?owner={}&token={t}&order=amount&limit=200", h(MAKER)),
+        "/v1/tokens?limit=500".to_string(),
         format!("/v1/orders/{}", h(0x51)),
         format!("/v1/orders/{}/events?limit=200", h(0x51)),
         format!("/v1/strays?maker={}&limit=200", h(MAKER)),
@@ -3501,6 +3504,9 @@ async fn every_public_read_ends_at_the_read_budget() {
             || r.contains("&token=")
             || r.ends_with(&h(0x51))
             || r.contains("/orders?limit")
+            || r.contains("/orders?maker")
+            || r.contains("order=amount")
+            || r.starts_with("/v1/tokens?")
     };
     // the real budget: bounded answers or a refusal, quickly
     for r in &routes {
@@ -3539,4 +3545,15 @@ async fn every_public_read_ends_at_the_read_budget() {
     let (_, _, body) = raw(&app, "/v1/metrics", &[]).await;
     let metrics = String::from_utf8_lossy(&body).to_string();
     assert!(metrics.contains("kob_api_read_budget_refused_total{route=\"/v1/stats/{id}\"}"), "{metrics}");
+}
+
+/// R9 follow-up: `GET /v1/pairs` stays a bare array; a cut scan says so in `x-kob-truncated: 1`, read from the head of the
+/// cached body.
+#[test]
+fn the_pair_list_body_splits_into_its_flag_and_its_array() {
+    let page = |t: bool| {
+        axum::body::Bytes::from(serde_json::to_vec(&crate::indexer::pairs::PairsPage { truncated: t, pairs: vec![] }).unwrap())
+    };
+    assert_eq!(super::rest::split_pairs_body(&page(true)), Some((true, axum::body::Bytes::from_static(b"[]"))));
+    assert_eq!(super::rest::split_pairs_body(&page(false)), Some((false, axum::body::Bytes::from_static(b"[]"))));
 }

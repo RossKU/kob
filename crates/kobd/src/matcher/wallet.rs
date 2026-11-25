@@ -945,6 +945,14 @@ fn sddl_granted(sddl: &str, me: Option<&str>, wanted: u32, here_only: bool) -> V
     if let Some(owner) = sddl_owner(sddl).filter(|o| !own_trustee(o, me)) {
         out.push(owner.to_string());
     }
+    // A NULL DACL (`D:NO_ACCESS_CONTROL`, what Windows writes for one) lets everyone do everything, as for a folder
+    // ([`sddl_on_folder`], R9FD2-3).
+    if sddl.contains("D:NO_ACCESS_CONTROL") {
+        if !out.iter().any(|t| t == "WD") {
+            out.push("WD".to_string());
+        }
+        return out;
+    }
     if let Some(dacl) = sddl.find("D:").map(|i| &sddl[i + 2..]) {
         let dacl = dacl.split("S:").next().unwrap_or(dacl); // drop a SACL
         let mut allowed: std::collections::BTreeMap<String, u32> = Default::default();
@@ -1602,6 +1610,9 @@ mod tests {
             vec!["S-1-5-21-9-9-9-1002".to_string()]
         );
         assert_eq!(sddl_on_folder(&format!("O:{me}D:NO_ACCESS_CONTROL"), Some(me), RENAME_BITS), vec!["WD".to_string()]);
+        // the key file and the start check read a NULL DACL as Everyone too (R9FD2-3)
+        assert_eq!(sddl_readable_by_others(&format!("O:{me}D:NO_ACCESS_CONTROL"), Some(me)), vec!["WD".to_string()]);
+        assert_eq!(sddl_writable_by_others(&format!("O:{me}D:NO_ACCESS_CONTROL"), Some(me)), vec!["WD".to_string()]);
         // a link others may write (retarget) counts; the same right on a folder does not
         let w = format!("O:{me}D:(A;;0x12019f;;;BU)");
         assert!(sddl_on_folder(&w, Some(me), RENAME_BITS).is_empty());

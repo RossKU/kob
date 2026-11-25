@@ -646,11 +646,27 @@ const max0 = (a: bigint): bigint => (a < 0n ? 0n : a);
  * Splits the KAS of an order UTXO: refund tip and keeper tip (always inside the order), reserves,
  * and carrier (asks) or trading escrow (bids).
  */
-function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
+export function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
   const refundTips = min(d.refundTip, value);
-  let rest = value - refundTips;
+  // A buy order's refund tip is paid only at a refund, out of what is left then: its fills may spend
+  // that KAS, and the builders size the escrow without it (kob-protocol BidState / CondBidState /
+  // IfdBidState::escrow). So it is not taken out of the budget. Read in the contracts:
+  // - KobBid.sil fill: `left = inValue - used`, `left >= reserve`;
+  // - KobCondBid.sil fill: `left = value - spend`; its keeper takes up to keeperTip only from what
+  //   the escrow holds beyond the buy of amountLeft (`floorOut >= spend(amountLeft, worst) +
+  //   deliveryCarrier`), so the keeper tip is no part of the budget either;
+  // - KobIfdBid.sil fill: `left = value - spend - deliveryCarrier`; an arming keeper of a stop
+  //   entry may take keeperTip from the escrow itself (`output >= input - keeperTip`), so there the
+  //   keeper tip is taken out of the budget.
+  // A sell's refund tip is part of the order's KAS outside any budget.
+  const plainBid = /^KobBid(Kron)?$/.test(d.kind);
+  const condBid = /^KobCondBid(Kron)?$/.test(d.kind);
+  const ifdBid = /^KobIfdBid(Kron)?$/.test(d.kind);
+  const buyBudget = d.side !== 'sell' && !d.pair && (plainBid || condBid || ifdBid);
+  let rest = buyBudget ? value : value - refundTips;
   const keeperTips = min(d.trigger?.keeperTip ?? d.entry?.keeperTip ?? 0n, rest);
-  rest -= keeperTips;
+  const keeperFromBudget = !buyBudget || (ifdBid && (d.entry?.entryStop ?? 0n) > 0n);
+  if (keeperFromBudget) rest -= keeperTips;
   const reserves = min(d.reservedKas, rest);
   rest -= reserves;
   // a pair order trades tokens only: its KAS is carriers (deliveries, exits) and its prefunded tip

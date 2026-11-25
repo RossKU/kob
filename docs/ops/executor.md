@@ -363,7 +363,11 @@ Roles, Configuration and store, Node, Storage, Read API, Log, Executor, Fees, Ma
 `--data-dir`, `--tokens`) and, for `import-orders` and `rebase`, the node options. Exit status of `kobd`: 0 a stop; 1 an error (a
 supervisor starts it again, e.g. "exiting so that a supervisor restarts the executor"); 2 a usage mistake (clap's own, an option of
 another role, `--node` on a start, a role the configuration was not set up for, `--lean` on the wrong role), a configuration file
-that is missing or does not parse, or a stop that did not finish in time (do not start it again unchanged); 130 a second Ctrl+C. The commands that print a document or a report on stdout
+that is missing or does not parse, or a stop that did not finish in time (do not start it again unchanged); 130 a second Ctrl+C. A stop asked while the store does
+its start-up work (the one-time counts and indexes of a store an earlier build wrote: seconds on a small store, longer on a large one
+upgraded from an older schema) logs `stop requested: finishing the store's start-up work first` and is honoured when that work
+ends; the 10 s limit counts from then. Each step is one transaction with its own "done" marker, so a kill or a second Ctrl+C there
+loses only that step, which the next start does again. The commands that print a document or a report on stdout
 (`kobd db ...`, `kobd logo-reports ...`, `kobd address-balance`, `kobd setup --non-interactive`, `kobd withdraw`, `kobd config check`,
 `kobd match` and `kobd keep` with `--offline`) keep their log on stderr, so `kobd db export-orders | jq` works. Log lines have kaspad's
 shape, `2026-11-11 08:44:28.529Z  INFO status: ...` (UTC to the millisecond, the level, no Rust module path; the path is shown only
@@ -1582,7 +1586,7 @@ should default to settled. The mempool tier is not served by the indexer.
 |---|---|
 | `GET /v1/health` | full status: the build (`version`: the crate version, the release tag without the `v`, `0.0.0` before the first release; `commit`: the git commit it was built from, `null` when the build did not set `KOB_GIT_COMMIT`; `payload_version`: the `KOB1` payload version it reads and writes; `docs/ops/release.md`, 7), follower state, cursor, node DAA, lag (`lag_daa`, `lag_seconds`), `alarms` for the 1/6/12/24 h thresholds, reorg and applied-block counters, record-log position (`records_next_n`), the minimum order value it lists (`min_order_value_sompi`, sompi as a string: the web app warns below it) |
 | `GET /v1/health/ready` | 200 only when following or catching up with lag below the smallest alarm threshold (1 h; load balancers); 503 also when the node position is unknown. It is also 200 while catching up as long as the lag is under that threshold, so it is not "caught up" (that is `state = following`) |
-| `GET /v1/tokens` | registry tokens plus, with a program allowlist loaded, every token of a supported program that an order placement named (listed or not): the tokens the chain proves (a holding exists) first, at most 2000, then the rest, at most 5000 rows and a step budget of their own, `truncated: true` when either is cut; `GET /v1/tokens/{covenant_id}` answers one token's view whether or not the list holds it: `ticker` (empty without a registry entry), `covenant_id`, `template_hash`, `template_id`, `extension_commitment` (without an entry: the one commitment the token's order placements named, the all-zero one of the standard class included; null when they named several, or none: a pair placement whose state does not carry a token's commitment names none for it), `family`, `decimals`, `scale` (the standard scale `10^decimals`, at most `10^9`; null without an entry: clients take it from the token's orders, and the first order names it), `market_scale` (without an entry: the scale of the token's earliest listed order, open or ended (one index seek, whatever unlisted orders came before it), or, while the token has no listed order, of the earliest of its 16 oldest orders; the first order set it and it stays the market's, so a client prices new orders at it and refuses decimals of another scale; null with an entry and before any order), `genesis_verified` (registry fact, `null` when it does not say), `warnings` (derived from facts: `genesis_unverified`, `live_mint_authority`), `registry` (`source`, `sha256` of the document loaded), `powers` (program capabilities: `freeze`, `seize`, `blacklist`, `mint-authority`, ...), `open_asks`, `open_bids`, `declaration` (`true` when the indexer holds a verified KCC-23 declaration for the covenant id, served by the next endpoint; absent otherwise) |
+| `GET /v1/tokens` | registry tokens plus, with a program allowlist loaded, every token of a supported program that an order placement named (listed or not): paged (`?cursor=&limit=`, at most 2000 open tokens a page, `next_cursor` and `truncated: true` while a next page exists): the registry's tokens, then the tokens the chain proves (a holding exists) by market presence (the KAS of their fillable fixed-price bids), then the other proven ones by age, then the tokens only placements name; `GET /v1/tokens/{covenant_id}` answers one token's view wherever its place is (the route for a token just created): `ticker` (empty without a registry entry), `covenant_id`, `template_hash`, `template_id`, `extension_commitment` (without an entry: the one commitment the token's order placements named, the all-zero one of the standard class included; null when they named several, or none: a pair placement whose state does not carry a token's commitment names none for it), `family`, `decimals`, `scale` (the standard scale `10^decimals`, at most `10^9`; null without an entry: clients take it from the token's orders, and the first order names it), `market_scale` (without an entry: the scale of the token's earliest listed order, open or ended (one index seek, whatever unlisted orders came before it), or, while the token has no listed order, of the earliest of its 16 oldest orders; the first order set it and it stays the market's, so a client prices new orders at it and refuses decimals of another scale; null with an entry and before any order), `genesis_verified` (registry fact, `null` when it does not say), `warnings` (derived from facts: `genesis_unverified`, `live_mint_authority`), `registry` (`source`, `sha256` of the document loaded), `powers` (program capabilities: `freeze`, `seize`, `blacklist`, `mint-authority`, ...), `open_asks`, `open_bids`, `declaration` (`true` when the indexer holds a verified KCC-23 declaration for the covenant id, served by the next endpoint; absent otherwise) |
 | `GET /v1/tokens/{covenant_id}/declaration` | the token's KCC-23 metadata declaration as a launch proof (`kob_protocol::kcc23::LaunchProof`): `{"format": "kob-kcc23-proof/1", "covenantId", "preparation", "genesis"}`, each transaction in the fields its version 1 id commits to (`version`, `inputs` [`transactionId`, `index`, `sequence`], `outputs` [`value`, `scriptPublicKey` {`version`, `script`}, `covenant` {`authorizingInput`, `covenantId`} or null], `lockTime`, `subnetworkId`, `gas`, `payload`; bytes as hex, 64-bit numbers as decimal strings). The preparation's payload is `0x00` and the declaration JSON. The indexer keeps a proof only after `LaunchProof::verify` accepted it (both transaction ids and the covenant id recomputed) and a client verifies it again: an indexer can withhold a declaration, never forge one. It captures a preparation accepted with the standard version 1, lock time 0, native subnetwork and gas 0 (the fields a `High` answer leaves out) whose genesis is accepted within `declaration_window_hours` (72) of it. `404 not_found` when it holds none, `400 bad_request` for an id that is not 32 bytes of hex; one primary-key lookup on the light lane, rate cost 1 |
 | `GET /v1/token-utxos?owner=&token=&spent=&limit=&cursor=` | token UTXOs of tracked tokens with proven states, by owner and / or token (section 5.1) |
 | `GET /v1/token-events?token=&limit=` | token identities seen in placement records |
@@ -3227,8 +3231,8 @@ run without the file). Unlisted tokens (stray dust) are only merged, or with `--
 forged, whichever node served the batch: every header must hash to its block, link to the chain block before it, meet the
 target of its `bits` (kHeavyHash, rusty-kaspa's `kaspa-pow`) and not claim a target easier than `floor_factor` (default
 4) times the median of the last `floor_window` (600) headers, nor than a network minimum (`min_difficulty`: 1e13 on
-mainnet, 1e4 on testnet-10); every transaction must hash to its id; every lane the batch touches (the native lane always,
-coinbase aside) must fold into the tip a KIP-21 lane proof (`getSeqCommitLaneProof`) shows against the last chain block's
+mainnet, 1e4 on testnet-10); every transaction must hash to its id; the native lane, and every user lane on which the batch
+spends an output the store tracks (R9-K, `docs/spec/indexer-lanes.md`; the coinbase lane is never read), must fold into the tip a KIP-21 lane proof (`getSeqCommitLaneProof`) shows against the last chain block's
 `accepted_id_merkle_root`, so no native transaction can be hidden or added; and the signature scripts of every
 transaction that can matter to KOB must match its merged block, whose transactions must match its `hash_merkle_root`
 and which must be in the merge set of the chain block that accepted the transaction (a direct parent, or found below one
@@ -3245,6 +3249,46 @@ remote node, they held the follower to 1-1.5x chain speed on the TN10 soak). Lef
 native one that a batch hides entirely (until it next shows up), and the spent outputs attached to inputs, which are
 read for untracked trigger evidence only: a spend of a tracked output is read from the store's own output, looked up by
 outpoint.
+
+**Lane load** (R9C1-H1, R9-K).
+- **The lane rule.** KOB state is created only by native-lane transactions. A transaction on a KIP-21 user lane can only end
+  what the index tracks (`docs/spec/indexer-lanes.md`), so a user lane is proven only where it spends a tracked output. A
+  flood of junk transactions on lanes of their own costs the index no lane proofs.
+- **What still costs proofs.** Each proven user lane ends one tracked output made earlier on the native lane, at two lane
+  proofs. The bound is in `docs/ops/api-bounds.md`, *Lanes*.
+- **Against a remote node** (the supported setup: RPC only, someone else's server).
+  - The node has no batched lane-proof call today, so each lane costs two calls of its own.
+  - kobd proves what still needs proofs at about `8 / (2 × call time)` lanes a second: about 13 a second at 0.3 s a call, 4
+    a second at 1 s.
+  - So each lane an attacker makes proven delays the index by 75 ms at 0.3 s, or 250 ms at 1 s. Each such lane ends one
+    tracked output the attacker made beforehand (the cost table of `docs/ops/api-bounds.md`, *Lanes*).
+  - Delaying it past the node's pruning depth (30 h) takes about 1.4 M such outputs at 0.3 s (about 1.4 M KAS at 1 KAS
+    each, refundable), or about 0.43 M at 1 s.
+  - A shorter burst falls behind (`catching_up`, the cursor's true age shown) and recovers at the same rate.
+- **Calls in the normal case go down.** A window that shows no spend of a tracked output on a user lane proves the native
+  lane alone: two lane proofs. Before, it proved every lane it showed, two each.
+- **Optional: a node next to the index.** An operator may run one on the same host or LAN. Its lane-proof rate is an
+  estimate until measured: 2,000 to 8,000 lanes a second at 0.5 to 2 ms a call.
+- Consensus allows at most 500 new lanes a second.
+- **How an operator tells lane load from a slow node.** `/v1/health` `chain_proof`:
+  - `lanes_pending` (lane proofs still to fetch for the piece in progress), `lane_proofs_answered` rising, and
+    `lane_proof_failures` flat mean lane load;
+  - `lane_budget` (lanes a piece takes, from the measured call time: 4,096 against a fast node, down to 64 against a slow
+    one);
+  - `user_lanes_proven_total`;
+  - the status line says `proving lanes: N pending, M answered, K a piece` while it lasts.
+  - A slow node instead shows failures or timeouts and an `authority_pace` of `failing`.
+
+**After a "too deep" gap.** A lane proof the node calls too deep, of a cursor older than the pruning depth, halts the
+follower with that message.
+1. Point `--rpc-url` (or an extra node) at a node that still proves the cursor, if there is one: an archival node, or one
+   whose pruning point is older.
+2. Otherwise rebase. The recovering follower does it by itself when the node no longer knows the cursor; else run
+   `kobd db rebase` by hand. The store moves to the node's pruning point, and its tracked orders are reconciled with the
+   node's UTXO set: those the node no longer has are closed `gap`, successors under the same script are adopted.
+3. Orders created inside the skipped stretch and still open are missing until their makers import them (7.5).
+4. The rebase takes minutes. Following from the pruning point then means catching up about 30 h of chain, which takes hours
+   (not measured). Under continued lane load it falls behind again at the rates above.
 
 Run a rusty-kaspa v2.1.0 node with `--utxoindex` (funding lookup), `--retention-period-days=7`,
 `--disable-upnp`, RPC on loopback only, never `--unsaferpc` (the recommended setup), or use public nodes (*Public nodes*

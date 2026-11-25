@@ -77,9 +77,9 @@ describe('create transactions: what the wallet will sign, derived from the built
     expect(o.custody).toBeNull();
     const value = BigInt(goldenRequest<{ value: string }>('create.bid').value);
     expect(o.value).toBe(value);
-    // the delivery carrier (10 KAS) is the reserve line; the escrow is what is left after the
-    // refund tip
-    expect(o.locked).toMatchObject({ total: value, escrow: value - REFUND - 10n * KAS, refundTips: REFUND, reserves: 10n * KAS, carriers: 0n });
+    // the delivery carrier (10 KAS) is the reserve line; the escrow is the rest: a bid's refund tip
+    // is paid from what is left at a refund, and its fills may spend that KAS (KobBid.sil)
+    expect(o.locked).toMatchObject({ total: value, escrow: value - 10n * KAS, refundTips: REFUND, reserves: 10n * KAS, carriers: 0n });
     expect(s.net.tokens).toEqual([]);
     expect(s.signatures).toBe(1);
   });

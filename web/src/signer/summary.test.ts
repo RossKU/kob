@@ -190,8 +190,9 @@ describe('signer summary: prices that cannot be misread, the flipped view in its
     expect(r['Expected price (auction start)']).toBe('0.4 TUSD per KAS');
     // the worst price (all-in, the tip included) rounded against the user: fewer tokens per KAS
     expect(r['Worst price (all-in)']).toBe('0.388349 TUSD per KAS');
-    // the chain's own terms stay, its prices are not said twice
-    expect(r['KAS budget']).toMatch(/ KAS$/);
+    // the chain's own terms stay, its prices and its budget are not said twice ("You sell" is the budget)
+    expect(r['KAS budget']).toBeUndefined();
+    expect(r['Buys with this budget']).toBeUndefined();
     expect(o.rows.filter((x) => /per TUSD/.test(x.value))).toEqual([]);
     expect(o.rows.some((x) => / \/ /.test(x.value))).toBe(false);
   });

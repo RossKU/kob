@@ -92,7 +92,7 @@ export const CASES: OrderCase[] = [
     name: 'limit GTC sell', ...limit('sell'), ...SELL, fields: () => ({ amount: '2', price: '0.027' }),
     receipt: {
       orderTitle: 'Sell limit order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Limit price': '0.027 KAS per EXKCC', 'You receive at least per token (all-in)': '0.027 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2700000', tip: '0', tif: '0', activeFrom: '0', amountLeft: '200000000', refundTip: '5000000', scale: '100000000' },
@@ -102,7 +102,7 @@ export const CASES: OrderCase[] = [
     name: 'limit GTC buy', ...limit('buy'), ...buyLimit('0.049'), fields: () => ({ amount: '2', price: '0.0245' }),
     receipt: {
       orderTitle: 'Buy limit order',
-      card: { 'KAS budget': '0 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.049 KAS' },
+      card: { 'KAS budget': '0.049 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.049 KAS' },
     },
     state: { price: '2450000', tip: '0', tif: '0', activeFrom: '0', reserve: '0', deliveryCarrier: '100000000', refundTip: '5000000' },
     timing: { kind: 'gtc' },
@@ -111,7 +111,7 @@ export const CASES: OrderCase[] = [
     name: 'limit sell with a priority tip: all-in is limit minus tip', ...limit('sell'), ...SELL, fields: () => ({ amount: '2', price: '0.027', tip: '0.001' }),
     receipt: {
       orderTitle: 'Sell limit order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Limit price': '0.027 KAS per EXKCC', 'You receive at least per token (all-in)': '0.026 KAS per EXKCC', 'Priority tip': '0.001 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2700000', tip: '100000', amountLeft: '200000000' },
@@ -121,7 +121,7 @@ export const CASES: OrderCase[] = [
     name: 'limit buy with a priority tip: all-in is limit plus tip', ...limit('buy'), ...buyLimit('0.051'), fields: () => ({ amount: '2', price: '0.0245', tip: '0.001' }),
     receipt: {
       orderTitle: 'Buy limit order',
-      card: { 'KAS budget': '0.001 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0255 KAS per EXKCC', 'Priority tip': '0.001 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.051 KAS' },
+      card: { 'KAS budget': '0.051 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0255 KAS per EXKCC', 'Priority tip': '0.001 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.051 KAS' },
     },
     state: { price: '2450000', tip: '100000' },
     timing: { kind: 'gtc' },
@@ -132,7 +132,7 @@ export const CASES: OrderCase[] = [
     fields: (c) => ({ amount: '2', price: '0.027', lifetime: 'gtd', lifetimeAt: localAfter(c, 3 * 86_400) }),
     receipt: {
       orderTitle: 'Sell limit order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Limit price': '0.027 KAS per EXKCC', 'You receive at least per token (all-in)': '0.027 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2700000', tif: '0', amountLeft: '200000000' },
@@ -143,7 +143,7 @@ export const CASES: OrderCase[] = [
     fields: (c) => ({ amount: '2', price: '0.0245', lifetime: 'gtd', lifetimeAt: localAfter(c, 3 * 86_400) }),
     receipt: {
       orderTitle: 'Buy limit order',
-      card: { 'KAS budget': '0 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.049 KAS' },
+      card: { 'KAS budget': '0.049 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.049 KAS' },
     },
     state: { price: '2450000', tif: '0' },
     timing: { kind: 'gtd', afterSeconds: 3 * 86_400 },
@@ -154,7 +154,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.027', lifetime: 'day' }),
     receipt: {
       orderTitle: 'Sell day limit order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Limit price': '0.027 KAS per EXKCC', 'You receive at least per token (all-in)': '0.027 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2700000', tif: '0' },
@@ -165,7 +165,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.0245', lifetime: 'day' }),
     receipt: {
       orderTitle: 'Buy day limit order',
-      card: { 'KAS budget': '0 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.049 KAS' },
+      card: { 'KAS budget': '0.049 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.049 KAS' },
     },
     state: { price: '2450000', tif: '0' },
     timing: { kind: 'day' },
@@ -176,7 +176,7 @@ export const CASES: OrderCase[] = [
     fields: (c) => ({ amount: '2', price: '0.027', activeFrom: localAfter(c, 2 * 3600) }),
     receipt: {
       orderTitle: 'Sell limit order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Limit price': '0.027 KAS per EXKCC', 'You receive at least per token (all-in)': '0.027 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2700000', tif: '0' },
@@ -187,7 +187,7 @@ export const CASES: OrderCase[] = [
     fields: (c) => ({ amount: '2', price: '0.0245', activeFrom: localAfter(c, 2 * 3600) }),
     receipt: {
       orderTitle: 'Buy limit order',
-      card: { 'KAS budget': '0 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.049 KAS' },
+      card: { 'KAS budget': '0.049 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.049 KAS' },
     },
     state: { price: '2450000', tif: '0' },
     timing: { kind: 'timed', afterSeconds: 2 * 3600 },
@@ -198,7 +198,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.0245' }),
     receipt: {
       orderTitle: 'Sell IOC limit order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.00000001 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You receive at least per token (all-in)': '0.0245 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2450000', tif: '1', amountLeft: '200000000' },
@@ -209,7 +209,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.0265' }),
     receipt: {
       orderTitle: 'Buy IOC limit order',
-      card: { 'KAS budget': '0.003 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Limit price': '0.0265 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0265 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.053 KAS' },
+      card: { 'KAS budget': '0.053 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Limit price': '0.0265 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0265 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.053 KAS' },
     },
     state: { price: '2650000', tif: '1', deliveryCarrier: '100000000' },
     timing: { kind: 'ioc' },
@@ -219,7 +219,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.0245', direct: 'order' }),
     receipt: {
       orderTitle: 'Sell FOK limit order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.00000001 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You receive at least per token (all-in)': '0.0245 KAS per EXKCC', 'Time in force': 'fill or kill: all or nothing', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2450000', tif: '2', amountLeft: '200000000' },
@@ -230,7 +230,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.0265', direct: 'order' }),
     receipt: {
       orderTitle: 'Buy FOK limit order',
-      card: { 'KAS budget': '0.003 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Limit price': '0.0265 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0265 KAS per EXKCC', 'Time in force': 'fill or kill: all or nothing', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.053 KAS' },
+      card: { 'KAS budget': '0.053 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Limit price': '0.0265 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0265 KAS per EXKCC', 'Time in force': 'fill or kill: all or nothing', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.053 KAS' },
     },
     state: { price: '2650000', tif: '2' },
     timing: { kind: 'ioc' },
@@ -241,7 +241,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2' }),
     receipt: {
       orderTitle: 'Sell market order (auction)',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0249 KAS per EXKCC', 'Worst price (all-in): you receive at least per token': '0.024153 KAS per EXKCC', 'Auction ends at (worst price)': '0.024153 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2490000', priceEnd: '2415300', tif: '1', amountLeft: '200000000' },
@@ -252,7 +252,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2' }),
     receipt: {
       orderTitle: 'Buy market order (auction)',
-      card: { 'KAS budget': '0.001706 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0251 KAS per EXKCC', 'Worst price (all-in): you pay at most per token': '0.025853 KAS per EXKCC', 'Auction ends at (worst price)': '0.025853 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.051706 KAS' },
+      card: { 'KAS budget': '0.051706 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0251 KAS per EXKCC', 'Worst price (all-in): you pay at most per token': '0.025853 KAS per EXKCC', 'Auction ends at (worst price)': '0.025853 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.051706 KAS' },
     },
     state: { price: '2510000', priceEnd: '2585300', tif: '1' },
     timing: { kind: 'auction' },
@@ -262,7 +262,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', slippageBps: '1' }),
     receipt: {
       orderTitle: 'Sell market order (auction)',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0249 KAS per EXKCC', 'Worst price (all-in): you receive at least per token': '0.024651 KAS per EXKCC', 'Auction ends at (worst price)': '0.024651 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2490000', priceEnd: '2465100', tif: '1' },
@@ -274,7 +274,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', displayedPrice: '0.0251' }),
     receipt: {
       orderTitle: 'Buy market order (auction)',
-      card: { 'KAS budget': '0.001706 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0251 KAS per EXKCC', 'Worst price (all-in): you pay at most per token': '0.025853 KAS per EXKCC', 'Auction ends at (worst price)': '0.025853 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.051706 KAS' },
+      card: { 'KAS budget': '0.051706 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0251 KAS per EXKCC', 'Worst price (all-in): you pay at most per token': '0.025853 KAS per EXKCC', 'Auction ends at (worst price)': '0.025853 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.051706 KAS' },
     },
     state: { price: '2510000', priceEnd: '2585300', tif: '1' },
     timing: { kind: 'auction' },
@@ -284,7 +284,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', displayedPrice: '0.0249' }),
     receipt: {
       orderTitle: 'Sell market order (auction)',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0249 KAS per EXKCC', 'Worst price (all-in): you receive at least per token': '0.024153 KAS per EXKCC', 'Auction ends at (worst price)': '0.024153 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2490000', priceEnd: '2415300', tif: '1' },
@@ -295,7 +295,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2' }),
     receipt: {
       orderTitle: 'Sell market order (auction)',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0249 KAS per EXKCC', 'Worst price (all-in): you receive at least per token': '0.024153 KAS per EXKCC', 'Auction ends at (worst price)': '0.024153 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2490000', priceEnd: '2415300', tif: '1', amountLeft: '200000000' },
@@ -307,7 +307,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '6', sliceAmount: '2', interval: '10', price: '0.0245' }),
     receipt: {
       orderTitle: 'Sell TWAP schedule',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−6 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−6 EXKCC' },
       card: { 'Amount': '6 EXKCC', 'Minimum fill': '2 EXKCC', 'Limit price': '0.0245 KAS per EXKCC', 'You receive at least per token (all-in)': '0.0245 KAS per EXKCC', 'Rate limit': 'at most 2 EXKCC every 600 s', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2450000', interval: '6000', maxFill: '200000000', amountLeft: '600000000', tif: '0' },
@@ -318,7 +318,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '6', sliceAmount: '2', interval: '10', price: '0.026' }),
     receipt: {
       orderTitle: 'Buy DCA schedule',
-      card: { 'KAS budget': '2.10600002 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.026 KAS per EXKCC', 'You pay at most per token (all-in)': '0.026 KAS per EXKCC', 'Rate limit': 'at most 2 EXKCC every 600 s', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '3.15600002 KAS' },
+      card: { 'KAS budget': '2.15600002 KAS', 'Minimum fill': '2 EXKCC', 'Limit price': '0.026 KAS per EXKCC', 'You pay at most per token (all-in)': '0.026 KAS per EXKCC', 'Rate limit': 'at most 2 EXKCC every 600 s', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '3.15600002 KAS' },
     },
     state: { price: '2600000', interval: '6000', maxFill: '200000000', tif: '0', deliveryCarrier: '100000000' },
     timing: { kind: 'gtc' },
@@ -329,7 +329,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.027', priceEnd: '0.0255', duration: '10' }),
     receipt: {
       orderTitle: 'Sell declining-price (Dutch) order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Expected price (auction start)': '0.027 KAS per EXKCC', 'Worst price (all-in): you receive at least per token': '0.0255 KAS per EXKCC', 'Auction ends at (worst price)': '0.0255 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { price: '2700000', priceEnd: '2550000', tif: '0', amountLeft: '200000000' },
@@ -340,7 +340,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.024', priceEnd: '0.0255', duration: '10' }),
     receipt: {
       orderTitle: 'Buy rising-bid order',
-      card: { 'KAS budget': '0.001 KAS', 'Minimum fill': '2 EXKCC', 'Expected price (auction start)': '0.024 KAS per EXKCC', 'Worst price (all-in): you pay at most per token': '0.0255 KAS per EXKCC', 'Auction ends at (worst price)': '0.0255 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.051 KAS' },
+      card: { 'KAS budget': '0.051 KAS', 'Minimum fill': '2 EXKCC', 'Expected price (auction start)': '0.024 KAS per EXKCC', 'Worst price (all-in): you pay at most per token': '0.0255 KAS per EXKCC', 'Auction ends at (worst price)': '0.0255 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.051 KAS' },
     },
     state: { price: '2400000', priceEnd: '2550000', tif: '0' },
     timing: { kind: 'gtc' },
@@ -351,7 +351,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', stop: '0.023' }),
     receipt: {
       orderTitle: 'Sell stop order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.023 KAS per EXKCC', 'Worst fill price after the trigger': '0.02231 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a sell order resting at or below the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { stopPrice: '2300000', tpPrice: '0', slipBps: '300', bandDaa: '300', minRestDaa: '50', armed: '0', keeperTip: '2300000', amountLeft: '200000000' },
@@ -362,7 +362,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', stop: '0.027' }),
     receipt: {
       orderTitle: 'Buy stop order',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.02781 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.07862 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.02781 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.07862 KAS' },
     },
     state: { stopPrice: '2700000', tpPrice: '0', slipBps: '300', bandDaa: '300', armed: '0', keeperTip: '2300000', amountLeft: '200000000', deliveryCarrier: '100000000' },
     timing: { kind: 'gtc' },
@@ -372,7 +372,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', stop: '0.023', limit: '0.0225' }),
     receipt: {
       orderTitle: 'Sell stop order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.023 KAS per EXKCC', 'Worst fill price after the trigger': '0.0225009 KAS per EXKCC', 'Fill band': '2.17% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a sell order resting at or below the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { stopPrice: '2300000', slipBps: '217', bandDaa: '300', amountLeft: '200000000' },
@@ -383,7 +383,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', stop: '0.027', limit: '0.0275' }),
     receipt: {
       orderTitle: 'Buy stop order',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.0274995 KAS per EXKCC', 'Fill band': '1.85% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.077999 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.0274995 KAS per EXKCC', 'Fill band': '1.85% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.077999 KAS' },
     },
     state: { stopPrice: '2700000', slipBps: '185', bandDaa: '300', amountLeft: '200000000' },
     timing: { kind: 'gtc' },
@@ -393,18 +393,18 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', stop: '0.023', 'trail.step': '0.0005', 'trail.gap': '0.001' }),
     receipt: {
       orderTitle: 'Sell trailing stop',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.023 KAS per EXKCC', 'Worst fill price after the trigger': '0.02231 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a sell order resting at or below the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trailing': 'step 0.0005 KAS, gap 0.001 KAS, one update per 10 min at most', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { stopPrice: '2300000', trailStep: '50000', trailGap: '100000', trailWait: '6000', armed: '0', keeperTip: '2300000', amountLeft: '200000000' },
     timing: { kind: 'gtc' },
   },
   {
-    name: 'trailing stop buy', type: 'trailingStop', side: 'buy', kind: 'KobCondBid', listType: 'trailing', listLabel: 'Trailing stop', locked: '1.51862 KAS', escrowed: null,
+    name: 'trailing stop buy', type: 'trailingStop', side: 'buy', kind: 'KobCondBid', listType: 'trailing', listLabel: 'Trailing stop', locked: '1.53862 KAS', escrowed: null,
     fields: () => ({ amount: '2', stop: '0.027', 'trail.step': '0.0005', 'trail.gap': '0.001' }),
     receipt: {
       orderTitle: 'Buy trailing stop',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.02781 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trailing': 'step 0.0005 KAS, gap 0.001 KAS, one update per 10 min at most', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.51862 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.02781 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trailing': 'step 0.0005 KAS, gap 0.001 KAS, one update per 10 min at most', 'Trigger armed': 'not yet armed', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.53862 KAS' },
     },
     state: { stopPrice: '2700000', trailStep: '50000', trailGap: '100000', trailWait: '6000', deliveryCarrier: '100000000' },
     timing: { kind: 'gtc' },
@@ -415,7 +415,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.027' }),
     receipt: {
       orderTitle: 'Sell take-profit order',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Take-profit price': '0.027 KAS per EXKCC', 'You receive at least per token (all-in)': '0.027 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { tpPrice: '2700000', stopPrice: '0', slipBps: '0', amountLeft: '200000000', keeperTip: '0' },
@@ -426,7 +426,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', price: '0.023' }),
     receipt: {
       orderTitle: 'Buy take-profit order',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Take-profit price': '0.023 KAS per EXKCC', 'You pay at most per token (all-in)': '0.023 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.046 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Take-profit price': '0.023 KAS per EXKCC', 'You pay at most per token (all-in)': '0.023 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.046 KAS' },
     },
     state: { tpPrice: '2300000', stopPrice: '0', amountLeft: '200000000', deliveryCarrier: '100000000' },
     timing: { kind: 'gtc' },
@@ -436,7 +436,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', takeProfit: '0.027', stop: '0.023' }),
     receipt: {
       orderTitle: 'Sell OCO order (take-profit and stop)',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Take-profit price': '0.027 KAS per EXKCC', 'You receive at least per token (all-in)': '0.02231 KAS per EXKCC', 'Stop trigger': '0.023 KAS per EXKCC', 'Worst fill price after the trigger': '0.02231 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a sell order resting at or below the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1 KAS' },
     },
     state: { tpPrice: '2700000', stopPrice: '2300000', slipBps: '300', armed: '0', amountLeft: '200000000' },
@@ -447,7 +447,7 @@ export const CASES: OrderCase[] = [
     fields: () => ({ amount: '2', takeProfit: '0.023', stop: '0.027' }),
     receipt: {
       orderTitle: 'Buy OCO order (take-profit and stop)',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Take-profit price': '0.023 KAS per EXKCC', 'You pay at most per token (all-in)': '0.02781 KAS per EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.02781 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '1.07862 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '2 EXKCC', 'Take-profit price': '0.023 KAS per EXKCC', 'You pay at most per token (all-in)': '0.02781 KAS per EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.02781 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 2 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '1.07862 KAS' },
     },
     state: { tpPrice: '2300000', stopPrice: '2700000', slipBps: '300', amountLeft: '200000000', deliveryCarrier: '100000000' },
     timing: { kind: 'gtc' },
@@ -459,7 +459,7 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondAsk', fields: { tpPrice: '2600000', stopPrice: '0' } } },
     receipt: {
       orderTitle: 'Buy IFD entry',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '8.049 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '8.049 KAS' },
       exitTitle: 'Exit created after each entry fill: Sell take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.026 KAS per EXKCC', 'You receive at least per token (all-in)': '0.026 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS' },
     },
     state: { price: '2450000', amountLeft: '200000000', minFill: '50000000', entryStop: '0', rptAmount: '0', exitCarrier: '100000000', deliveryCarrier: '100000000' },
@@ -471,9 +471,9 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', stopPrice: '0' } } },
     receipt: {
       orderTitle: 'Sell IFD entry',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.026 KAS per EXKCC', 'You receive at least per token (all-in)': '0.026 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '5.00000003 KAS' },
-      exitTitle: 'Exit created after each entry fill: Buy take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS' },
+      exitTitle: 'Exit created after each entry fill: Buy take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS' },
     },
     state: { price: '2600000', amountLeft: '200000000', minFill: '50000000', prefund: '0', exitCarrier: '100000000', rptAmount: '0' },
     timing: { kind: 'gtc' },
@@ -484,7 +484,7 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondAsk', fields: { stopPrice: '2300000', tpPrice: '0', slipBps: '300' } } },
     receipt: {
       orderTitle: 'Buy IFD entry',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '8.049 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '8.049 KAS' },
       exitTitle: 'Exit created after each entry fill: Sell stop order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Stop trigger': '0.023 KAS per EXKCC', 'Worst fill price after the trigger': '0.02231 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 0.5 EXKCC of a sell order resting at or below the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS' },
     },
     state: { price: '2450000', amountLeft: '200000000', minFill: '50000000' },
@@ -496,7 +496,7 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondAsk', fields: { tpPrice: '2600000', stopPrice: '2300000', slipBps: '300' } } },
     receipt: {
       orderTitle: 'Buy IFO entry',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '8.049 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '8.049 KAS' },
       exitTitle: 'Exit created after each entry fill: Sell OCO order (take-profit and stop)', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.026 KAS per EXKCC', 'You receive at least per token (all-in)': '0.02231 KAS per EXKCC', 'Stop trigger': '0.023 KAS per EXKCC', 'Worst fill price after the trigger': '0.02231 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 0.5 EXKCC of a sell order resting at or below the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS' },
     },
     state: { price: '2450000', amountLeft: '200000000', minFill: '50000000', rptAmount: '0' },
@@ -508,9 +508,9 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', stopPrice: '2700000', slipBps: '300' } } },
     receipt: {
       orderTitle: 'Sell IFO entry',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.026 KAS per EXKCC', 'You receive at least per token (all-in)': '0.026 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Prefund': '0.00181 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '5.00362003 KAS' },
-      exitTitle: 'Exit created after each entry fill: Buy OCO order (take-profit and stop)', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.02781 KAS per EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.02781 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 0.5 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS' },
+      exitTitle: 'Exit created after each entry fill: Buy OCO order (take-profit and stop)', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.02781 KAS per EXKCC', 'Stop trigger': '0.027 KAS per EXKCC', 'Worst fill price after the trigger': '0.02781 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 0.5 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS' },
     },
     state: { price: '2600000', amountLeft: '200000000', prefund: '181000', rptAmount: '0' },
     timing: { kind: 'gtc' },
@@ -522,7 +522,7 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondAsk', fields: { tpPrice: '2900000' } } },
     receipt: {
       orderTitle: 'Buy IFD stop entry',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0275 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0275 KAS per EXKCC', 'Entry trigger (stop entry)': '0.027 KAS per EXKCC', 'Trigger rule': 'a fill of at least 0.5 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '8.078 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0275 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0275 KAS per EXKCC', 'Entry trigger (stop entry)': '0.027 KAS per EXKCC', 'Trigger rule': 'a fill of at least 0.5 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '8.078 KAS' },
       exitTitle: 'Exit created after each entry fill: Sell take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.029 KAS per EXKCC', 'You receive at least per token (all-in)': '0.029 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS' },
     },
     state: { price: '2750000', entryStop: '2700000', bandDaa: '300', keeperTip: '2300000', armed: '0', amountLeft: '200000000' },
@@ -534,9 +534,9 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2100000' } } },
     receipt: {
       orderTitle: 'Sell IFD stop entry',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Entry limit price': '0.0225 KAS per EXKCC', 'You receive at least per token (all-in)': '0.0225 KAS per EXKCC', 'Entry trigger (stop entry)': '0.023 KAS per EXKCC', 'Trigger rule': 'a fill of at least 0.5 EXKCC of a sell order resting at or below the stop for 5 s, used by a matcher to arm it', 'Exit carrier': '1 KAS', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '5.00000003 KAS' },
-      exitTitle: 'Exit created after each entry fill: Buy take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.021 KAS per EXKCC', 'You pay at most per token (all-in)': '0.021 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS' },
+      exitTitle: 'Exit created after each entry fill: Buy take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '0.5 EXKCC', 'Take-profit price': '0.021 KAS per EXKCC', 'You pay at most per token (all-in)': '0.021 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS' },
     },
     state: { price: '2250000', entryStop: '2300000', bandDaa: '300', keeperTip: '2300000', armed: '0', amountLeft: '200000000' },
     timing: { kind: 'gtc' },
@@ -552,7 +552,7 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondAsk', fields: { tpPrice: '4000000', tip: '1000000' } } },
     receipt: {
       orderTitle: 'Buy repeat IFD entry',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Repeat': 'unlimited (within 90 days) (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '5.049 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Repeat': 'unlimited (within 90 days) (2 EXKCC per cycle)', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '5.049 KAS' },
       exitTitle: 'Exit created after each entry fill: Sell take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.04 KAS per EXKCC', 'You receive at least per token (all-in)': '0.03 KAS per EXKCC', 'Priority tip': '0.01 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS' },
     },
     state: { price: '2450000', amountLeft: '200000000', rptAmount: '2000000000000001', exitCarrier: '100000000' },
@@ -564,7 +564,7 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondAsk', fields: { tpPrice: '4000000' } } },
     receipt: {
       orderTitle: 'Buy repeat IFD entry',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Repeat': 're-arms up to 3 times (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '5.049 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Repeat': 're-arms up to 3 times (2 EXKCC per cycle)', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '5.049 KAS' },
       exitTitle: 'Exit created after each entry fill: Sell take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.04 KAS per EXKCC', 'You receive at least per token (all-in)': '0.03 KAS per EXKCC', 'Priority tip': '0.01 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS' },
     },
     state: { price: '2450000', amountLeft: '200000000', rptAmount: '600000001' },
@@ -576,9 +576,9 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', tip: '1500000' } } },
     receipt: {
       orderTitle: 'Sell repeat IFD entry',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.04 KAS per EXKCC', 'You receive at least per token (all-in)': '0.04 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Repeat': 'unlimited (within 90 days) (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '3.00000001 KAS' },
-      exitTitle: 'Exit created after each entry fill: Buy take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0395 KAS per EXKCC', 'Priority tip': '0.015 KAS per EXKCC', 'Refund tip kept in the order': '0.05 KAS' },
+      exitTitle: 'Exit created after each entry fill: Buy take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0395 KAS per EXKCC', 'Priority tip': '0.015 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS' },
     },
     state: { price: '4000000', amountLeft: '200000000', rptAmount: '2000000000000001', prefund: '0' },
     timing: { kind: 'gtc' },
@@ -589,7 +589,7 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondAsk', fields: { tpPrice: '4000000', stopPrice: '2300000' } } },
     receipt: {
       orderTitle: 'Buy repeat IFO entry',
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Repeat': 'unlimited (within 90 days) (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '5.049 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0245 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Delivery carrier': '1 KAS', 'Repeat': 'unlimited (within 90 days) (2 EXKCC per cycle)', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS', 'KAS on the order output': '5.049 KAS' },
       exitTitle: 'Exit created after each entry fill: Sell OCO order (take-profit and stop)', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.04 KAS per EXKCC', 'You receive at least per token (all-in)': '0.01231 KAS per EXKCC', 'Priority tip': '0.01 KAS per EXKCC', 'Stop trigger': '0.023 KAS per EXKCC', 'Worst fill price after the trigger': '0.02231 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 1 EXKCC of a sell order resting at or below the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS' },
     },
     state: { price: '2450000', amountLeft: '200000000', rptAmount: '2000000000000001' },
@@ -601,9 +601,9 @@ export const CASES: OrderCase[] = [
     exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', stopPrice: '5000000' } } },
     receipt: {
       orderTitle: 'Sell repeat IFO entry',
-      lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
+      lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
       card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.04 KAS per EXKCC', 'You receive at least per token (all-in)': '0.04 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Prefund': '0.0265 KAS per EXKCC', 'Repeat': 're-arms up to 3 times (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.05 KAS', 'KAS on the order output': '3.05300001 KAS' },
-      exitTitle: 'Exit created after each entry fill: Buy OCO order (take-profit and stop)', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0665 KAS per EXKCC', 'Priority tip': '0.015 KAS per EXKCC', 'Stop trigger': '0.05 KAS per EXKCC', 'Worst fill price after the trigger': '0.0515 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 1 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip kept in the order': '0.05 KAS' },
+      exitTitle: 'Exit created after each entry fill: Buy OCO order (take-profit and stop)', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0665 KAS per EXKCC', 'Priority tip': '0.015 KAS per EXKCC', 'Stop trigger': '0.05 KAS per EXKCC', 'Worst fill price after the trigger': '0.0515 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 1 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.023 KAS', 'Trigger armed': 'not yet armed', 'Refund tip (paid from what is left if the order is refunded)': '0.05 KAS' },
     },
     state: { price: '4000000', amountLeft: '200000000', rptAmount: '600000001', prefund: '2650000' },
     timing: { kind: 'gtc' },

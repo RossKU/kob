@@ -70,7 +70,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     expect(flipped.receipt.orders[0]!.rows).toMatchObject({ 'You sell': 'up to 0.24 KAS', 'You receive': '10 EXKCC', Price: '41.6666 EXKCC per KAS' });
     expect(flipped.receipt.lines).toEqual(native.receipt.lines);
     const chain = (rows: Record<string, string>, drop: string[]) => Object.fromEntries(Object.entries(rows).filter(([k]) => !drop.includes(k) && k !== 'Expires'));
-    expect(chain(flipped.receipt.orders[0]!.rows, ['You sell', 'You receive', 'Price'])).toEqual(chain(native.receipt.orders[0]!.rows, ['Limit price', 'You pay at most per token (all-in)']));
+    expect(chain(flipped.receipt.orders[0]!.rows, ['You sell', 'You receive', 'Price'])).toEqual(chain(native.receipt.orders[0]!.rows, ['Limit price', 'You pay at most per token (all-in)', 'KAS budget', 'Buys with this budget'])); // the flipped form says the budget as "You sell" / "You receive"
     expect(native.views[0].contract).toBe('KobBid');
     expect(native.views[0].state.state).toMatchObject({ price: '2400000' });
     expect(onChainTerms(flipped)).toEqual(onChainTerms(native));

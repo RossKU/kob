@@ -90,6 +90,8 @@ CREATE INDEX IF NOT EXISTS orders_maker_genesis ON orders (maker_id, genesis_blo
 -- two in an index, a status read in history order walks every row of that one filter to find rows of both
 CREATE INDEX IF NOT EXISTS orders_maker_token_genesis ON orders (maker_id, token_id, genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS orders_maker_quote_genesis ON orders (maker_id, quote_id, genesis_block, covenant_id) WHERE quote_id IS NOT NULL;
+-- a maker's orders of one pair newest first (`GET /v1/pairs/{a}/{b}/orders?maker=`, R9): the web's self-trade check reads only them
+CREATE INDEX IF NOT EXISTS orders_maker_pair_genesis ON orders (maker_id, token_id, quote_id, genesis_block, covenant_id) WHERE quote_id IS NOT NULL;
 -- every order newest first (`GET /v1/orders` with no filter, keyset paged): the index is the whole sort order, so a page is read
 -- in order and stops at its end, however many orders share a genesis block
 CREATE INDEX IF NOT EXISTS orders_genesis_page ON orders (genesis_block, covenant_id);
@@ -263,6 +265,8 @@ CREATE TABLE IF NOT EXISTS rejects (
 CREATE INDEX IF NOT EXISTS rejects_block ON rejects (block_seq);
 -- The undecodable KOB1 payloads of the stored chain blocks, which the extractor bounds (`record::MAX_UNDECODABLE_IN_WINDOW`).
 CREATE INDEX IF NOT EXISTS rejects_undecodable ON rejects (block_seq) WHERE reason = 'payload:undecodable';
+-- the same for the ORDER records whose state span is not canonical (`record::BAD_STATE_PAYLOAD`), which share the bound
+CREATE INDEX IF NOT EXISTS rejects_state_span ON rejects (block_seq) WHERE reason = 'payload:state_span';
 
 -- Token UTXOs of tracked tokens (allowlisted, or traded by an order when the allowlist is not required) whose state the
 -- indexer could PROVE: the creating transaction's transfer leader (KCC-20 `next_states`, KRON columns) reveals the state of
@@ -372,6 +376,8 @@ END;
 -- the owner's page index serves the pair, in page order and without the sort; `kobd db migrate` does not build it.)
 CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_id, created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner_id, created_block);
+-- an owner's live units of one token, the largest first (`GET /v1/token-utxos?owner=&token=&order=amount`, R9T-1)
+CREATE INDEX IF NOT EXISTS token_holdings_live_amount ON token_holdings (owner_id, token_id, amount DESC, tx_id, idx) WHERE spent_block IS NULL;
 CREATE INDEX IF NOT EXISTS token_holdings_created ON token_holdings (created_block);
 -- The spent rows by their spending block (a revert un-spends them). (Schema 14) The unspent rows are not in it: every read of it names
 -- a block, and they were a third of its entries.

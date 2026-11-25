@@ -133,7 +133,7 @@ test('connect with a private key in the signer frame, place and cancel an order 
   const cancelShown = await approveInFrame(page, { title: 'Cancel order' });
   const [cancelled] = await runFlow(page, mock, null, { steps: 1 });
   expect(cancelShown.fee).toBe(feeText(cancelled!.submission.fee));
-  expect(Object.values(cancelShown.lines), 'the 2 EXKCC come back').toContain('+2');
+  expect(Object.values(cancelShown.lines), 'the 2 EXKCC come back').toContain('+2 token'); // the unit is the plain word: the token is named in full above
   expect(cancelShown.labels, 'what the cancel releases from orders').toContain('Released from orders');
   await mock.until(() => mock.order(id), (o) => o.status === 'cancelled');
   const subs = await mock.submitted(false);

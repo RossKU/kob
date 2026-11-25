@@ -239,7 +239,7 @@ fn i17_a_token_with_a_holding_is_not_evicted_by_junk_tokens() {
     let program = TemplateId::Kcc20Ref8x8;
     let tpl = token_template(program).hash.to_vec();
     let bid = kob_protocol::artifacts::pinned_hash(TemplateId::KobBid).to_vec();
-    let junk = reads::OPEN_TOKEN_ROWS_MAX + 100;
+    let junk = reads::TOKEN_PAGE_MAX as i64 + 100;
     conn.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
          INSERT INTO ids (h) SELECT CAST(printf('%032d', i) AS BLOB) FROM n",
@@ -273,8 +273,8 @@ fn i17_a_token_with_a_holding_is_not_evicted_by_junk_tokens() {
     let tokens = TokenAllowlist::from_entries([]).with_strict_templates([strict]);
     let list = reads::token_list(&conn, &tokens).unwrap();
     let real_hex: String = real.iter().map(|b| format!("{b:02x}")).collect();
-    // the proven tokens have a pass and a cap of their own, the others at most the open cap (R9C2b-2)
-    assert!(list.len() <= reads::OPEN_TOKEN_ROWS_MAX as usize + reads::PROVEN_TOKENS_MAX, "{} tokens", list.len());
+    // a page holds at most its cap; the token with a holding comes before every token only placements name
+    assert!(list.len() <= reads::TOKEN_PAGE_MAX, "{} tokens", list.len());
     assert!(list.iter().any(|t| t.covenant_id == real_hex), "the token with a holding is in the list");
 }
 

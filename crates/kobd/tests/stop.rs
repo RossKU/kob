@@ -260,7 +260,10 @@ fn the_binary_stops_within_seconds_when_the_node_is_silent() {
     });
     let t0 = Instant::now();
     let mut log = String::new();
-    while !log.contains("starting the executor") {
+    // The store is open (its start-up work can take seconds on a slow disk, R9C CI), the follower has sent its first
+    // request and the runner has begun its first step (its first line is the build): only then is the stop asked, so
+    // the test measures the stop of waits on a silent node, not the store's start-up work.
+    while !(log.contains("following the node from the store's cursor") && log.contains(" INFO kobd ")) {
         match rx.recv_timeout(Duration::from_secs(60)) {
             Ok(l) => {
                 log.push_str(&l);
@@ -273,7 +276,7 @@ fn the_binary_stops_within_seconds_when_the_node_is_silent() {
         }
     }
     // the first step is now waiting for the node
-    std::thread::sleep(Duration::from_millis(1_500));
+    std::thread::sleep(Duration::from_millis(300));
     if !ask_to_stop(&child) {
         eprintln!("skipped: this test run cannot send the stop signal (no console)");
         let _ = child.kill();

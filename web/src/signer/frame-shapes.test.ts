@@ -189,7 +189,11 @@ describe('R9FB2-9: the decoder\'s info findings are shown in the frame', () => {
     const b = planSweep(cancelEnv(), { ...snap, strays: [strayFor(snap, 4n, 92)] }).built!;
     const s = frame(b);
     expect(s.decoded!.info.length).toBeGreaterThan(0);
-    expect(s.lines.filter((l) => l.label === 'Note').length).toBe(s.decoded!.info.length);
+    // every info finding is a note, but those that only repeat a line above (strays or KAS returned)
+    const shown = s.decoded!.info.filter((f) => !['strays-swept', 'other-strays-swept', 'kas-released'].includes(f.code));
+    expect(shown.length).toBeGreaterThan(0);
+    expect(s.lines.filter((l) => l.label === 'Note').length).toBe(shown.length);
+    expect(s.lines.some((l) => /raw amount/.test(l.value))).toBe(false);
   });
 });
 
@@ -257,5 +261,51 @@ describe('a token the frame cannot name: the unit is "token", the token is named
     expect(values).not.toMatch(/[0-9a-f]{8}…[0-9a-f]{8}/);
     expect(values).not.toMatch(/TUSD/);
     expect(o.rows.some((r) => r.label === 'Buys with this budget')).toBe(true);
+  });
+});
+
+describe('an amend in place changes the order, it does not close it', () => {
+  it('"Changes order" with the whole id and the price before and after; no "Closes order"', () => {
+    const s = frame(build('amend.ask'));
+    expect(s.problems).toBe(0);
+    expect(s.lines.some((l) => l.label === 'Closes order')).toBe(false);
+    const c = s.lines.find((l) => l.label === 'Changes order')!;
+    expect(c.value).toMatch(/^[0-9a-f]{64} \(the id is the app.s word\): KobAsk, sell; price .+ KAS per .+ → .+ KAS per /);
+    expect(c.mono).toBe(true);
+  });
+});
+
+describe('a flipped market (KAS/TOKEN) on the signing screens', () => {
+  const inv = (cov: string, ticker = 'EXKCC') => [{ covenantId: cov, ticker, decimals: 3, source: 'declared' as const, inverted: true }];
+  const covOf = (b: BuiltTx) => (kob.recoverOrders(b.tx)[0]!.order.state as unknown as { tokenCovId: string }).tokenCovId;
+  it('a market buy reads as a sale of KAS; the budget row is not repeated, and "You sell" is the whole budget (no refund tip taken out)', () => {
+    const b = build('create.bid.market');
+    const s = summarize(kob, b, MAKER.pk, inv(covOf(b)));
+    const o = s.orders[0]!;
+    expect(o.title).toMatch(/^Sell KAS/);
+    const labels = o.rows.map((r) => r.label);
+    expect(labels).not.toContain('KAS budget');
+    expect(labels).not.toContain('Buys with this budget');
+    const rec = kob.recoverOrders(b.tx)[0]!;
+    const st = rec.order.state as unknown as { deliveryCarrier: string };
+    const sell = o.rows.find((r) => r.label === 'You sell')!.value;
+    // one fill: the value less its one delivery carrier (9.892 KAS, said as 9.90 rounded against the
+    // user); with the refund tip taken out it would read 9.86
+    expect(BigInt(rec.value) - BigInt(st.deliveryCarrier)).toBe(989_200_000n);
+    expect(sell).toBe('up to 9.90 KAS');
+    expect(o.rows.map((r) => r.value).join(' ')).toMatch(/per KAS/);
+  });
+  it('a conditional buy on a flipped market says it is shown as the chain holds it', () => {
+    const b = build('create.condBid');
+    const s = summarize(kob, b, MAKER.pk, inv(covOf(b)));
+    expect(s.orders[0]!.token).toMatch(/shown as the chain holds it \(TOKEN\/KAS\), not in your flipped KAS\/TOKEN view$/);
+  });
+  it('a take on a flipped market says its prices are in KAS per token', () => {
+    const b = takeOf('buy');
+    const cov = (b.plans.find((p) => p.kind === 'entry') as unknown as { state?: string }) ? (kob.recoverOrders as unknown as never, '') : '';
+    void cov;
+    const tokenId = frame(b).decoded!.take!.ref.covenantId;
+    const s = summarize(kob, b, MAKER.pk, inv(tokenId));
+    expect(s.lines.some((l) => l.label === 'Orientation' && /KAS per token/.test(l.value))).toBe(true);
   });
 });

@@ -204,6 +204,7 @@ export default {
   'confirm.f.timeOwnNode': '{time}, chain time from your node, unverified',
   'confirm.f.timeAnchored': '{time}, chain time checked against the last verified time (within {tolerance} s)',
   'confirm.f.refundTip': 'Refund tip kept in the order',
+  'confirm.f.refundTipBuy': 'Refund tip (paid from what is left if the order is refunded)',
   'confirm.f.refundTipHint': 'Paid only to whoever refunds the expired order; otherwise returned to you.',
   'confirm.f.orderValue': 'KAS on the order output',
 

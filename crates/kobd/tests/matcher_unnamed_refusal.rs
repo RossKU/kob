@@ -66,3 +66,31 @@ fn without_refusals_the_eleven_books_fill() {
     assert_eq!(ten_filled(&r), 20);
     assert_eq!(filled(&r, 301), 5 * WHOLE);
 }
+
+/// R9FD-1: an engine refusal that names an input is put on the order whose UTXO that input spends, found by its
+/// outpoint. The builder may put the legs in another order than the plan's fills (a bid that ends with a refund of its
+/// own goes first), so the input's index is no fill index; before, the quarantine could land on the other order.
+#[test]
+fn a_refusal_naming_an_input_quarantines_the_order_that_input_spends() {
+    // a bid that the fill ends with a refund (2 KAS more escrow than the fill uses) and the ask it crosses
+    let mut b0 = l_bid_of(300, [0x5c; 32], T8, 6, P260, 5 * WHOLE);
+    b0.order.utxo.amount += 200_000_000;
+    let a0 = l_ask_of(301, [0x5c; 32], T8, 7, P250, 5 * WHOLE);
+    let b = book(vec![b0, a0]);
+    let named = std::sync::Mutex::new(None);
+    let refuse_first = |signed: &SignedTx| -> Result<Validation, String> {
+        let mut g = named.lock().unwrap();
+        if g.is_none() {
+            let i = &signed.tx.inputs[0];
+            *g = Some((i.transaction_id, i.index));
+            return Err("engine: input 0: the covenant refuses it".into());
+        }
+        validate_signed(signed).map_err(|e| e.to_string())
+    };
+    let r = tick_with(&input(&b), &cfg(), &Families::default(), &signer(), &refuse_first);
+    let op = named.lock().unwrap().expect("a transaction was validated");
+    let owner = b.orders.iter().find(|o| outpoint(&o.order.utxo) == op).map(|o| o.id());
+    assert!(owner.is_some(), "input 0 spends an order UTXO");
+    let q: Vec<_> = r.quarantined.iter().map(|(id, _)| *id).collect();
+    assert_eq!(q, vec![owner.unwrap()], "the quarantine lands on the order input 0 spends; {:?}", r.anomalies);
+}
