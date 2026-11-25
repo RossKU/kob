@@ -174,7 +174,8 @@ contract KobAsk(
     // BEGIN GENERATED span check (scripts/gen-span-check.mjs): do not edit
     // R10CC-1: the state span runs as script and is read at fixed offsets, by this order and by other scripts.
     // It must be data only: each of its 20 fields a direct push of its fixed length (276 bytes in all),
-    // as the compiler encodes the state. The values are free. Every entry but the maker's cancel calls it first.
+    // as the compiler encodes the state. The values are free.
+    // Every entry but the maker's cancel calls it first.
     function spanIsData() {
         int me = this.activeInputIndex;
         int base = OpTxInputScriptSigLen(me) - this.bytecodeSize + 1;

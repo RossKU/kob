@@ -551,7 +551,7 @@ pub const PINNED: [(TemplateId, &str); ORDER_KIND_COUNT] = [
     (TemplateId::KobPair, "00186a9d3029de4e331e0908b826b4141849948bb6cdf11ebae767418d200f0e"),
     (TemplateId::KobCondPair, "e7c51ab8d07371194576fdf032f1f4426d630e8f74c3ea94fe65df2e51fcbad0"),
     (TemplateId::KobIfdPair, "e6793bea25e8c76080ee57767a02435acbdb684f9a03ea0d5bb2f239e749b275"),
-    (TemplateId::KobCurveAsk, "b196dd9917ee1ed76978191f985df5ad423819ac9ace3055a1248b66ce523722"),
+    (TemplateId::KobCurveAsk, "94ca7051c4b27fbaee4763848edae36232fe03775d61e7d1f0a3d30f7d03ae2a"),
     (TemplateId::KobAskKron, "be0e02606051b1b0f9c2701adb5f0e107d376ac63db8bdb16c748e9dfe6a5bbb"),
     (TemplateId::KobBidKron, "a27e98b471bbc5aff213e4c4b92741ef50df6e514d0d4097581b3ea00f1a8824"),
     (TemplateId::KobCondAskKron, "22ff1627c5abdc7d439c156534d46d676a28718192be1caeed3192d510471f95"),
