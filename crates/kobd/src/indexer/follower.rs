@@ -3457,11 +3457,14 @@ mod tests {
                 assert!(src.refused.lock().unwrap().is_empty());
                 assert!(!health.snapshot().cross_checked, "a single node is not cross-checked");
 
-                // A native transaction hidden by the node: refused, nothing applied, the node reported.
+                // A native transaction hidden by the node: refused, nothing applied, the node reported. (A user-lane
+                // transaction that spends nothing tracked is not proven, R9-K: the native lane always is.)
                 let (f, src, ingest, health) = follower(text, |r| {
-                    let b = r.chain_block_accepted_transactions.iter_mut().find(|b| b.accepted_transactions.len() > 1);
+                    let native = |t: &crate::rpc::types::Tx| t.subnetwork_id.as_ref().is_some_and(|s| s.0 == [0u8; 20]);
+                    let b = r.chain_block_accepted_transactions.iter_mut().find(|b| b.accepted_transactions.iter().any(native));
                     if let Some(b) = b {
-                        b.accepted_transactions.pop();
+                        let k = b.accepted_transactions.iter().rposition(native).expect("a native transaction");
+                        b.accepted_transactions.remove(k);
                     }
                 });
                 let o = f.step().await;
@@ -3530,6 +3533,9 @@ mod tests {
             let mut merged = 0;
             for text in [MAINNET, TN10] {
                 let (f, src, ingest, health) = follower_with(text, |_| {}, rtt);
+                // every lane of the fixture, as if each held a spend of a tracked output (R9-K): the point is that the
+                // requests go out together
+                f.prove_every_lane.store(true, SeqCst);
                 let lanes = src.fx.proofs.len();
                 let t0 = tokio::time::Instant::now();
                 let o = f.step().await;
