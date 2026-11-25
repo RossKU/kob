@@ -200,8 +200,9 @@ const toBig = (v: string | number | bigint): bigint | null => {
 
 const HEX64 = /^[0-9a-f]{64}$/i;
 const OUTPOINT = /^([0-9a-f]{64}):(\d+)$/i;
-// An id in a sentence: its start, then an ellipsis. It is never cut in the middle.
-const shortHex = (s: string): string => `${s.slice(0, 8)}…`;
+// An id or key in a sentence: whole (founder 2026-11-12). These sentences are the findings of the
+// signing screens too, where a key with a chosen start is cheap to grind; the screen wraps it.
+const shortHex = (s: string): string => s;
 
 function formatToken(b: bigint, ctx: IssueTextContext, token: string | null = null): string {
   if (ctx.tokenDecimals === undefined) return tokenAmountText(token, b);
