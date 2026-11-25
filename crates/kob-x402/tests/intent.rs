@@ -250,19 +250,19 @@ fn the_default_max_extra_is_tight_and_survives_a_fee_spike() {
     let max_pay = 2 * 250_000_000;
     let p = f.pay(&offer, "KAS", &IntentOptions { max_pay: Some(max_pay), ..IntentOptions::default() }).unwrap();
     let IntentState::KasToToken { max_extra, .. } = &p.state else { panic!("a KasToToken intent") };
-    // the carrier (1 KAS), no filler (KasToToken_buy rests), 25376 grams (3500 + 9400 + 2 x 6238 template bytes of the 8/8 token) at
+    // the carrier (1 KAS), no filler (KasToToken_buy rests), 24676 grams (3500 + 8700 + 2 x 6238 template bytes of the 8/8 token) at
     // 5 x 100 sompi, 0.02 KAS of margin
-    assert_eq!(*max_extra as u64, KAS + 25_376 * 500 + 2_000_000, "carrier + 0.147 KAS, not carrier + 1 KAS");
+    assert_eq!(*max_extra as u64, KAS + 24_676 * 500 + 2_000_000, "carrier + 0.143 KAS, not carrier + 1 KAS");
     assert_eq!(
         p.payload.payload.route.as_ref().and_then(|r| r.intent.as_ref()).and_then(|i| i.max_extra.as_deref()),
-        Some("114688000")
+        Some("114338000")
     );
     assert_eq!(p.intent.amount, max_pay + *max_extra as u64, "the intent holds exactly maxPay + maxExtra");
     // a higher fee rate of the payer raises the default with it (5 x the rate of 300)
     let spike =
         f.pay(&offer, "KAS", &IntentOptions { max_pay: Some(max_pay), fee_rate: Some(300), ..IntentOptions::default() }).unwrap();
     let IntentState::KasToToken { max_extra: spiked, .. } = &spike.state else { unreachable!() };
-    assert_eq!(*spiked as u64, KAS + 25_376 * 1_500 + 2_000_000);
+    assert_eq!(*spiked as u64, KAS + 24_676 * 1_500 + 2_000_000);
     // the keeper executes at the floor and priced at 5 times it; at 50 times the intent cannot pay the fee
     let (v, facts) = f.verify(&offer, &p.payload).unwrap();
     f.chain.submit(&v.tx).unwrap();
