@@ -88,7 +88,7 @@ test.describe('order ticket', () => {
     // The order as the node holds it.
     const view = placed.views[0];
     expect(view.side).toBe(1); // a sell
-    expect(view.state.state).toMatchObject({ amountLeft: '300000000', price: '260000000', tip: '1000000', refundTip: '5000000' }); // 3 EXKCC at 2.6 KAS, tip 0.01 KAS
+    expect(view.state.state).toMatchObject({ amountLeft: '300000000', price: '260000000', tip: '1000000', refundTip: '5200000' }); // 3 EXKCC at 2.6 KAS, tip 0.01 KAS
     // The form starts the next order empty.
     await expect(page.getByTestId('order-amount')).toHaveValue('');
 

@@ -464,7 +464,7 @@ as two 16-byte groups, the template hash, a build output that `scripts/check-pin
 173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b  tokenTplHash
 01 f215 e807 e807                tplPrefixLen 1, tplSuffixLen 2802, scale 1000, minFill 1000 (LEB128 from here)
 80e59a77 a08d06                  price 250000000, tip 100000
-00 00 8088debe01 80dddb01        tif 0, activeFrom 0, expiryDaa 400000000, refundTip 3600000
+00 00 8088debe01 c0f7e701        tif 0, activeFrom 0, expiryDaa 400000000, refundTip 3800000
 00 00 00 00                      interval, maxFill, slope, priceEnd 0
 e807 904e                        decayStep 1000, amountLeft 10000
 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommitment (the state's last field)
@@ -487,7 +487,7 @@ eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  custody: exte
 173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b  tokenTplHash
 01 f215 e807 e807                tplPrefixLen, tplSuffixLen, scale, minFill
 80b8b872 a08d06                  the new price 240000000, tip 100000
-00 00 8088debe01 80dddb01        tif, activeFrom, expiryDaa, refundTip
+00 00 8088debe01 c0f7e701        tif, activeFrom, expiryDaa, refundTip
 00 00 00 00 e807 904e            interval, maxFill, slope, priceEnd, decayStep, amountLeft
 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommitment
 ```
