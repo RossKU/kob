@@ -61,6 +61,9 @@ fn order_of(kind: TemplateId, p: TemplateId) -> (AnyState, u64) {
             let v = b.escrow(10 * WHOLE, 3).unwrap() as u64;
             (AnyState::KobBid(b), v)
         }
+        // the kinds the pre-mainnet re-pin retired too (TPLGEN): the plain ask and the curve
+        TemplateId::KobAsk => (AnyState::KobAsk(ask(MAKER_A, P250, p)), CARRIER),
+        TemplateId::KobCurveAsk => return (AnyState::KobCurveAsk(fx::curve::curve(p, 4)), CARRIER),
         TemplateId::KobCondAsk => (AnyState::KobCondAsk(cond_ask(MAKER_A, p)), CARRIER),
         TemplateId::KobCondBid => {
             let c = cond_bid(MAKER_A, p);

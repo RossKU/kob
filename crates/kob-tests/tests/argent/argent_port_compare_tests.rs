@@ -384,7 +384,8 @@ fn state_literal(src: &str) -> String {
 }
 
 fn variants() -> Vec<Variant> {
-    let hand = read("contracts/orders/KobAsk.sil");
+    // the source the ports were made from (before the pre-mainnet re-pin), kept beside them
+    let hand = read("contracts/research/argent/port/KobAsk.hand.sil");
     let idio = read("contracts/research/argent/port-out/KobAsk.idiomatic.sil");
     let spl1 = read("contracts/research/argent/port/KobAsk.splice1.sil");
     let lit = state_literal(&idio);
@@ -396,7 +397,7 @@ fn variants() -> Vec<Variant> {
         Variant {
             file: "hand",
             title: "KobAsk, hand-written SilverScript",
-            src_path: "contracts/orders/KobAsk.sil",
+            src_path: "contracts/research/argent/port/KobAsk.hand.sil",
             src: hand,
             constructs: vec![
                 Construct {

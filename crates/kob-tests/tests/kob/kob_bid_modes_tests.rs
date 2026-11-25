@@ -75,9 +75,10 @@ const FOK: i64 = 2;
 const QTY: i64 = 10;
 /// Redeem-script offset of the 8 payload bytes of `bought` (spec section 2).
 const BOUGHT_AT: usize = 314;
-/// Script size of KobBid before the delivery modes, and the ceiling of section 9.
+/// Script size of KobBid before the delivery modes, and the ceiling of section 9, raised by the pre-mainnet re-pin
+/// (TPLGEN: the native-lane pin on its 3 entries and the state-span check on fill and refund, about 940 B).
 const KOBBID_BEFORE: usize = 1_629;
-const SIZE_CEILING: usize = KOBBID_BEFORE + 1_150;
+const SIZE_CEILING: usize = KOBBID_BEFORE + 1_150 + 950;
 
 const BID_COV: Hash = Hash::from_bytes([0xb1; 32]);
 const BID2_COV: Hash = Hash::from_bytes([0xb2; 32]);

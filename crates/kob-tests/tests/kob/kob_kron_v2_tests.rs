@@ -3490,7 +3490,7 @@ fn v2_update_sigscript_is_never_a_merge_value() {
             checked += 1;
         }
     }
-    assert_eq!(num(&head(&ifd, &[int(17)])), -2_831_923_887_809_037_329, "the bytes the 0x08 check keeps from being a merge value");
+    assert_eq!(num(&head(&ifd, &[int(17)])), -2_255_463_135_505_613_841, "the bytes the 0x08 check keeps from being a merge value");
     println!(
         "MERGE-VALUE {checked} update sigscripts checked: none starts with 0x08 or reads as a merge claim; {negative} entry updates \
          would read as a merge value without the 0x08 check"

@@ -6060,10 +6060,12 @@ const DM_TT: i64 = 2_000_000;
 const DM_RECV_HAVE: i64 = 7_000;
 const DM_RECV_KAS: i64 = KAS;
 const DM_CUST_KAS: i64 = DC;
-/// Size of the templates before the delivery modes (state 381 B / 594 B), and the spec's ceiling on the growth (section 9).
+/// Size of the templates before the delivery modes (state 381 B / 594 B), and the spec's ceiling on the growth (section 9),
+/// raised by the pre-mainnet re-pin (TPLGEN: the native-lane pin on every entry and the state-span check on every
+/// entry but the cancel, about 1.8 kB on KobCondBid and 1.5 kB on KobIfdAsk).
 const CONDB_SIZE_BEFORE: usize = 3_725;
 const IFDA_SIZE_BEFORE: usize = 5_197;
-const DM_GROWTH_CEILING: usize = 1_150;
+const DM_GROWTH_CEILING: usize = 1_150 + 1_800;
 
 fn thr_guard(t: i64) -> [u8; 32] {
     let mut g = [0u8; 32];

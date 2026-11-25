@@ -448,7 +448,8 @@ fn cancel_ask_and_bid() {
     assert!(c.v.mass.size > 25_552);
     let bid_o = order(20, 25 * KAS, cov(0xb1), 1_000, AnyState::KobBid(bid(MAKER_B, P245, rtip)));
     let c = run("v2 maker cancels bid", &cancel(bid_o, None));
-    assert!(c.v.mass.size < 3_000, "a bid cancel carries no token program: {} B", c.v.mass.size);
+    // the bid's redeem script is about 3.6 kB since the pre-mainnet re-pin (TPLGEN); a token program would add about 25 kB
+    assert!(c.v.mass.size < 4_500, "a bid cancel carries no token program: {} B", c.v.mass.size);
 }
 
 #[test]
