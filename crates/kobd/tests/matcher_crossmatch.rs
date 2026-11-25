@@ -449,12 +449,13 @@ fn the_kept_output_carrier_adds_no_fee() {
         }
         smallest_fee_mass = smallest_fee_mass.min(m.fee_mass);
     }
-    // the bound is tight where it matters: the smallest batch (KRON / KRON) pays a higher priority fee at 1.5 KAS
+    // the bound is tight where it matters: the smallest batch (KRON / KRON) pays a higher priority fee at 1 KAS (1.5 KAS
+    // until the pre-mainnet templates, whose larger scripts raised the fee mass above its storage at 1.5 KAS)
     let (_, kron, cfg, _) = &cases[3];
-    let p = keep_at(kron, cfg, 150_000_000);
+    let p = keep_at(kron, cfg, 100_000_000);
     let m = &p.lowered.built.fee.mass;
     assert_eq!(m.fee_mass, smallest_fee_mass, "the KRON / KRON netting is the smallest keep batch");
-    assert!(m.storage > m.fee_mass, "1.5 KAS: storage {} above the fee mass {}", m.storage, m.fee_mass);
+    assert!(m.storage > m.fee_mass, "1 KAS: storage {} above the fee mass {}", m.storage, m.fee_mass);
     // and the relay fee does not price storage at all: the same fee down to the policy's least carrier
     let low = keep_at(kron, cfg, KEEP_CARRIER_MIN);
     assert_eq!(low.accounting.fee, keep_at(kron, cfg, TEN).accounting.fee);
