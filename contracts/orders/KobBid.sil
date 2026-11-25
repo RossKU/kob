@@ -237,6 +237,8 @@ contract KobBid(
     // END GENERATED span check
 
     entry fill(byte[8] nb, int tokIn, int t, int form) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -433,6 +435,8 @@ contract KobBid(
     // maker routes the escrow, the bought-custody and any strays. A claim is
     // a cancel that continues the order (bought = 0) under its covenant id.
     entry cancel(sig s) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);
@@ -445,6 +449,8 @@ contract KobBid(
     // fill, so the kill is a refund that anyone may send. No argument: its
     // sigscript never starts with the 8-byte push trigger evidence reads.
     entry refund() {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int self = this.activeInputIndex;
         int utxoDaa = OpTxInputDaaScore(self);

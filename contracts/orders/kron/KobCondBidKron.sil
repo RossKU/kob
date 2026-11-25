@@ -314,6 +314,8 @@ contract KobCondBidKron(
     // END GENERATED span check
 
     entry settle(byte[8] nb, int tokenTplIn, int leg, int ev, int t) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -497,6 +499,8 @@ contract KobCondBidKron(
     // Update. Arm or trail the stop without a fill of this order, next to
     // the evidence fill at input ev, as KobCondBid.update.
     entry update(int ev, int tk) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -559,6 +563,8 @@ contract KobCondBidKron(
     // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
     // maker routes the escrow and any strays.
     entry cancel(sig s) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);
@@ -568,6 +574,8 @@ contract KobCondBidKron(
     // Refund. Due at the earliest of expiryDaa and 90 days idle. This order
     // has no tif, so it has no IOC kill.
     entry refund() {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int self = this.activeInputIndex;
         int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;

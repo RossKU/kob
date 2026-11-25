@@ -130,8 +130,8 @@ contract KobCurveAsk(
             + OpTxInputScriptSigSubstr(me, base + 162, base + 163) + OpTxInputScriptSigSubstr(me, base + 171, base + 172)
             + OpTxInputScriptSigSubstr(me, base + 180, base + 181);
         require(h == byte[](0x20202008080808080808080820));
-        // the table: one push of every byte from state offset 213 to the code (2517 bytes after the state)
-        int tot = rsLen - 2731;
+        // the table: one push of every byte from state offset 213 to the code (2565 bytes after the state)
+        int tot = rsLen - 2779;
         require(tot >= 1);
         byte[] t0 = OpTxInputScriptSigSubstr(me, base + 213, base + 214);
         if (tot <= 76) {
@@ -149,6 +149,8 @@ contract KobCurveAsk(
     // END GENERATED span check
 
     entry settle(byte[8] nb, int tokenIn, int tokOut, int rsLen) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData(rsLen);
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -225,6 +227,8 @@ contract KobCurveAsk(
     }
 
     entry cancel(sig s) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);

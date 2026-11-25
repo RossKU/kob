@@ -263,6 +263,8 @@ contract KobIfdAskKron(
     // END GENERATED span check
 
     entry settle(byte[8] nb, int tokenIn, int tokOut, int exitOut, byte[] cPre, byte[] cSuf, int ev, int tk, int t) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -567,6 +569,8 @@ contract KobIfdAskKron(
     // goes back to the maker at output i, less at most refundTip. It spends no
     // token input at all, so strays sent to this id stay put.
     entry close() {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int self = this.activeInputIndex;
         require(amountLeft == 0);
@@ -588,6 +592,8 @@ contract KobIfdAskKron(
     // the exits' prefund. An exit never reads it as a merge, because the
     // merge argument is negative and a valid ev is not.
     entry update(int ev, int tk) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -614,6 +620,8 @@ contract KobIfdAskKron(
     // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
     // maker routes the custody and any strays.
     entry cancel(sig s) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);

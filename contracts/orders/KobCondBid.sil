@@ -389,6 +389,8 @@ contract KobCondBid(
     // END GENERATED span check
 
     entry settle(byte[8] nb, int tokIn, int leg, int ev, int t, int form) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -662,6 +664,8 @@ contract KobCondBid(
     // The stray guard holds here too. The evidence fill brings token inputs
     // of its own.
     entry update(int ev, int tk) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -725,6 +729,8 @@ contract KobCondBid(
     // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
     // maker routes the escrow and any strays.
     entry cancel(sig s) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);
@@ -735,6 +741,8 @@ contract KobCondBid(
     // has no tif, so it has no IOC kill. No argument, as KobBid.refund: its
     // sigscript never starts with the 8-byte push a merge reads.
     entry refund() {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int self = this.activeInputIndex;
         int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;

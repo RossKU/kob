@@ -255,3 +255,58 @@ fn field_values_that_look_like_opcodes_pass() {
         validate_signed(&s).unwrap_or_else(|e| panic!("{}: {e}", t.name()));
     }
 }
+
+/// Row 1: every entry of every order kind refuses a transaction on a KIP-21 user lane (`OpTxSubnetId` is not the
+/// 20 zero bytes of the native subnetwork): each honest spend of the scenarios, copied onto lane `[1, 2, 3, 4, 0…]`,
+/// is refused at its first order input; the native original passes.
+#[test]
+fn every_order_entry_refuses_a_user_lane() {
+    use kob_protocol::build::build;
+    use kob_protocol::tx::{finalize, sighash, sign_locally, FinalizeOptions, SigPlan};
+    use kob_protocol::verify::validate_signed;
+    let mut all: Vec<(String, kob_protocol::build::Action)> = vec![];
+    for t in [TemplateId::Kcc20Ref, TemplateId::KronToken2433] {
+        all.extend(scenarios_on(t));
+        all.extend(delivery_scenarios(t));
+        all.extend(common::pair::pair_scenarios(t, t));
+        all.extend(common::curve::curve_scenarios(t, 4));
+    }
+    all.extend(scenarios_kron());
+    let mut seen: std::collections::BTreeSet<String> = Default::default();
+    for (name, a) in all {
+        let Ok(built) = build(&a) else { continue };
+        let first = built.plans.iter().position(|p| matches!(p, SigPlan::Entry { template, .. } if template.kind_code().is_some()));
+        let Some(k) = first else { continue };
+        let SigPlan::Entry { template, entry, .. } = &built.plans[k] else { unreachable!() };
+        let label = format!("{name}: {} {entry}", template.name());
+        let s = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+        validate_signed(&s).unwrap_or_else(|e| panic!("{label}: the native original: {e}"));
+        // the signed transaction moved to a lane, every signature made again over the lane's digest (the builders
+        // and `to_tx` refuse a user lane, so this is done on the consensus transaction)
+        let on = |lane: [u8; 20]| {
+            let (mut tx, entries) = s.tx.to_tx().unwrap();
+            tx.subnetwork_id = kaspa_consensus_core::subnets::SubnetworkId::from_bytes(lane);
+            for r in &built.sign {
+                let d = sighash(&tx, &entries, r.input_index);
+                let sig = kob_protocol::tx::sign_digest(&keys()[&r.pubkey], &d).unwrap();
+                tx.inputs[r.input_index].signature_script = built.plans[r.input_index].sigscript(Some(&sig)).unwrap();
+            }
+            kob_protocol::verify::execute(&tx, &entries, true).unwrap()
+        };
+        let native = on([0; 20]);
+        assert!(native.iter().all(|o| o.is_ok()), "{label}: the re-signed native control: {native:?}");
+        let mut lane = [0u8; 20];
+        lane[..4].copy_from_slice(&[1, 2, 3, 4]);
+        let r = on(lane);
+        assert!(r[k].is_err(), "{label}: a user lane is accepted at input {k}");
+        // every other order input of the transaction refuses it too
+        for (i, p) in built.plans.iter().enumerate() {
+            if matches!(p, SigPlan::Entry { template, .. } if template.kind_code().is_some()) {
+                assert!(r[i].is_err(), "{label}: input {i}");
+            }
+        }
+        seen.insert(format!("{} {entry}", template.name()));
+    }
+    let kinds: std::collections::BTreeSet<&str> = seen.iter().map(|k| k.split(' ').next().unwrap()).collect();
+    assert!(kinds.len() >= 16 && seen.iter().any(|k| k.ends_with("cancel")), "{seen:?}");
+}

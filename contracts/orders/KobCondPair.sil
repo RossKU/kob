@@ -649,6 +649,8 @@ contract KobCondPair(
 
     entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut, int leg, int evA, int evB, int tk, int evMode,
                  int upd, int k, int form) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         spanIsData();
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -1209,6 +1211,8 @@ contract KobCondPair(
     // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
     // maker routes the custody and any strays.
     entry cancel(sig s) {
+        // Row 1: native lane only (KIP-21 user lanes are refused), for every entry.
+        require(OpTxSubnetId() == byte[20](0x0000000000000000000000000000000000000000));
         byte[] sb = byte[](s);
         require(sb.length == 65);
         require(sb[64] == SIGHASH_ALL);
