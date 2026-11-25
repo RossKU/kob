@@ -817,7 +817,7 @@ contract KobCondPair(
             } else {
                 require(sFamily == FAM_KCC20);
                 require(byte[32](tin.slice(10, 42)) == selfId);
-                require(tin.slice(43, 46) == byte[](0x040100));
+                require(tin.slice(43, 79) == byte[](0x040100200000000000000000000000000000000000000000000000000000000000000000)); // row 2: scheme 4, borrowing off, zero guard
                 held = int(byte[8](tin.slice(1, 9)));
                 gx = tin.slice(47, 112);
                 // A KCC-20 token is (covenant id, program, extension

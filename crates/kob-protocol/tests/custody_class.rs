@@ -300,17 +300,20 @@ fn a_custody_is_what_the_covenant_accepts_whatever_its_guard() {
         let o = order(70, value, O, 1_000, s.clone());
         let good = real(t, &s);
         let d = guarded(&good[0], 0x5d);
-        let e = build_sweep_order(&sweep_of(o.clone(), vec![d.clone()]), &kob_protocol::budget::lookup).expect_err(&label).to_string();
-        assert!(e.contains("never moves a unit of exactly the state the order pins"), "{label}: {e}");
-        // the cancel takes the guarded look-alike along with the custody, or as the custody when it is all there is
-        build_cancel_order(&cancel(o.clone(), &good, vec![d.clone()]), &kob_protocol::budget::lookup)
-            .unwrap_or_else(|e| panic!("{label}: {e}"));
-        let mut only = good.clone();
-        only[0] = d.clone();
-        let built = build_cancel_order(&cancel(o.clone(), &only, vec![]), &kob_protocol::budget::lookup)
+        // TPLGEN row 2: the pinned templates compare the guard, so a guarded unit is a plain stray. The sweep returns it,
+        // the cancel takes it next to the custody, and it never stands in for the custody (the builders refuse it, and
+        // the covenant would). The tolerant reading of the earlier templates stays for the retired ones (cancel-only).
+        let sw = build_sweep_order(&sweep_of(o.clone(), vec![d.clone()]), &kob_protocol::budget::lookup)
+            .unwrap_or_else(|e| panic!("{label}: sweep: {e}"));
+        engine(&sw, &format!("{label} sweep"));
+        let built = build_cancel_order(&cancel(o.clone(), &good, vec![d.clone()]), &kob_protocol::budget::lookup)
             .unwrap_or_else(|e| panic!("{label}: {e}"));
         engine(&built, &label);
-        assert!(check_releases_held(&s, O, &only).is_ok(), "{label}");
+        let mut only = good.clone();
+        only[0] = d.clone();
+        let e = build_cancel_order(&cancel(o.clone(), &only, vec![]), &kob_protocol::budget::lookup).expect_err(&label).to_string();
+        assert!(e.contains("not exactly the one its order pins"), "{label}: {e}");
+        let only = good.clone();
         // R9FA2-1: everything comes back to the maker. The order's KAS (an if-done ask's prefund with it) is in no
         // covenant output, and every token unit, the guarded one included, leaves as a plain unit of the maker.
         let maker = kob_protocol::tx::spk_to_string(&kob_protocol::script::p2pk_spk(&pk(MAKER_A)));
@@ -429,8 +432,9 @@ fn the_engine_takes_a_guarded_unit_as_the_custody_of_a_fill() {
         r.sighash = sighash(&tx, &entries, r.input_index);
     }
     let signed = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
-    let v = validate_signed(&signed);
-    assert!(v.is_ok(), "the engine refuses the guarded custody: {:?}", v.err());
+    // TPLGEN row 2: the templates before it accepted this fill (run on 6ca8c0544); the zero-guard check refuses it
+    let e = validate_signed(&signed).expect_err("a guarded unit is no custody").to_string();
+    assert!(e.contains("input 0"), "{e}");
     // and the order this leaves (rest custody guarded) is ended by the tools: covered by
     // `a_custody_is_what_the_covenant_accepts_whatever_its_guard`
 }
@@ -470,6 +474,7 @@ fn the_engine_takes_a_guarded_unit_as_the_custody_of_an_if_done_entry_fill() {
         r.sighash = sighash(&tx, &entries, r.input_index);
     }
     let signed = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
-    let v = validate_signed(&signed);
-    assert!(v.is_ok(), "the engine refuses the guarded custody: {:?}", v.err());
+    // TPLGEN row 2: accepted before it (run on 6ca8c0544), refused now
+    let e = validate_signed(&signed).expect_err("a guarded unit is no custody").to_string();
+    assert!(e.contains("input 0"), "{e}");
 }

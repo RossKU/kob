@@ -283,7 +283,7 @@ contract KobIfdPair(
             got = int(byte[8](st.slice(36, 44)));
         } else {
             require(byte[32](st.slice(10, 42)) == me);
-            require(st.slice(43, 46) == byte[](0x040100));
+            require(st.slice(43, 79) == byte[](0x040100200000000000000000000000000000000000000000000000000000000000000000)); // row 2: scheme 4, borrowing off, zero guard
             got = int(byte[8](st.slice(1, 9)));
             gx = st.slice(47, 112);
             require(byte[32](st.slice(80, 112)) == ext);

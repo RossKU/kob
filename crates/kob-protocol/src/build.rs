@@ -1108,7 +1108,7 @@ pub fn covenant_accepts_as(h: &HeldCustody, t: &TokenUtxo) -> bool {
 /// (TPLGEN row 2). It turns true with the generation whose sell-custody checks compare the guard;
 /// the templates it retires (cancel-only) and every earlier one do not, so a guarded unit can stand
 /// in for their custody (R9FA-1), and their ending spends must accept it.
-pub const PINNED_CHECKS_GUARD: bool = false;
+pub const PINNED_CHECKS_GUARD: bool = true;
 
 /// The custody a spend that ends the order releases: [`check_custody`], with the borrow guard
 /// ignored when the order's template ignores it (`tolerant`: a retired template, or a pinned one
@@ -1937,7 +1937,16 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     // this, the order could live on with no custody, which no KOB tool could fill, refund or cancel.
     for h in held_custodies(&order.state, order_cov)?.iter().filter(|h| !h.bought) {
         // the covenant's comparison, the borrow guard ignored as it ignores it (R9FA-1)
-        if r.strays.iter().any(|t| covenant_accepts_as(h, t)) {
+        // a pinned template that checks the guard (TPLGEN row 2) takes only the exact state as its custody, so a guarded
+        // unit is a plain stray there, which the sweep returns
+        let custody_like = |t: &TokenUtxo| {
+            if PINNED_CHECKS_GUARD {
+                t.utxo.covenant_id == Some(h.token.covenant_id) && t.state == h.state
+            } else {
+                covenant_accepts_as(h, t)
+            }
+        };
+        if r.strays.iter().any(custody_like) {
             return invalid(format!(
                 "a sweep never moves a unit of exactly the state the order pins for its custody ({} base units): it stays with the order, and its cancel takes it",
                 h.state.amount()

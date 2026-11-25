@@ -352,7 +352,7 @@ contract KobCondAsk(
         byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
         require(byte[32](tin.slice(10, 42)) == selfId);
-        require(tin.slice(43, 46) == byte[](0x040100));
+        require(tin.slice(43, 79) == byte[](0x040100200000000000000000000000000000000000000000000000000000000000000000)); // row 2: scheme 4, borrowing off, zero guard
         // A KCC-20 token is (covenant id, program, extension commitment).
         // Units of the same covenant id with another commitment are another
         // token.

@@ -130,8 +130,8 @@ contract KobCurveAsk(
             + OpTxInputScriptSigSubstr(me, base + 162, base + 163) + OpTxInputScriptSigSubstr(me, base + 171, base + 172)
             + OpTxInputScriptSigSubstr(me, base + 180, base + 181);
         require(h == byte[](0x20202008080808080808080820));
-        // the table: one push of every byte from state offset 213 to the code (2565 bytes after the state)
-        int tot = rsLen - 2779;
+        // the table: one push of every byte from state offset 213 to the code (2598 bytes after the state)
+        int tot = rsLen - 2812;
         require(tot >= 1);
         byte[] t0 = OpTxInputScriptSigSubstr(me, base + 213, base + 214);
         if (tot <= 76) {
@@ -171,7 +171,7 @@ contract KobCurveAsk(
         byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
         require(byte[32](tin.slice(10, 42)) == selfId);
-        require(tin.slice(43, 46) == byte[](0x040100));
+        require(tin.slice(43, 79) == byte[](0x040100200000000000000000000000000000000000000000000000000000000000000000)); // row 2: scheme 4, borrowing off, zero guard
         require(byte[32](tin.slice(80, 112)) == extensionCommitment);
         require(int(byte[8](tin.slice(1, 9))) == amountLeft);
         noStrays(cid, selfId, tokenIn);
