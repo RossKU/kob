@@ -113,7 +113,7 @@ for (const c of CASES) {
     expect(receipt.orders, 'one order in the table').toHaveLength(1);
     const order = receipt.orders[0]!;
     expect(order.title).toBe(c.receipt.orderTitle);
-    expect(order.token, 'the token line names the traded token').toMatch(/^EXKCC [(][0-9a-f]{8}…[0-9a-f]{8}[)]$/);
+    expect(order.token, 'the token line names the traded token').toMatch(/^EXKCC [(][0-9a-f]{64}[)]$/); // the whole id (founder 2026-11-12)
     expect(order.rows).toMatchObject(c.receipt.card);
     if (c.receipt.exitCard) {
       expect(order.exit?.title).toBe(c.receipt.exitTitle);

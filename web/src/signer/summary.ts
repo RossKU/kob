@@ -187,7 +187,7 @@ function frameTokenName(covenantId: Hex, h: TokenHint | undefined): string {
  */
 function refOfHint(covenantId: Hex, hints: TokenHint[], frame = false, role?: 'A' | 'B'): TokenRef {
   const h = hints.find((x) => x.covenantId === covenantId);
-  const ticker = frame ? (verifiedTicker(h) ?? (role ? t('signer.token.unitRole', { role }) : t('signer.token.unit'))) : h ? (h.ticker || t('signer.token.unit')) : null;
+  const ticker = frame ? (verifiedTicker(h) ?? (role ? t('signer.token.unitRole', { role }) : t('signer.token.unit'))) : h ? (h.ticker || (role ? t('signer.token.unitRole', { role }) : t('signer.token.unit'))) : null;
   return { covenantId, ticker, decimals: h?.decimals ?? null, display: tokenName(covenantId, h, frame), inRegistry: false, tradable: false };
 }
 
@@ -224,7 +224,7 @@ function withOrderScales(s: SigningSummary, hints: readonly TokenHint[]): TokenH
  */
 function hintRegistry(hints: TokenHint[], frame = false): TokenRegistry {
   // a pair order's quote token B: in the frame its unit is a vouched ticker or "token B"
-  const tickerOf = (h: TokenHint) => (frame ? (verifiedTicker(h) ?? t('signer.token.unitRole', { role: 'B' })) : h.ticker || t('signer.token.unit'));
+  const tickerOf = (h: TokenHint) => (frame ? (verifiedTicker(h) ?? t('signer.token.unitRole', { role: 'B' })) : h.ticker || t('signer.token.unitRole', { role: 'B' }));
   const byCovenantId = new Map(hints.map((h) => [h.covenantId, { covenantId: h.covenantId, ticker: tickerOf(h), decimals: h.decimals, tradable: false, ...(frame ? { openList: true } : {}) } as unknown as TokenInfo]));
   return { network: '', templates: [], templateChecks: [], tokens: [], byCovenantId };
 }

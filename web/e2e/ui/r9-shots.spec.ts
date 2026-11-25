@@ -256,3 +256,39 @@ test.describe('the private-key frame: a market buy of a token the frame cannot n
     await page.getByTestId('signer-frame').screenshot({ path: shot('r9-frame-market-buy-unnamed') });
   });
 });
+
+test.describe('the private-key frame: amend, sweep and claim posted from builds', () => {
+  test.use({ walletId: null, autoOpen: false });
+  const signer = (page: Page) => page.frameLocator('[data-testid="signer-frame"]');
+  const cases: [string, () => Promise<unknown>][] = [
+    ['amend', async () => loadKobNode().build(goldenRequest('amend.ask', TEST_KEYS.alice.pubkey) as never)],
+    ['sweep', async () => {
+      const kob = loadKobNode();
+      const { placeGolden, strayFor, keyUtxo } = await import('../../src/testing/chain-fixtures');
+      const { planSweep } = await import('../../src/kob/cancel');
+      const who = { sk: TEST_KEYS.alice.secretKey, pk: TEST_KEYS.alice.pubkey };
+      const snap = placeGolden(kob, 'create.ask', who as never).snapshots[0]!;
+      return planSweep({ kob, maker: who.pk, funding: [keyUtxo(who.pk, 100n * 100_000_000n, 201)], tokenUtxos: [], clock: { daa: 78_000_000n } }, { ...snap, strays: [strayFor(snap, 4n, 92)] }).built;
+    }],
+  ];
+  for (const [name, make] of cases) {
+    test(`the frame of a ${name}`, async ({ appPage: page, mock }) => {
+      test.setTimeout(240_000);
+      await page.setViewportSize({ width: 1440, height: 1400 });
+      await fund(mock);
+      await openMarket(page, mock, { connect: false });
+      await page.getByTestId('wallet-connect-local-key').click();
+      await signer(page).getByTestId('signer-key').fill(TEST_KEYS.alice.secretKey);
+      await signer(page).getByTestId('signer-connect').click();
+      const built = await make();
+      const msg = JSON.parse(JSON.stringify({ p: SIGNER_PROTOCOL, type: 'sign', id: `${name}-1`, built, tokens: [] }));
+      await page.evaluate((m) => {
+        document.querySelector<HTMLElement>('[data-testid="signer-overlay"]')!.hidden = false;
+        (document.querySelector('[data-testid="signer-frame"]') as HTMLIFrameElement).contentWindow!.postMessage(m, '*');
+      }, msg);
+      await expect(signer(page).getByTestId('signer-approve')).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(2_000);
+      await page.getByTestId('signer-frame').screenshot({ path: shot(`r9-frame-${name}`) });
+    });
+  }
+});
