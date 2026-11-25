@@ -393,20 +393,25 @@ pub fn is_topup_input(lowered: &Lowered, i: usize) -> bool {
 
 /// The order a validation error names.
 ///
-/// That is the fill whose order input the engine names, since order inputs lead the transaction in
-/// fill order. Or it is the updated order whose `update` input the engine names. So a batch of many
+/// That is the fill whose order or custody UTXO the input the engine names spends, found by its outpoint (the
+/// builder may order the legs otherwise than the plan, R9FD-1). Or it is the updated order whose `update` input the engine names. So a batch of many
 /// books loses only the leg or the update at fault. [`bisect`] searches for the order behind an
 /// error that names neither.
-fn named_victim(plan: &Plan, lowered: &Lowered, err: &str) -> Option<CovId> {
+fn named_victim(plan: &Plan, lowered: &Lowered, by_id: &BTreeMap<CovId, ListedOrder>, err: &str) -> Option<CovId> {
     let named = err.find("input ").and_then(|at| {
         let at = at + "input ".len();
         let digits: String = err[at..].chars().take_while(|c| c.is_ascii_digit()).collect();
         err[at + digits.len()..].starts_with(':').then(|| digits.parse::<usize>().ok()).flatten()
     });
-    if let Some(f) = named.and_then(|i| plan.fills.get(i)) {
-        return Some(f.cand.id);
-    }
+    // The order whose UTXO the named input spends, by its outpoint: the builder may put the legs in another order than
+    // the plan's fills (refund-carrying bids first), so the input's index is no fill index (R9FD-1).
     let spent: Option<Outpoint> = named.and_then(|i| lowered.built.tx.inputs.get(i)).map(|x| (x.transaction_id, x.index));
+    if let Some(op) = spent {
+        let spends = |o: &ListedOrder| outpoint(&o.order.utxo) == op || o.own_tokens().any(|c| outpoint(&c.utxo) == op);
+        if let Some(f) = plan.fills.iter().find(|f| by_id.get(&f.cand.id).is_some_and(spends)) {
+            return Some(f.cand.id);
+        }
+    }
     if let Some(u) = spent.and_then(|op| plan.updates.iter().find(|u| u.outpoint == op)) {
         return Some(u.id);
     }
@@ -990,7 +995,7 @@ impl<'a> Tick<'a> {
                         }
                         token_why = Some(why);
                     }
-                    if let Some(v) = named_victim(&plan, &lowered, &e) {
+                    if let Some(v) = named_victim(&plan, &lowered, &self.by_id, &e) {
                         // Quarantined like a builder refusal, unless it is a continuation of this
                         // tick's own transactions (R8F3b-3).
                         if !self.unaccepted.contains(&v) && !report.quarantined.iter().any(|q| q.0 == v) {
