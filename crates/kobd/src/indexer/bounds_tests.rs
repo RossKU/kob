@@ -2318,15 +2318,18 @@ fn the_token_list_does_not_fail_with_open_tokens() {
     add(0, 5_000);
     let ((tokens, truncated), few) = steps(&conn, || token_list_page(&conn, &list).unwrap());
     assert_eq!(tokens[0].covenant_id, Hash32(TOKEN_COV).to_hex(), "the registry's token first");
-    assert_eq!(tokens.len(), 5_001);
-    assert!(!truncated);
+    assert_eq!(tokens.len(), 1 + TOKEN_PAGE_MAX);
+    assert!(truncated, "a next page");
     add(5_000, 10_000);
     let ((tokens, truncated), many) = steps(&conn, || token_list_page(&conn, &list).unwrap());
-    eprintln!("tokens: {few} VM steps with 5,000 open tokens, {many} with 10,000 (50 orders each)");
+    eprintln!("tokens: {few} VM steps with 5,000 open tokens, {many} with 10,000 (50 orders each), first page");
     assert_eq!(tokens[0].covenant_id, Hash32(TOKEN_COV).to_hex(), "the registry's token first");
-    assert!(truncated, "cut at the cap, and says so");
-    assert!(tokens.len() <= 1 + OPEN_TOKEN_ROWS_MAX as usize);
+    assert!(truncated);
     assert!(few <= CEILING && many <= CEILING, "{few} / {many} VM steps");
+    // every page together is the whole list, each token once
+    let (all, pages) = token_list_all(&conn, &list, TOKEN_PAGE_MAX).unwrap();
+    let distinct: std::collections::BTreeSet<&str> = all.iter().map(|t| t.covenant_id.as_str()).collect();
+    assert_eq!((all.len(), distinct.len()), (10_001, 10_001), "{pages} pages");
 }
 
 /// R8C2b: a pair's order list (`GET /v1/pairs/{a}/{b}/orders`) reads only that pair's live rows: 30 orders of A / B, then
@@ -2536,18 +2539,17 @@ fn open_list() -> TokenAllowlist {
     )])
 }
 
-/// R9C2b-1: the token list at every cap at once answers, under its own step budget and well under the read budget: the
-/// second pass's two scans past full (event rows of 20,001 tokens with 16 orders each, listed orders of 20,001 more) and the
-/// first pass at its cap (2,000 proven tokens). The registry's token and every proven token are in the answer, and it
-/// says `truncated`. A token the cut left out is still answered by its id (`token_view`).
+/// R9C2b-1 and its follow-up: the token list at every former cap at once answers page by page, each page under its own
+/// step budget and well under the read budget: event rows of 20,001 tokens with 16 orders each, listed orders of 20,001
+/// more and 2,000 proven tokens. The first page has the registry's token and the proven ones first; following
+/// `next_cursor` reads every token, each once. A token is also answered by its id (`token_view`).
 #[test]
-fn the_token_list_at_every_cap_answers_with_the_proven_tokens() {
+fn the_token_list_at_every_cap_answers_page_by_page() {
     let _heavy = heavy();
     let conn = open_memory("testnet-10").unwrap();
     honest_book(&conn);
     let list = open_list();
-    // past both of the second pass's scan caps (twice the rows it lists, of each kind) and the previous build's (four times)
-    let rows = 4 * OPEN_TOKEN_ROWS_MAX + 1;
+    let rows = 20_001;
     fake_tokens(&conn, "e", 0, rows, Fake::Events);
     fake_tokens(&conn, "l", 0, rows, Fake::Listed);
     // and 16 unlisted orders of each event token, the most a market scale read takes (the per-token view's worst)
@@ -2563,28 +2565,41 @@ fn the_token_list_at_every_cap_answers_with_the_proven_tokens() {
         )
         .unwrap();
     }
-    fake_tokens(&conn, "p", 0, PROVEN_TOKENS_MAX as i64, Fake::Proven);
+    fake_tokens(&conn, "p", 0, 2_000, Fake::Proven);
     let t0 = std::time::Instant::now();
     let ((tokens, truncated), n) = steps(&conn, || token_list_page(&conn, &list).unwrap());
-    eprintln!("tokens at every cap: {n} VM steps, {} tokens, wall {:?} (counter on)", tokens.len(), t0.elapsed());
-    assert!(truncated, "cut, and says so");
+    eprintln!("tokens, first page at every cap: {n} VM steps, {} tokens, wall {:?} (counter on)", tokens.len(), t0.elapsed());
+    assert!(truncated, "a next page");
     assert_eq!(tokens[0].covenant_id, Hash32(TOKEN_COV).to_hex(), "the registry's token first");
-    let have: std::collections::BTreeSet<&str> = tokens.iter().map(|t| t.covenant_id.as_str()).collect();
     let cov = |p: &str, i: i64| hex::encode(format!("{p}{i:031}").as_bytes());
-    let proven = (0..PROVEN_TOKENS_MAX as i64).filter(|i| have.contains(cov("p", *i).as_str())).count();
-    assert_eq!(proven, PROVEN_TOKENS_MAX, "every proven token is in the answer");
-    // well under the read budget, with the first pass full and the second at its own budget
+    assert_eq!(tokens[1].covenant_id, cov("p", 0), "then the proven tokens");
     assert!(n < crate::indexer::db::READ_BUDGET_STEPS * 4 / 5, "{n} VM steps");
-    // a token the cut left out is answered by its id; an unknown one is not
-    let left_out = (0..rows).map(|i| cov("l", i)).find(|c| !have.contains(c.as_str())).expect("some listed token is cut");
-    let v = token_view(&conn, &list, &Hash32::parse(&left_out).unwrap()).unwrap().expect("its own view");
-    assert_eq!(v.covenant_id, left_out);
+    // every page under the budget, and all of them together are the whole list
+    let (mut cursor, mut seen, mut pages, mut worst) = (None, std::collections::BTreeSet::new(), 0usize, 0u64);
+    loop {
+        let (p, n) = steps(&conn, || token_page(&conn, &list, cursor.as_ref(), TOKEN_PAGE_MAX).unwrap());
+        worst = worst.max(n);
+        pages += 1;
+        for t in p.tokens {
+            assert!(seen.insert(t.covenant_id), "a token on two pages");
+        }
+        match p.next_cursor {
+            Some(c) => cursor = Some(TokenCursor::parse(&c.render()).expect("its cursor parses")),
+            None => break,
+        }
+    }
+    eprintln!("tokens, every page at every cap: {pages} pages, the dearest {worst} VM steps");
+    assert_eq!(seen.len(), 1 + 2_000 + 2 * rows as usize, "every token, once");
+    assert!(worst < crate::indexer::db::READ_BUDGET_STEPS * 4 / 5, "{worst} VM steps");
+    // one token by its id; an unknown one is not
+    let v = token_view(&conn, &list, &Hash32::parse(&cov("l", rows - 1)).unwrap()).unwrap().expect("its own view");
+    assert_eq!(v.covenant_id, cov("l", rows - 1));
     assert!(token_view(&conn, &list, &Hash32([0x3c; 32])).unwrap().is_none());
 }
 
-/// R9C2b-2: a token the chain proves is in the list whatever placements came before it: 25,000 listed fake tokens interned
-/// before it and 25,000 fake event rows whose covenant ids sort below it fill the second pass; the proven token, interned
-/// last, is in the answer (before, the scans stopped before reaching it).
+/// R9C2b-2: a token the chain proves is on the first page whatever placements came before it: 25,000 listed fake tokens
+/// interned before it and 25,000 fake event rows whose covenant ids sort below it; the proven token, interned last, is
+/// on the first page (before round 9 the scans stopped before reaching it).
 #[test]
 fn a_proven_token_survives_an_open_list_flood() {
     let _heavy = heavy();
@@ -2593,10 +2608,150 @@ fn a_proven_token_survives_an_open_list_flood() {
     fake_tokens(&conn, "\u{1}", 0, 25_000, Fake::Events);
     fake_tokens(&conn, "l", 0, 25_000, Fake::Listed);
     fake_tokens(&conn, "z", 0, 1, Fake::Proven);
-    let (tokens, truncated) = token_list_page(&conn, &list).unwrap();
+    let (tokens, more) = token_list_page(&conn, &list).unwrap();
     let real = hex::encode(format!("z{:031}", 0).as_bytes());
     assert!(tokens.iter().any(|t| t.covenant_id == real), "the proven token is listed");
-    assert!(truncated);
+    assert!(more);
+}
+
+/// R9C2b-2 follow-up: a place on the first page is held by market presence, not by age. 2,000 junk proven tokens with no
+/// presence are created first, then one proven token with a fillable bid: it is the first open token of the first page,
+/// ahead of all of them. The presence is kept by the triggers on `book_live`: it follows the bid's value and goes when
+/// the bid is no longer fillable.
+#[test]
+fn market_presence_holds_the_first_places_of_the_token_list() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let list = open_list();
+    fake_tokens(&conn, "j", 0, 2_000, Fake::Proven);
+    fake_tokens(&conn, "r", 0, 1, Fake::Proven);
+    let real = hex::encode(format!("r{:031}", 0).as_bytes());
+    let rid = id(&conn, &Hash32::parse(&real).unwrap().0);
+    // a fillable fixed-price bid of 10,000 base units at 1 KAS per whole token (10^5 sompi a base unit): 10^9 sompi
+    conn.execute(
+        "INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id, ok, open, auction, offer) \
+         VALUES (999999, ?1, 2, -100000.0, 1, x'99', 1, 1, 0, 10000)",
+        [rid],
+    )
+    .unwrap();
+    let presence = |c: &Connection| -> Option<i64> {
+        c.query_row("SELECT value FROM token_presence WHERE token_id = ?1", [rid], |r| r.get(0)).optional().unwrap()
+    };
+    assert_eq!(presence(&conn), Some(1_000_000_000));
+    let (tokens, _) = token_list_page(&conn, &list).unwrap();
+    assert_eq!(tokens[1].covenant_id, real, "the token with presence first, after the registry's");
+    assert_eq!(tokens.len(), 1 + 2_001.min(TOKEN_PAGE_MAX));
+    // a page of 1 open token: the present one alone, then the junk in age order on the next pages
+    let p = token_page(&conn, &list, None, 1).unwrap();
+    assert_eq!(p.tokens.iter().map(|t| t.covenant_id.clone()).collect::<Vec<_>>(), vec![Hash32(TOKEN_COV).to_hex(), real.clone()]);
+    let (all, _) = token_list_all(&conn, &list, 333).unwrap();
+    assert_eq!(all.len(), 1 + 2_001, "paging reaches every token");
+    // not fillable any more (cancelled, filled, expired): no presence
+    conn.execute("UPDATE book_live SET open = 2 WHERE order_id = 999999", []).unwrap();
+    assert_eq!(presence(&conn), None);
+    let (tokens, _) = token_list_page(&conn, &list).unwrap();
+    assert_ne!(tokens[1].covenant_id, real, "back to its age among the proven tokens");
+}
+
+/// R9 follow-up: `GET /v1/token-utxos?owner=&token=&order=amount` reads the owner's live units of one token the largest
+/// first: 20 real holdings behind 10,000 then 100,000 dust units sent to the address come first, at the same VM steps.
+#[test]
+fn an_owners_largest_units_come_first_whatever_dust_is_sent() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    crate::testkit::named_holdings_writable(&conn);
+    let (owner, tok) = (pk(3), TOKEN_COV);
+    let (oid, tid) = (id(&conn, &owner), id(&conn, &tok));
+    let add = |from: i64, to: i64, amount: &str| {
+        conn.execute(
+            &format!(
+                "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1) \
+                 INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+                 created_block, created_daa) SELECT CAST(printf('%08dh%023d', i, i) AS BLOB), 0, ?3, 'Kcc20Ref', 1, ?4, 0, {amount}, 8000000, x'00', \
+                 'owned', 1 + i, 1 + i FROM n"
+            ),
+            params![from, to, tid, oid],
+        )
+        .unwrap();
+    };
+    // the real units first (oldest), 1,000 to 20,000 base units; txids differ in their first 8 bytes, as real ones do (`txs_h`)
+    add(0, 20, "1000 * (1 + i)");
+    let ctx = ctx();
+    let read = || holdings_by_amount(&conn, &ctx, &owner, &Hash32(tok), 200, None).unwrap();
+    add(20, 10_020, "1");
+    let (p, few) = steps(&conn, read);
+    assert_eq!(p.items.iter().take(20).map(|h| h.amount.as_str()).collect::<Vec<_>>()[0], "20000", "the largest first");
+    assert!(p.items.iter().take(20).all(|h| h.amount != "1"), "the real units before any dust");
+    add(10_020, 100_020, "1");
+    let (p2, many) = steps(&conn, read);
+    assert_eq!(p.items.len(), p2.items.len());
+    flat("token-utxos owner token order=amount", few, many);
+    // the cursor goes on below the last unit, and paging reads every unit once
+    let mut cursor = None;
+    let (mut n, mut last) = (0usize, i64::MAX);
+    for _ in 0..1_000 {
+        let page = holdings_by_amount(&conn, &ctx, &owner, &Hash32(tok), 200, cursor.take()).unwrap();
+        for h in &page.items {
+            let a: i64 = h.amount.parse().unwrap();
+            assert!(a <= last, "largest first");
+            last = a;
+        }
+        n += page.items.len();
+        match page.next_cursor {
+            Some(c) => cursor = parse_amount_cursor(&c),
+            None => break,
+        }
+    }
+    assert_eq!(n, 100_020);
+}
+
+/// R9 follow-up: `GET /v1/pairs/{a}/{b}/orders?maker=` reads one maker's orders of the pair only: 30 live orders of
+/// maker M (and 30 of his ended ones) behind 50,000 then 100,000 live orders of other makers on the same pair, at the same
+/// VM steps, every page.
+#[test]
+fn a_makers_pair_orders_are_read_alone() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let (a, b) = (TOKEN_COV, [0x5b; 32]);
+    let s = Seed {
+        prefix: "m",
+        contract: "KobPair",
+        side: 1,
+        token: a,
+        quote: Some(b),
+        parent: None,
+        state: None,
+        price0: None,
+        remaining: 10,
+        custody: false,
+        listed: false,
+        maker: pk(6),
+    };
+    seed(&conn, &s, 0, 30);
+    conn.execute("UPDATE order_state SET status = 'cancelled'", []).unwrap();
+    seed(&conn, &Seed { prefix: "n", ..s.clone() }, 30, 60);
+    let (ha, hb, ctx) = (Hash32(a), Hash32(b), ctx());
+    let read_all = || {
+        let (mut cursor, mut seen, mut pages) = (None, Vec::new(), 0);
+        loop {
+            let page = maker_pair_orders(&conn, &ctx, &ha, &hb, &pk(6), 7, cursor.take()).unwrap();
+            seen.extend(page.items.iter().map(|o| o.covenant_id.clone()));
+            pages += 1;
+            assert!(pages <= 30 / 7 + 2, "{pages} pages and not done");
+            match page.next_cursor {
+                Some(c) => cursor = parse_order_cursor(&c),
+                None => break,
+            }
+        }
+        seen
+    };
+    seed(&conn, &Seed { prefix: "o", maker: pk(7), listed: true, ..s.clone() }, 60, 50_060);
+    let (seen, few) = steps(&conn, read_all);
+    assert_eq!(seen.len(), 30, "the maker's live orders, listed or not");
+    seed(&conn, &Seed { prefix: "q", maker: pk(8), listed: true, ..s.clone() }, 50_060, 100_060);
+    let (again, many) = steps(&conn, read_all);
+    assert_eq!(again, seen);
+    flat("pair orders of a maker", few, many);
 }
 
 /// R9C2b-5: the quote side of a maker's status list of one token (a pair order with the token as its quote) walks

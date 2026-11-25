@@ -271,11 +271,18 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   itself (I/O, corruption, a full disk) answers `503 storage` with `Retry-After: 1`: retry, the order is not unknown.
 - **New: `GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`**, the live orders of one pair, newest first, paged as
   `/v1/orders`; it reads only that pair's orders, so a client no longer reads both tokens' whole lists to find them.
-- `/v1/tokens` answers `{"tokens": [...], "truncated": bool}`. The tokens the chain proves (a holding exists) are always in
-  it, up to the 2,000 oldest; the tokens only placements name follow, at most 5,000 and a budget of work of their own; `truncated`
-  is true when either is cut. **New: `GET /v1/tokens/{covenant_id}`** answers one token's view whether or not the list holds it:
-  a client that knows a token's id reads it there when the list is cut. A token's `market_scale` is its earliest listed order's
-  scale, whatever unlisted orders came before it.
+- **`/v1/tokens` is paged**: `{"tokens": [...], "truncated": bool, "next_cursor": string | null}`, with `?cursor=&limit=` (at most
+  2,000 open tokens a page). The first page has the registry's tokens, then the tokens the chain proves ranked by market presence
+  (the KAS of their fillable fixed-price bids), then the other proven ones by age, then the tokens only placements name.
+  `truncated` is true when a next page exists: follow `next_cursor` to read every token. **New: `GET /v1/tokens/{covenant_id}`**
+  answers one token's view wherever its place is (the route for a token just created). A token's `market_scale` is its earliest
+  listed order's scale, whatever unlisted orders came before it.
+- `/v1/pairs` stays a bare array; when its scan of the oldest 20,000 fillable pair orders was cut, the answer carries the header
+  `x-kob-truncated: 1`.
+- **New: `/v1/token-utxos?owner=&token=&order=amount`**: the owner's live units of one token, the largest first, cursor
+  `<amount>:<txid>:<index>` (what a holder can spend, whatever dust was sent to the address). The default order is unchanged.
+- **New: `/v1/pairs/{base}/{quote}/orders?maker=<key>`**: that maker's own live orders of the pair (open or partial, listed or not),
+  same shape and cursor, for a self-trade check.
 - `/v1/stats?since=` says `"actors_truncated": true` when `traders` or `executors` of the range reached 50,000 (the counts
   stop there); the all-time counts are exact.
 - A curve whose only fill KIP-9 allows is its whole rest is ranked and shown by that fill (never one unit at its low

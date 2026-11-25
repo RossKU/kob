@@ -231,6 +231,7 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     }
     ensure_kas_locked(conn)?;
     ensure_actor_counts(conn)?;
+    ensure_token_presence(conn)?;
     if backfill_candidate_bytes(conn)? {
         tracing::info!("counted the bytes of the KCC-23 candidate preparations once (kept by triggers from now on)");
     }
@@ -590,6 +591,48 @@ pub(crate) fn ensure_actor_counts(conn: &Connection) -> DbResult<()> {
         bump("OLD.kind", "-1"),
         bump("OLD.kind", "-1"),
         bump("NEW.kind", "1"),
+    ))?;
+    Ok(())
+}
+
+/// The market presence of each token (`token_presence`): the sompi of its fillable fixed-price bids, the KAS anyone who
+/// holds the token can take now (`book_live` rows of side 2, `ok` and `open` 1, class 0: not an auction, not dust;
+/// one fill's buying power at its price). Kept by triggers on `book_live` in the transaction of every write, and
+/// recounted at every open (no marker is trusted). The token list ranks the tokens the chain proves by it
+/// (`reads::token_page`), so a place on its first page is held by KAS at risk of being taken, never by age or by the
+/// number of placements (R9C2b-2 follow-up).
+pub(crate) fn ensure_token_presence(conn: &Connection) -> DbResult<()> {
+    let value = |r: &str| {
+        format!(
+            "(CASE WHEN {r}.side = 2 AND {r}.ok = 1 AND {r}.open = 1 AND {r}.auction = 0 AND {r}.offer > 0 AND {r}.key < 0 \
+             THEN CAST(MIN({r}.offer * -{r}.key, 4.0e18) AS INTEGER) ELSE 0 END)"
+        )
+    };
+    let add = |token: &str, d: String| {
+        format!(
+            "INSERT INTO token_presence (token_id, value) SELECT {token}, {d} WHERE {d} != 0 \
+             ON CONFLICT(token_id) DO UPDATE SET value = value + excluded.value; \
+             DELETE FROM token_presence WHERE token_id = {token} AND value <= 0;"
+        )
+    };
+    // the triggers are created once (their bodies are this build's), so an open with nothing to change writes nothing
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS token_presence (token_id INTEGER PRIMARY KEY, value INTEGER NOT NULL); \
+         CREATE INDEX IF NOT EXISTS token_presence_rank ON token_presence (value DESC, token_id); \
+         CREATE TRIGGER IF NOT EXISTS book_live_presence_ins AFTER INSERT ON book_live BEGIN {} END; \
+         CREATE TRIGGER IF NOT EXISTS book_live_presence_upd AFTER UPDATE ON book_live BEGIN {} {} END; \
+         CREATE TRIGGER IF NOT EXISTS book_live_presence_del AFTER DELETE ON book_live BEGIN {} END;",
+        add("NEW.token_id", value("NEW")),
+        add("OLD.token_id", format!("-{}", value("OLD"))),
+        add("NEW.token_id", value("NEW")),
+        add("OLD.token_id", format!("-{}", value("OLD"))),
+    ))?;
+    // recounted from the rows, written only where a row differs (the lean rewrite's check of free pages)
+    conn.execute_batch(&format!(
+        "DELETE FROM token_presence WHERE token_id NOT IN (SELECT token_id FROM book_live GROUP BY token_id HAVING SUM({v}) > 0); \
+         INSERT INTO token_presence (token_id, value) SELECT token_id, SUM({v}) FROM book_live WHERE true GROUP BY token_id \
+         HAVING SUM({v}) > 0 ON CONFLICT(token_id) DO UPDATE SET value = excluded.value WHERE value != excluded.value;",
+        v = value("book_live")
     ))?;
     Ok(())
 }

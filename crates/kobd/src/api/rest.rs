@@ -342,12 +342,21 @@ pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
     Ok((status, Json(json!({"ready": ready, "reason": reason, "state": snap.state, "lag_seconds": lag_seconds}))).into_response())
 }
 
-/// `GET /v1/tokens`: the token list.
-pub async fn tokens(State(app): State<Arc<App>>) -> ApiResult {
+/// `GET /v1/tokens?cursor=&limit=`: a page of the token list (`reads::token_page`): the registry's tokens on the first
+/// page, then the open tokens, the chain-proven ones by market presence first. `next_cursor` continues it; `truncated`
+/// says that a next page exists. Cached per page and data generation.
+pub async fn tokens(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let allow = app.state.tokens.clone();
-    cached(&app, "tokens".into(), move |c| {
-        let (tokens, truncated) = reads::token_list_page(c, &allow)?;
-        Ok(json!({ "tokens": tokens, "truncated": truncated }))
+    let cursor = match q.get("cursor") {
+        None => None,
+        Some(s) => Some(reads::TokenCursor::parse(s).ok_or_else(|| ApiError::bad_request("invalid cursor"))?),
+    };
+    let n = limit(&q, "limit", reads::TOKEN_PAGE_MAX, reads::TOKEN_PAGE_MAX)?;
+    let key = format!("tokens {:?} {n}", cursor.as_ref().map(|c| c.render()));
+    cached(&app, key, move |c| {
+        let p = reads::token_page(c, &allow, cursor.as_ref(), n)?;
+        let next = p.next_cursor.map(|c| c.render());
+        Ok(json!({ "tokens": p.tokens, "truncated": next.is_some(), "next_cursor": next }))
     })
     .await
 }
@@ -458,7 +467,28 @@ pub async fn pairs(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     // Through the response cache like the books, because a pair read checks the custody of every
     // live pair order.
     let key = format!("pairs {token:?} {:?} {:?}", ctx.node_daa, ctx.now_unix);
-    cached(&app, key, move |c| crate::indexer::pairs::pairs(c, &ctx, token.as_ref())).await
+    let body = cached_body(&app, key, move |c| crate::indexer::pairs::pairs_page(c, &ctx, token.as_ref())).await?;
+    // The answer stays a bare array (its shape since the first release); a cut scan says so in a header (R9).
+    let (truncated, array) =
+        split_pairs_body(&body).ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error"))?;
+    let mut resp =
+        ([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], array).into_response();
+    if truncated {
+        resp.headers_mut().insert("x-kob-truncated", axum::http::HeaderValue::from_static("1"));
+    }
+    Ok(resp)
+}
+
+/// The flag and the array of a serialized `pairs::PairsPage` (`{"truncated":<bool>,"pairs":[...]}`).
+pub(crate) fn split_pairs_body(body: &axum::body::Bytes) -> Option<(bool, axum::body::Bytes)> {
+    let (truncated, head) = if body.starts_with(br#"{"truncated":true,"pairs":"#) {
+        (true, br#"{"truncated":true,"pairs":"#.len())
+    } else if body.starts_with(br#"{"truncated":false,"pairs":"#) {
+        (false, br#"{"truncated":false,"pairs":"#.len())
+    } else {
+        return None;
+    };
+    (body.len() > head && body.ends_with(b"}")).then(|| (truncated, body.slice(head..body.len() - 1)))
 }
 
 /// `GET /v1/pairs/{base}/{quote}/book?depth=`: the levels of the pair orders and the implied
@@ -484,11 +514,20 @@ pub async fn pair_orders(State(app): State<Arc<App>>, Path((base, quote)): Path<
         Some(s) => Some(reads::parse_order_cursor(s).ok_or_else(|| ApiError::bad_request("invalid cursor"))?),
     };
     let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
+    let maker = match q.get("maker") {
+        None => None,
+        Some(s) => {
+            Some(hex::decode(s).ok().filter(|b| b.len() == 32).ok_or_else(|| ApiError::bad_request("maker must be 32 bytes of hex"))?)
+        }
+    };
     let ctx = app.ctx();
-    let key = format!("pair-orders {base} {quote} {cursor:?} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    let key = format!("pair-orders {base} {quote} {maker:?} {cursor:?} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
     let tokens = app.state.tokens.clone();
     cached(&app, key, move |c| {
-        let mut v = reads::pair_orders(c, &ctx, &base, &quote, n, cursor)?;
+        let mut v = match &maker {
+            Some(m) => reads::maker_pair_orders(c, &ctx, &base, &quote, m, n, cursor)?,
+            None => reads::pair_orders(c, &ctx, &base, &quote, n, cursor)?,
+        };
         v.items = v.items.into_iter().map(|o| o.with_warnings(|t| tokens.warnings_for(t))).collect();
         Ok(v)
     })
@@ -729,12 +768,33 @@ pub async fn token_utxos(State(app): State<Arc<App>>, Query(q): Params) -> ApiRe
         return Err(ApiError::bad_request("owner or token is required"));
     }
     let include_spent = flag(&q, "spent")?.unwrap_or(false);
+    let by_amount = q.get("order").is_some_and(|o| o == "amount");
     let cursor = match q.get("cursor") {
-        None => None,
-        Some(s) => Some(reads::parse_holding_cursor(s).ok_or_else(|| ApiError::bad_request("invalid cursor"))?),
+        Some(s) if !by_amount => Some(reads::parse_holding_cursor(s).ok_or_else(|| ApiError::bad_request("invalid cursor"))?),
+        _ => None,
     };
     let n = limit(&q, "limit", 100, app.state.cfg.max_page_size)?;
     let ctx = app.ctx();
+    // `order=amount`: the holder's live units of one token, the largest first (R9T-1: what can I spend), whatever dust
+    // anyone sent to the address
+    match q.get("order").map(String::as_str) {
+        None | Some("created") => {}
+        Some("amount") => {
+            let (Some(owner), Some(token)) = (owner, token) else {
+                return Err(ApiError::bad_request("order=amount needs owner and token"));
+            };
+            if include_spent {
+                return Err(ApiError::bad_request("order=amount lists live holdings only (no spent=true)"));
+            }
+            let cursor = match q.get("cursor") {
+                None => None,
+                Some(s) => Some(reads::parse_amount_cursor(s).ok_or_else(|| ApiError::bad_request("invalid cursor"))?),
+            };
+            let v = app.state.pool.with(move |c| reads::holdings_by_amount(c, &ctx, &owner, &token, n, cursor)).await?;
+            return json_ok(v);
+        }
+        Some(_) => return Err(ApiError::bad_request("order must be created or amount")),
+    }
     let filter = reads::HoldingFilter { owner, token, include_spent };
     let v = app.state.pool.with(move |c| reads::holdings(c, &ctx, &filter, n, cursor)).await?;
     json_ok(v)

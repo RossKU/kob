@@ -397,16 +397,25 @@ on a listener the public reaches ([ops/chart-server.md](ops/chart-server.md), se
 ### 3.4 `GET /v1/tokens`
 
 Tokens the indexer lists: the registry/allowlist entries plus, when a program allowlist is loaded, every token of a supported
-program that an order placement named. No parameters. Cached. Response `{"tokens": [TokenView], "truncated": bool}`.
-The open part is read in two passes. The first takes the tokens the chain proves (a holding of the token exists, under the
-program a placement names), oldest first, at most 2000: no number of placements on other covenant ids can push one out. The
-second takes the tokens placements alone name, at most 5000 rows and a budget of work of its own. `truncated` is true when
-either is cut; the list never fails for its size (`docs/ops/api-bounds.md`).
+program that an order placement named, **paged**. Cached per page. Response `{"tokens": [TokenView], "truncated": bool,
+"next_cursor": string | null}`.
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `cursor` | string | none | The previous `next_cursor` (opaque). `400` "invalid cursor" if malformed. |
+| `limit` | integer | 2000 | Open tokens a page holds, at most 2000 (the registry's tokens come on the first page besides). |
+
+The first page has the registry's tokens, then the open tokens in four runs: the tokens the chain proves (a holding of the
+token exists) that have market presence, the most first (the KAS of their fillable fixed-price bids: what anyone holding the
+token can take now); the other tokens the chain proves, oldest first; the tokens only placements name, by covenant id; the
+tokens only listed orders name (imported history). A page ends at `limit` tokens or at its budget of work, and then carries
+`next_cursor` (`truncated` is true exactly then): following it reads every token, each once, so a cut is never a dead end.
+A token not in the list yet (just created, with no presence, behind other tokens) is read by its id below.
 
 **`GET /v1/tokens/{covenant_id}`**: the one token's `TokenView`, as the list gives it, whether or not the list's cut reaches
 it (a registry token, or an open token the chain proves or placements name). `404 not_found` ("unknown token") for a token
-the list would never hold, `400` for an id that is not 32 bytes of hex. A few index seeks on the light lane, uncached. A client
-that knows a token's id reads it here when `/v1/tokens` says `truncated` and lacks it.
+the list would never hold, `400` for an id that is not 32 bytes of hex. A few index seeks on the light lane, uncached. It is
+the route for a token that is not in the list yet: a token just created, which its creator and anyone with the id read here.
 
 ```
 curl -s $API/v1/tokens
@@ -543,7 +552,7 @@ token B is `quote`; an order of B/A is in the B/A views and never inverted into 
 [ops/executor.md](ops/executor.md), section 5.4. All four routes are heavy; the pair list and the pair book are cached
 (section 5.6), the pair candles and fills are not.
 
-**`GET /v1/pairs?token=`** returns a JSON **array** (not an object) of pairs with at least one listed live pair order, sorted by
+**`GET /v1/pairs?token=`** returns a JSON **array** (not an object; its shape is unchanged) of pairs with at least one listed live pair order, from the oldest 20,000 fillable pair orders (of the token, as base and as quote). When that scan reached its cap the answer carries the header **`x-kob-truncated: 1`**: pairs whose orders all came later may be missing (a pair's own book and orders routes answer whatever the list holds). The CDN keeps the header with the cached answer. Sorted by
 (base, quote). `token` (hex32, optional) keeps pairs naming it as base or quote. The counts come from at most the oldest 20,000
 listed live pair orders that are active, not expired and not past their deadline; the list has no flag for that bound.
 
@@ -606,12 +615,18 @@ a pair fill is volume only and never sets a price. `volume_24h` counts each tran
 time the indexer has recorded and its wall clock (as `/v1/stats/{token}`); `window_truncated` is true when the day held more than 20,000 pair-fill rows and the figures cover the newest ones (whole transactions only). `amount_b`, `price`, `price_num`, `price_den`, `tip_kas` may be null.
 
 **`GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`** (`limit` default 50, at most `max_page_size`; `cursor` as `/v1/orders`):
-the listed live orders of the pair (base A, quote B, as the pair book reads them; an unlisted order, which no executor fills, is only in `GET /v1/orders?maker=`), newest first, keyset paged. It reads only the
+the listed live orders of the pair (base A, quote B, as the pair book reads them; an unlisted order, which no executor fills, is only in `GET /v1/orders?maker=` and in `?maker=` below), newest first, keyset paged. It reads only the
 pair's own live rows (`pair_live`), whatever other orders either token has: fillable or not yet, past their window, not
 fillable as they stand, past a day-order deadline. Each item is the order view of `GET /v1/orders` (section 3.8); an order
 under a template this build does not pin is left out. The reverse direction is the same route with the tokens swapped.
-Response `{"items": [OrderView], "next_cursor": "<block>:<covenant id>" | null}`. Cached (S, keyed by the pair, `cursor` and
+Response `{"items": [OrderView], "next_cursor": "<block>:<covenant id>" | null}`. Cached (S, keyed by the pair, `maker`, `cursor` and
 `limit`). `400` when `base == quote`, an id is not 32 bytes of hex or the cursor is invalid.
+
+With **`maker=<32-byte x-only public key, hex>`** the same route lists that maker's own live orders of the pair, listed or not:
+status `open` or `partial`, whatever the book makes of them (a self-trade check needs every order of the maker a new order of his
+could meet, and an unlisted one can still be taken directly). The response shape is the same; newest first, the same cursor. It
+reads only the maker's orders of the pair (index `orders_maker_pair_genesis`), at most 10,000 of them a page (ended ones
+included: a short page then carries the cursor). One direction per call: for both, ask `{a}/{b}` and `{b}/{a}`.
 
 ### 3.8 `GET /v1/orders`
 
@@ -826,7 +841,8 @@ gap) and why a consumer must still check a UTXO against the node before spending
 | `token` | hex32 | none | The token's covenant id. |
 | `spent` | bool (`true`/`1`/`false`/`0`) | `false` | `false`: live UTXOs only; `true`: also spent ones, of the retention below. |
 | `limit` | integer | 100 | At most `max_page_size`. |
-| `cursor` | string | none | The previous `next_cursor` (`<created block seq>:<txid>:<index>`). `400` "invalid cursor" if malformed. |
+| `cursor` | string | none | The previous `next_cursor` (`<created block seq>:<txid>:<index>`; with `order=amount`, `<amount>:<txid>:<index>`). `400` "invalid cursor" if malformed. |
+| `order` | `created` or `amount` | `created` | `created`: oldest first, as always. `amount`: the owner's **live** units of one token, the largest amount first, then by txid and output index (needs `owner` and `token`, no `spent=true`; `400` otherwise): what a holder can spend, read whatever dust anyone sent to the address. Each page is two index ranges of `limit + 1` entries. |
 
 At least one of `owner` and `token` is required: `400` ("owner or token is required"). The query matches the 32-byte owner
 whatever its kind, so filter on `owner_kind` when spending. Items come **oldest first** (created block, txid, index).
