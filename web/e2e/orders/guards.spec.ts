@@ -19,7 +19,7 @@ test.describe('self-trade prevention', () => {
     await fillFields(page, { amount: '1', price: '0.0245' }); // at or below your own bid
     const issue = page.getByTestId('order-issue-SELF_TRADE');
     await expect(issue).toBeVisible({ timeout: 30_000 });
-    await expect(issue).toContainText(`${own.slice(0, 8)}…`); // the covenant id of the order in the way, from its start
+    await expect(issue).toContainText(own); // the whole covenant id of the order in the way (founder 2026-11-12)
     await expect(issue).toHaveAttribute('data-severity', 'error');
     await expect(page.getByTestId('order-place')).toBeDisabled();
     // the same order above your bid: nothing crosses your own order
