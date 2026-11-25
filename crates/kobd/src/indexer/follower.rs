@@ -3323,6 +3323,17 @@ mod tests {
             tamper: fn(&mut RawVspcResponse),
             delay: Duration,
         ) -> (Follower<Recorded>, Arc<Recorded>, Arc<Mutex<Ingest>>, Arc<HealthState>) {
+            follower_tracking(text, tamper, delay, &[])
+        }
+
+        /// [`follower_with`], with `tracked` added to the token allowlist: a transaction with an output bound to one of
+        /// them can matter to KOB whatever templates the fixture was recorded under.
+        fn follower_tracking(
+            text: &str,
+            tamper: fn(&mut RawVspcResponse),
+            delay: Duration,
+            tracked: &[&str],
+        ) -> (Follower<Recorded>, Arc<Recorded>, Arc<Mutex<Ingest>>, Arc<HealthState>) {
             let fx = fixture(text);
             let network = fx.network.clone();
             let start = fx.start;
@@ -3345,7 +3356,7 @@ mod tests {
             });
             let conn = crate::indexer::db::open_memory(&network).unwrap();
             let ingest =
-                Arc::new(Mutex::new(Ingest::new(conn, crate::testkit::processor(), None).with_config(crate::testkit::wide_window())));
+                Arc::new(Mutex::new(Ingest::new(conn, processor_tracking(tracked), None).with_config(crate::testkit::wide_window())));
             let health = Arc::new(HealthState::new(&network));
             let (events, _) = broadcast::channel(8);
             let mut cfg = FollowerConfig::from_indexer(&crate::config::IndexerConfig { network, ..Default::default() });
@@ -3354,6 +3365,22 @@ mod tests {
             assert!(cfg.chain_proof.is_some(), "on by default");
             let f = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
             (f, source, ingest, health)
+        }
+
+        fn processor_tracking(tracked: &[&str]) -> crate::indexer::processor::Processor {
+            let mut p = crate::testkit::processor();
+            if !tracked.is_empty() {
+                let base = |c: [u8; 32]| p.tokens.get(&Hash32(c)).cloned().expect("a testkit token");
+                let mut entries = vec![base(crate::testkit::TOKEN_COV), base(crate::testkit::TOKEN_COV_KRON)];
+                for (k, id) in tracked.iter().enumerate() {
+                    let mut e = entries[0].clone();
+                    e.ticker = format!("FX{k}");
+                    e.covenant_id = Hash32(kob_protocol::json::hex32(id).unwrap());
+                    entries.push(e);
+                }
+                p.tokens = Arc::new(crate::tokens::TokenAllowlist::from_entries(entries));
+            }
+            p
         }
 
         /// R9C1-H1: one chain block with thousands of lanes against a node whose lane proofs take long. Every lane proof
@@ -3533,8 +3560,18 @@ mod tests {
         async fn the_proof_requests_of_a_batch_go_out_together() {
             let rtt = Duration::from_millis(300);
             let mut merged = 0;
+            // The TN10 fixture's KOB placements were recorded under older order templates, which no longer place an
+            // order, so the covenants their outputs bind are tracked instead: those transactions still matter to KOB.
+            const TN10_PLACED: [&str; 5] = [
+                "55aac2b50751678b3795e5c7fbbf0bd7b3e076d77c1ecbcbcf4f8ecc773e07bf",
+                "c064d410a49d48d6ae926187f50d8caf6889141b017701301d66ee8164e69493",
+                "e4c48b9d279add209de5dd316d8d8f66eb558bfde622b3258f19a473e56a9056",
+                "7cb0ffe9c3a4f667418922d0f6271bea79db5d28d96c0cbe5bce4f158197be7c",
+                "9c049f2eef00ff76e3e9a7175adae310da3a079bde102b783e91f446a482e99d",
+            ];
             for text in [MAINNET, TN10] {
-                let (f, src, ingest, health) = follower_with(text, |_| {}, rtt);
+                let tracked: &[&str] = if text == TN10 { &TN10_PLACED } else { &[] };
+                let (f, src, ingest, health) = follower_tracking(text, |_| {}, rtt, tracked);
                 // every lane of the fixture, as if each held a spend of a tracked output (R9-K): the point is that the
                 // requests go out together
                 f.prove_every_lane.store(true, SeqCst);
