@@ -1113,10 +1113,15 @@ async fn a_follower_that_caught_up_leaves_parallel_fetch_instead_of_trailing_the
     // the chain's hashes take a round trip as well: an extension of the plan always finds a few new chain blocks
     c.hs.node.set_hashes_delay(std::time::Duration::from_millis(60));
     let node = c.hs.node.clone();
+    // The chain grows until the follower has followed it for a while: at least 10 s, and until 8 steps after it first
+    // came within a round trip (at most 60 s). On a loaded runner the catch-up alone can take most of 10 s, and a fixed
+    // window then judged steps that were still catching up (R9 CI, under full parallelism).
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stopped = stop.clone();
     let grow = tokio::spawn(async move {
         let t0 = std::time::Instant::now();
         let mut pushed = 0u128;
-        while t0.elapsed() < std::time::Duration::from_secs(10) {
+        while !stopped.load(std::sync::atomic::Ordering::Relaxed) && t0.elapsed() < std::time::Duration::from_secs(60) {
             while pushed < t0.elapsed().as_millis() / 15 {
                 node.push_empty(1);
                 pushed += 1;
@@ -1124,19 +1129,28 @@ async fn a_follower_that_caught_up_leaves_parallel_fetch_instead_of_trailing_the
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     });
+    let t0 = std::time::Instant::now();
     let lag = |c: &Ctx| {
         let chain = c.hs.node.chain_hashes();
         let cur = c.hs.health.snapshot().cursor_hash.expect("a cursor");
         chain.len() - 1 - chain.iter().position(|b| *b == cur).expect("on the chain")
     };
     let mut lags = vec![];
+    let mut caught: Option<usize> = None;
     while !grow.is_finished() {
         let o = c.hs.follower.step().await;
         assert!(!matches!(o, StepOutcome::Gap(_) | StepOutcome::Halted(_)), "{o:?}");
         lags.push((lag(&c), c.hs.health.snapshot().prefetch_windows));
+        if caught.is_none() && lags.last().is_some_and(|l| l.0 <= 45 && l.1 == 0) {
+            caught = Some(lags.len() - 1);
+        }
+        if caught.is_some_and(|k| lags.len() - k > 8) && t0.elapsed() >= std::time::Duration::from_secs(10) {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
-    let n = lags.len();
-    let late: Vec<_> = lags[n * 2 / 3..].to_vec();
+    let k = caught.unwrap_or_else(|| panic!("never caught up within 60 s: {lags:?}"));
+    // every step from the first that reached the sink on: no falling behind again, no window planned
+    let late: Vec<_> = lags[k..].to_vec();
     assert!(lags[..5].iter().any(|l| l.0 > 30), "it started far behind: {:?}", &lags[..5]);
     assert!(late.iter().all(|l| l.0 <= 45), "it caught up and follows within a round trip: {late:?}");
     assert!(late.iter().all(|l| l.1 == 0), "in single steps, no window planned: {late:?}");
