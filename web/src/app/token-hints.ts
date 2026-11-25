@@ -12,7 +12,7 @@ import type { KobWasm } from '../kob/wasm';
 import type { TokenHint } from '../signer/protocol';
 import type { RegistryRow } from '../signer/table';
 import { tokensOf } from '../ui/confirm/confirm-model';
-import { marketKey, readInverted } from '../ui/market/orientation';
+import { marketKey, isMarketInverted } from '../ui/market/orientation';
 
 /**
  * The token hints of a transaction. The tokens are those it moves (its token inputs and outputs)
@@ -38,7 +38,7 @@ export function signerTokenHints(kob: KobWasm, built: BuiltTx, maker: Hex | null
     }
   }
   return [...ids].flatMap((id): TokenHint[] => {
-    const inverted = readInverted(marketKey('token', id)) === true ? { inverted: true } : {};
+    const inverted = isMarketInverted(id) ? { inverted: true } : {};
     const tk = registry.byCovenantId.get(id);
     if (tk) return /^[\x20-\x7e]{1,24}$/.test(tk.ticker) ? [{ covenantId: id, ticker: tk.ticker, decimals: tk.decimals, ...inverted }] : [];
     if (!network || !tokens.has(id)) return [];
