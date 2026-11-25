@@ -103,8 +103,11 @@ fn spk_from_file(r: &RetiredTemplate, state: &[u8]) -> String {
     let file = common_root().join(format!("crates/kob-protocol/data/retired/{}.{}.bin", r.kind.name(), &r.hash_hex()[..8]));
     let bytes = std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
     let off = template(r.kind).prefix.len();
-    let len = state_len_in(r.kind, StateLayout::Legacy).unwrap();
-    assert_eq!(state.len(), len, "{}: the state is in the legacy layout", r.label());
+    // the span the file's bytecode holds (a curve's table makes its order's span of any length)
+    let len = state_len_in(r.kind, r.retirement.layout(r.kind)).unwrap();
+    if r.kind != TemplateId::KobCurveAsk {
+        assert_eq!(state.len(), len, "{}: the state is in the layout of its retirement", r.label());
+    }
     let redeem = [&bytes[..off], state, &bytes[off + len..]].concat();
     assert_eq!(silverscript_abi::template_hash(&bytes[..off], &bytes[off + len..]), r.hash, "{}", r.label());
     spk_to_string(&kaspa_txscript::pay_to_script_hash_script(&redeem))

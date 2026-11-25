@@ -134,7 +134,8 @@ pub struct RetiredTemplate {
 impl RetiredTemplate {
     /// Redeem script of an order with this state span: `prefix ‖ state ‖ suffix`.
     pub fn redeem(&self, state: &[u8]) -> Result<Vec<u8>> {
-        if state.len() != self.state_len {
+        // a curve's state ends with its table, of any length: its span is not fixed
+        if state.len() != self.state_len && self.kind != TemplateId::KobCurveAsk {
             return Err(Error::Invalid(format!("{}: state span must be {} bytes, not {}", self.label(), self.state_len, state.len())));
         }
         Ok([self.prefix.as_slice(), state, self.suffix.as_slice()].concat())
@@ -147,13 +148,15 @@ impl RetiredTemplate {
 
     /// State span of a redeem script, if it is an instance of this template.
     pub fn state_of<'a>(&self, redeem: &'a [u8]) -> Option<&'a [u8]> {
-        if redeem.len() != self.prefix.len() + self.state_len + self.suffix.len()
-            || !redeem.starts_with(&self.prefix)
-            || !redeem.ends_with(&self.suffix)
-        {
+        let span = redeem.len().checked_sub(self.prefix.len() + self.suffix.len());
+        let fits = match self.kind {
+            TemplateId::KobCurveAsk => span.is_some(),
+            _ => span == Some(self.state_len),
+        };
+        if !fits || !redeem.starts_with(&self.prefix) || !redeem.ends_with(&self.suffix) {
             return None;
         }
-        Some(&redeem[self.prefix.len()..self.prefix.len() + self.state_len])
+        Some(&redeem[self.prefix.len()..redeem.len() - self.suffix.len()])
     }
 
     /// The state span of an order of this template: `s` (of `kind`) encoded in its layout.
@@ -577,7 +580,8 @@ mod tests {
             let state = vec![0x51u8; r.state_len];
             let redeem = r.redeem(&state).unwrap();
             assert_eq!(r.state_of(&redeem), Some(state.as_slice()));
-            assert!(r.redeem(&state[1..]).is_err());
+            // a span of another length is refused, except a curve's, whose table has any length
+            assert_eq!(r.redeem(&state[1..]).is_err(), r.kind != TemplateId::KobCurveAsk, "{}", r.label());
             // a retired script is never today's script of the same state (a delivering kind: today's span is longer)
             let today = template(r.kind);
             if today.state_len == r.state_len {
