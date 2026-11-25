@@ -262,7 +262,8 @@ function timeOf(r: { id: string; value: string }, d: OrderDescription): { daa?: 
 }
 
 /** The chain-side price rows of a plain order. The flipped view says them in its own terms. */
-const CHAIN_PRICE_ROWS = new Set(['price', 'allIn', 'auction']);
+// the budget and what it buys are said above in the view's terms ("You sell", "You receive")
+const CHAIN_PRICE_ROWS = new Set(['price', 'allIn', 'auction', 'budget', 'buys']);
 
 /**
  * The view word of each plain order type, for the title of an order on the flipped view, as in
@@ -644,8 +645,16 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   const registry = hintRegistry(hints, terms);
   const orders = s.orders.filter((o) => o.sweptFrom === undefined && o.claimedFrom === undefined).map((o) => {
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry, terms);
-    return withDelivery(flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain, o, hints);
+    const hint = hints.find((h) => h.covenantId === o.description.tokenCovId);
+    // On a flipped market an order the flipped form does not cover (a pair, conditional or if-done
+    // order) is shown as the chain holds it, and the screen says so instead of reading as the other
+    // side of what the user pressed.
+    const native = hint?.inverted ? { ...chain, token: t('signer.flip.native', { token: chain.token }) } : chain;
+    return withDelivery(flippedSummary(o, hint, kob, chain, terms) ?? native, o, hints);
   });
+  const flippedTokens = new Set(hints.filter((h) => h.inverted).map((h) => h.covenantId));
+  const nativePrices = (s.take && flippedTokens.has(s.take.ref.covenantId)) || s.orders.some((o) => o.amendedFrom !== undefined && flippedTokens.has(o.description.tokenCovId));
+  if (nativePrices) lines.push({ label: t('signer.flip.nativeLabel'), value: t('signer.flip.nativeValue'), dir: null });
   const found: { code: string }[] = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
   // The decoder's info findings are said in the frame too (a swept order's KAS, strays swept), as
   // the app's confirmation shows them (R9FB2-9).

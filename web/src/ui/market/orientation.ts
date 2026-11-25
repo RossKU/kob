@@ -80,6 +80,13 @@ export function writeInverted(market: string, inverted: boolean): void {
 export const marketKey = (kind: 'token', id: string): string => `${kind}:${id.toLowerCase()}`;
 
 /**
+ * Whether a token's KAS market is shown flipped: the remembered choice, else the convention. The
+ * token page (use-orientation.ts) and the signing screens' hints (app/token-hints.ts) both use it,
+ * so the confirmation never reads in the other orientation than the page.
+ */
+export const isMarketInverted = (id: string, usdRef = false): boolean => readInverted(marketKey('token', id)) ?? defaultInverted(usdRef);
+
+/**
  * The convention. Every token's KAS market opens as TOKEN/KAS, a USD reference token too, such as
  * TUSD/KAS with the token on the left.
  */

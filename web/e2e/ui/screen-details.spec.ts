@@ -199,7 +199,7 @@ test.describe('a token of 18 decimals', () => {
     // more).
     await expect(page.getByTestId('order-available')).toHaveText('Available 1.234567890123456789 EIGHTEEN');
     const shown = await peekReceipt(page);
-    expect(shown.orders[0]!.token).toMatch(/^EIGHTEEN [(]d1d1d1d1…d1d1d1d1[)]$/);
+    expect(shown.orders[0]!.token).toMatch(/^EIGHTEEN [(](d1){32}[)]$/); // the whole id (founder 2026-11-12)
     expect(shown.orders[0]!.rows['Expected price (auction start)']).toMatch(/^2[45],\d{3},\d{3} KAS per EIGHTEEN$/);
     expect(await noPageScroll(page)).toBe(true);
   });
