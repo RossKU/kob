@@ -161,10 +161,6 @@ contract KobCondBidKron(
 
     // P2SH of this script with stopPrice, amountLeft and armed replaced, the
     // only mutable fields. The state span starts at bytecode offset 1. The
-    // payload windows are stopPrice [224..232), amountLeft [287..295) and
-    // armed [296..304). Every other byte is copied.
-    // P2SH of this script with stopPrice, amountLeft and armed replaced, the
-    // only mutable fields. The state span starts at bytecode offset 1. The
     // payload windows are stopPrice [191..199), amountLeft [254..262) and
     // armed [263..271). Every other byte is copied.
     function contSpk(int newStop, int newLeft, int newArmed) : byte[] {
