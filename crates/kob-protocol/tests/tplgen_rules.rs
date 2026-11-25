@@ -153,9 +153,9 @@ fn hidden_code_in_an_evidence_state_span() {
     let s = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
     let v = validate_signed(&s);
     // The templates before TPLGEN accepted it: the stop armed on a one-token print it read as 1000 tokens (run on
-    // 2c8cf8468). With the state-span check every entry but the cancel refuses a span that is not data only.
+    // 2c8cf8468). The stop's reader proves the evidence span canonical (R12-1), so it refuses the hidden code.
     let e = v.expect_err("the hidden-code evidence must be refused").to_string();
-    assert!(e.contains("input 0"), "the evidence input fails: {e}");
+    assert!(e.contains(&format!("input {st}")), "the stop refuses it: {e}");
 }
 
 /// Recomputes the sighashes and the signature requests of `b` after its plans or inputs were changed.
@@ -254,6 +254,192 @@ fn hidden_code_evidence_through_cancel() {
     assert!(err.contains(&format!("input {e}")), "the evidence input fails: {err}");
 }
 
+/// R12-1, by execution: a span-final push skips the evidence order's whole code. The rigged `KobAsk` F keeps the
+/// template prefix `6b` and the canonical code, but its span starts `51 00 63 4d <len - 8>`: OP_1, then a false OP_IF
+/// whose OP_PUSHDATA2 swallows the rest of the span and the code up to the code's own last OP_ENDIF, which closes the
+/// IF. Nothing of the code runs (no dispatch, no pin, no span check, no cancel rule); the stack ends `[1]`. Its
+/// signature script is `08 <n>` and the redeem push. The windows a reader reads keep the honest ask's bytes.
+#[test]
+fn a_span_final_push_skips_the_evidence_code() {
+    use kob_protocol::build::{build, Action};
+    use kob_protocol::state::AnyState;
+    use kob_protocol::tx::{finalize, sign_locally, spk_to_string, FinalizeOptions, SigPlan};
+    use kob_protocol::verify::validate_signed;
+    let t = TemplateId::Kcc20Ref;
+    let Action::Batch(b) = scenarios_on(t).into_iter().find(|(n, _)| n == "cond.ask.update.arm").unwrap().1 else { panic!() };
+    let mut built = build(&Action::Batch(b)).unwrap();
+    let claimed: i64 = 1000 * WHOLE;
+    let find = |built: &kob_protocol::tx::BuiltTx, kind: &str, en: &str| {
+        built
+            .plans
+            .iter()
+            .position(|p| matches!(p, SigPlan::Entry { template, entry, .. } if template.name().starts_with(kind) && entry == en))
+            .unwrap()
+    };
+    let (e, st) = (find(&built, "KobAsk", "settle"), find(&built, "KobCondAsk", "update"));
+    let SigPlan::Entry { template: et, state: es, entry: een, args: ea } = built.plans[e].clone() else { unreachable!() };
+    let len = kob_protocol::artifacts::template(et).redeem(&es).len();
+    let n = (len - 8) as u16;
+    let mut rigged = es.clone();
+    rigged[..6].copy_from_slice(&[0x51, 0x00, 0x63, 0x4d, n as u8, (n >> 8) as u8]);
+    let redeem = kob_protocol::artifacts::template(et).redeem(&rigged);
+    assert_eq!((redeem[0], redeem[len - 1]), (0x6b, 0x68), "the prefix and the code's last OP_ENDIF");
+    built.plans[e] = SigPlan::Entry { template: et, state: rigged, entry: een, args: ea };
+    built.tx.inputs[e].utxo.script_public_key = spk_to_string(&built.plans[e].spk());
+    // the stop: its minTouch is the claimed amount
+    let SigPlan::Entry { template: stt, state: ss, entry: sen, args: sa } = built.plans[st].clone() else { unreachable!() };
+    let AnyState::KobCondAsk(stop) = AnyState::decode(stt, &ss).unwrap() else { panic!() };
+    let mut big = stop.clone();
+    big.min_touch = claimed;
+    let cont = |s: &kob_protocol::state::CondAskState| {
+        spk_to_string(&AnyState::KobCondAsk(kob_protocol::state::CondAskState { armed: 1, ..s.clone() }).spk())
+    };
+    let (old_c, new_c) = (cont(&stop), cont(&big));
+    for o in built.tx.outputs.iter_mut().filter(|o| o.script_public_key == old_c) {
+        o.script_public_key = new_c.clone();
+    }
+    built.plans[st] = SigPlan::Entry { template: stt, state: AnyState::KobCondAsk(big).encode(), entry: sen, args: sa };
+    built.tx.inputs[st].utxo.script_public_key = spk_to_string(&built.plans[st].spk());
+    resign(&mut built);
+    let mut s = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+    let mut ss = vec![0x08];
+    ss.extend_from_slice(&claimed.to_le_bytes());
+    ss.extend_from_slice(&kob_protocol::script::push_data(&redeem));
+    s.tx.inputs[e].signature_script = ss;
+    // accepted on 6fd7e4177 (the stop armed); the reader now proves the evidence span canonical
+    let v = validate_signed(&s);
+    let err = v.expect_err("the span-final-push evidence must be refused").to_string();
+    assert!(err.contains(&format!("input {st}")), "the stop refuses it: {err}");
+}
+
+/// The two rigged shapes of an evidence order input `k` (a fill whose first argument is its 8-byte amount), in place.
+/// `swallow` (R12-1): the span starts `51 00 63 4d <len - 8>`, so its code never runs, and its signature script becomes
+/// `08 <n>` and the redeem push (after signing, see [`rigged_signed`]). Otherwise (R10CC-1): the last 8-byte field is
+/// code (`OP_1 OP_SHA256` and padding) and its code runs on the rest.
+fn rig_evidence(b: &mut kob_protocol::tx::BuiltTx, k: usize, swallow: bool) {
+    use kob_protocol::tx::{spk_to_string, SigPlan};
+    let SigPlan::Entry { template, state, entry, args } = b.plans[k].clone() else { unreachable!() };
+    let mut rigged = state.clone();
+    if swallow {
+        let len = kob_protocol::artifacts::template(template).redeem(&state).len();
+        let n = (len - 8) as u16;
+        rigged[..6].copy_from_slice(&[0x51, 0x00, 0x63, 0x4d, n as u8, (n >> 8) as u8]);
+    } else {
+        let ps = pushes(&state);
+        let &(o, _, _) = ps.iter().rev().find(|p| p.1 == 1 && p.2 == 8).unwrap();
+        rigged[o..o + 9].copy_from_slice(&[0x51, 0xa8, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61]);
+    }
+    b.plans[k] = SigPlan::Entry { template, state: rigged, entry, args };
+    b.tx.inputs[k].utxo.script_public_key = spk_to_string(&b.plans[k].spk());
+}
+
+/// Signs `b`, then gives each `swallowed` input the signature script `08 <n> | redeem` (its fill amount `n`).
+fn rigged_signed(b: &kob_protocol::tx::BuiltTx, swallowed: &[usize]) -> kob_protocol::tx::SignedTx {
+    use kob_protocol::tx::{finalize, sign_locally, Arg, FinalizeOptions, SigPlan};
+    let mut s = finalize(b, &sign_locally(b, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+    for &k in swallowed {
+        let SigPlan::Entry { args, .. } = &b.plans[k] else { unreachable!() };
+        let Arg::Bytes(nb) = &args[0] else { panic!("the fill amount") };
+        let mut ss = vec![0x08];
+        ss.extend_from_slice(nb);
+        ss.extend_from_slice(&kob_protocol::script::push_data(&b.plans[k].redeem().unwrap()));
+        s.tx.inputs[k].signature_script = ss;
+    }
+    s
+}
+
+/// R10CC-1 and R12-1 against every reader: in each scenario transaction where a stop reads evidence (the conditional,
+/// if-done and pair kinds of both families, and the KRON D0 builds), every evidence fill input (KobAsk, KobBid, KobPair,
+/// the KRON twins and their D0 builds) is rigged, in place or with the span-final push. The transaction is refused at
+/// a reader's input: the reader proves the evidence span canonical (in place, the rigged order's own code may fail
+/// first). The honest transaction passes.
+#[test]
+fn a_rigged_evidence_span_is_refused_by_every_reader() {
+    use kob_protocol::build::build;
+    use kob_protocol::tx::SigPlan;
+    use kob_protocol::verify::validate_signed;
+    let mut all: Vec<(String, kob_protocol::build::Action)> = vec![];
+    for t in [TemplateId::Kcc20Ref, TemplateId::KronToken2433, TemplateId::KForgeToken1785] {
+        all.extend(scenarios_on(t));
+        all.extend(delivery_scenarios(t));
+        all.extend(common::pair::pair_scenarios(t, t));
+        all.extend(common::pair::pair_scenarios(TemplateId::Kcc20Ref, t));
+    }
+    all.extend(scenarios_kron());
+    let reader = |t: TemplateId| {
+        matches!(
+            t.base(),
+            TemplateId::KobCondAsk
+                | TemplateId::KobCondBid
+                | TemplateId::KobCondPair
+                | TemplateId::KobIfdAsk
+                | TemplateId::KobIfdBid
+                | TemplateId::KobIfdPair
+        )
+    };
+    let evidence = |t: TemplateId, e: &str| {
+        matches!((t.base(), e), (TemplateId::KobAsk, "settle") | (TemplateId::KobBid, "fill") | (TemplateId::KobPair, "settle"))
+    };
+    let mut refused: std::collections::BTreeMap<String, usize> = Default::default();
+    for (name, a) in all {
+        let Ok(built) = build(&a) else { continue };
+        let entry = |k: usize| match &built.plans[k] {
+            SigPlan::Entry { template, entry, .. } => Some((*template, entry.clone())),
+            _ => None,
+        };
+        let readers: Vec<usize> =
+            (0..built.plans.len()).filter(|&k| entry(k).is_some_and(|(t, e)| reader(t) && e != "cancel" && e != "refund")).collect();
+        let evs: Vec<usize> = (0..built.plans.len()).filter(|&k| entry(k).is_some_and(|(t, e)| evidence(t, &e))).collect();
+        if readers.is_empty() || evs.is_empty() {
+            continue;
+        }
+        validate_signed(&rigged_signed(&built, &[])).unwrap_or_else(|e| panic!("{name}: the honest transaction: {e}"));
+        for swallow in [false, true] {
+            let mut b = built.clone();
+            for &k in &evs {
+                rig_evidence(&mut b, k, swallow);
+            }
+            resign(&mut b);
+            let v = validate_signed(&rigged_signed(&b, if swallow { &evs } else { &[] }));
+            let Err(e) = v else {
+                // a transaction whose stops read no evidence (e.g. a take-profit fill next to a plain fill) is not a read
+                let names: Vec<String> =
+                    readers.iter().map(|&k| format!("{} {}", entry(k).unwrap().0.name(), entry(k).unwrap().1)).collect();
+                println!("not refused (no evidence read?): {name} swallow={swallow} readers {names:?}");
+                continue;
+            };
+            let e = e.to_string();
+            // in place, the rigged order's own code may fail first (it runs on the rigged field): refused either way
+            if !swallow && evs.iter().any(|k| e.contains(&format!("input {k}:"))) {
+                *refused.entry("evidence code (in place)".into()).or_default() += 1;
+                continue;
+            }
+            let at = readers.iter().copied().find(|k| e.contains(&format!("input {k}:"))).unwrap_or_else(|| panic!("{name}: {e}"));
+            let (rt, re) = entry(at).unwrap();
+            let evn: std::collections::BTreeSet<&str> = evs.iter().map(|&k| entry(k).unwrap().0.name()).collect();
+            *refused.entry(format!("{} {re} <- {evn:?} {}", rt.name(), if swallow { "R12-1" } else { "R10CC-1" })).or_default() += 1;
+        }
+    }
+    println!("{refused:#?}");
+    let seen = |r: &str| refused.keys().any(|k| k.starts_with(&format!("{r} ")));
+    for r in [
+        "KobCondAsk",
+        "KobCondBid",
+        "KobIfdAsk",
+        "KobIfdBid",
+        "KobCondPair",
+        "KobIfdPair",
+        "KobCondAskKron",
+        "KobCondBidKron",
+        "KobIfdAskKron",
+        "KobIfdBidKron",
+        "KobCondAskKronD0",
+        "KobCondBidKronD0",
+    ] {
+        assert!(seen(r), "no rigged evidence was tried against {r}: {refused:#?}");
+    }
+}
+
 /// The canonical pushes of a state span: (offset, header length, data length) per field.
 fn pushes(span: &[u8]) -> Vec<(usize, usize, usize)> {
     let (mut i, mut out) = (0, vec![]);
@@ -273,10 +459,11 @@ fn pushes(span: &[u8]) -> Vec<(usize, usize, usize)> {
 
 /// R10CC-1 on every order template the scenarios spend: the order's state span with its LAST 8-byte field
 /// replaced by code (`OP_1 OP_SHA256`, a 32-byte value, then `OP_NOP` padding: same length, the template hash
-/// unchanged). Every entry but the maker's cancel refuses it; the maker's cancel (which reads only the maker) still
-/// ends it, so a rigged order never locks its funds.
+/// unchanged). The maker's cancel (which reads only the maker) still ends it, so a rigged order never locks its funds.
+/// Any other entry that runs with the rigged values affects only that order's own maker; a stop never takes it as
+/// evidence (`a_rigged_evidence_span_is_refused_by_every_reader`).
 #[test]
-fn a_rigged_state_span_is_refused_by_every_entry_but_the_cancel() {
+fn a_rigged_state_span_is_still_cancelled_by_its_maker() {
     use kob_protocol::build::build;
     use kob_protocol::tx::{finalize, sighash, sign_locally, spk_to_string, FinalizeOptions, SigPlan};
     use kob_protocol::verify::validate_signed;
@@ -312,18 +499,9 @@ fn a_rigged_state_span_is_refused_by_every_entry_but_the_cancel() {
                 let v = validate_signed(&s);
                 let label = format!("{name}: input {k} {} {entry}", template.name());
                 let e = seen.entry(format!("{} {entry}", template.name())).or_default();
-                // the fill entries of the evidence kinds (what a stop reads as evidence) check the span; nothing else does
-                let evidence_fill = matches!(
-                    (template.base(), entry.as_str()),
-                    (TemplateId::KobAsk, "settle") | (TemplateId::KobBid, "fill") | (TemplateId::KobPair, "settle")
-                );
                 if entry == "cancel" {
                     v.unwrap_or_else(|e| panic!("{label}: the maker's cancel must end a rigged order: {e}"));
                     e.0 += 1;
-                } else if evidence_fill {
-                    let err = v.expect_err(&label).to_string();
-                    assert!(err.contains(&format!("input {k}")), "{label}: {err}");
-                    e.1 += 1;
                 } else if v.is_ok() {
                     // another entry runs with the rigged values: only its own maker's order is affected
                     e.0 += 1;
@@ -346,8 +524,8 @@ fn a_rigged_state_span_is_refused_by_every_entry_but_the_cancel() {
 /// the KRON D0 builds) the scenarios spend: the order's span carries code in an 8-byte field (each in turn) that drops the
 /// fill-shaped push `0x08 <n>` put in front of the honest signature script (the pushes above it are counted, so the
 /// code works whatever the entry reads). Every such spend is refused at the order's input: a signature script a stop
-/// reads as a fill runs only through the fill entry, whose span check refuses the hidden code. The same rigged order
-/// with its honest signature script is still cancelled (`a_rigged_state_span_is_refused_by_every_entry_but_the_cancel`).
+/// reads as a fill runs only through the fill entry. The same rigged order with its honest signature script is still
+/// cancelled (`a_rigged_state_span_is_still_cancelled_by_its_maker`).
 #[test]
 fn a_fill_shaped_cancel_or_refund_of_an_evidence_kind_is_refused() {
     use kob_protocol::build::build;
