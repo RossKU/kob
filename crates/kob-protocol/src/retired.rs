@@ -634,6 +634,7 @@ mod tests {
             assert!(listed.contains(h), "{h} is pinned or cancel-only but not in record-history.tsv: run scripts/record-history.mjs");
         }
         // The hand-classified sets do not grow unnoticed: a new one is a decision, not a line.
-        assert_eq!((classes["never-deployed"], classes["pre-f1"]), (22, 35));
+        // never-deployed: 22, and the 18 templates of the first TPLGEN build (replaced on the branch before any switch)
+        assert_eq!((classes["never-deployed"], classes["pre-f1"]), (40, 35));
     }
 }
