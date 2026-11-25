@@ -12,6 +12,7 @@
 .send-confirm .send-net { margin: -4px 0 8px; font-size: 0.85rem; color: var(--muted); }
 .send-confirm .send-net-main { color: var(--bad); font-weight: 700; }
 .send-lines { margin: 0; }
+.send-line dt { overflow-wrap: anywhere; }
 .send-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
 .send-line dt { color: var(--muted); }
 .send-line dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }

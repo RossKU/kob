@@ -143,7 +143,7 @@ function walletBlock(services: Services, wallet: WalletFacts, built: BuiltTx): B
   // The plan spends coins of the key it was built for. After an account switch it must not be
   // signed, because the plan is stale.
   const planned = built.sign.find((s) => s.pubkey !== wallet.info!.pubkey);
-  if (planned) return { code: 'account-changed', text: t('send.accountChanged', { planned: shortId(planned.pubkey), now: shortId(wallet.info.pubkey) }) };
+  if (planned) return { code: 'account-changed', text: t('send.accountChanged', { planned: planned.pubkey, now: wallet.info.pubkey }) };
   if (wallet.networkMismatch) return { code: 'network', text: t('send.networkMismatch', { wallet: wallet.info.network, app: services.config.network }) };
   return null;
 }

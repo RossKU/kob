@@ -189,7 +189,11 @@ describe('R9FB2-9: the decoder\'s info findings are shown in the frame', () => {
     const b = planSweep(cancelEnv(), { ...snap, strays: [strayFor(snap, 4n, 92)] }).built!;
     const s = frame(b);
     expect(s.decoded!.info.length).toBeGreaterThan(0);
-    expect(s.lines.filter((l) => l.label === 'Note').length).toBe(s.decoded!.info.length);
+    // every info finding is a note, but those that only repeat a line above (strays or KAS returned)
+    const shown = s.decoded!.info.filter((f) => !['strays-swept', 'other-strays-swept', 'kas-released'].includes(f.code));
+    expect(shown.length).toBeGreaterThan(0);
+    expect(s.lines.filter((l) => l.label === 'Note').length).toBe(shown.length);
+    expect(s.lines.some((l) => /raw amount/.test(l.value))).toBe(false);
   });
 });
 
@@ -257,5 +261,16 @@ describe('a token the frame cannot name: the unit is "token", the token is named
     expect(values).not.toMatch(/[0-9a-f]{8}…[0-9a-f]{8}/);
     expect(values).not.toMatch(/TUSD/);
     expect(o.rows.some((r) => r.label === 'Buys with this budget')).toBe(true);
+  });
+});
+
+describe('an amend in place changes the order, it does not close it', () => {
+  it('"Changes order" with the whole id and the price before and after; no "Closes order"', () => {
+    const s = frame(build('amend.ask'));
+    expect(s.problems).toBe(0);
+    expect(s.lines.some((l) => l.label === 'Closes order')).toBe(false);
+    const c = s.lines.find((l) => l.label === 'Changes order')!;
+    expect(c.value).toMatch(/^[0-9a-f]{64} \(the id is the app.s word\): KobAsk, sell; price .+ KAS per .+ → .+ KAS per /);
+    expect(c.mono).toBe(true);
   });
 });

@@ -188,7 +188,7 @@ describe('signer summary: decoded in the frame, net effect, order terms and fee'
   it('without a hint a token movement with no order names no decimals: its covenant id and its raw amount, said so', () => {
     const d = decodeSigning({ kob, built: buildSend(), maker: MAKER_PK, registry: null });
     const s = summaryLines(d, []);
-    expect(s.lines.some((l) => l.label === '70707070…70707070 (raw amount: nothing states its decimals)' && l.value === '−9000')).toBe(true);
+    expect(s.lines.some((l) => l.label === '7070707070707070707070707070707070707070707070707070707070707070 (raw amount: nothing states its decimals)' && l.value === '−9000')).toBe(true);
   });
 
   it('a cancel', () => {
