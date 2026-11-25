@@ -348,7 +348,7 @@ export default {
   'ticket.help.limit': 'Worst price you accept: a sell at or below the stop, a buy at or above.',
   'ticket.help.slipBps': 'How far past the stop the auction may go. Default 3%.',
   'ticket.help.bandDaa': 'Seconds of auction after the trigger. Default 30.',
-  'ticket.help.keeperTip': 'Paid to the matcher per arm or trail update. Default per token program (about 0.02 KAS; pair orders 0.036 KAS).',
+  'ticket.help.keeperTip': 'Paid to the matcher per arm or trail update. Default per token program (about 0.02 KAS; pair orders about 0.05 KAS).',
   'ticket.help.minTouch': 'Smallest fill at or beyond the stop that arms it (and moves a trailing stop). Default: the larger of the minimum fill and 25% of the amount.',
   'ticket.help.minRestDaa': 'R: seconds that order must have rested at its price, so a fresh order cannot trigger. Default 5.',
   'ticket.help.carrier': 'KAS held in each contract UTXO, returned when the order ends. Default 1 KAS.',
