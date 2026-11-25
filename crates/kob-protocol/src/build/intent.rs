@@ -1090,14 +1090,15 @@ pub const REFERENCE_FILLER: u64 = 20_000_000;
 
 /// Fee mass of a `KasToToken` execution of `asks` asks on a token B of `program`.
 ///
-/// It is an upper bound over every shape of that many asks: `3_500 + asks * (8_500 + 2 * L)`, where
+/// It is an upper bound over every shape of that many asks: `3_500 + asks * (9_400 + 2 * L)`, where
 /// `L` is the byte length of the program's template, prefix and suffix. Each ask's custody input
 /// and each token output carry the template, and the relay floor charges twice the size
 /// (`MassReport::fee_mass`, the transient mass). `tests/intent_builders.rs` measures every
 /// router-capable KCC-20 program and fails if a build is heavier.
 pub fn execution_fee_mass_bound(asks: usize, program: TemplateId) -> u64 {
     let t = crate::artifacts::token_template(program);
-    3_500 + asks as u64 * (8_500 + 2 * (t.prefix.len() + t.suffix.len()) as u64)
+    // 9_400 since the pre-mainnet re-pin (TPLGEN: each ask input carries a KobAsk about 425 B larger, twice in fee mass)
+    3_500 + asks as u64 * (9_400 + 2 * (t.prefix.len() + t.suffix.len()) as u64)
 }
 
 /// Output slots a `KasToToken` execution fills with fillers.
