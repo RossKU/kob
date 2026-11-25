@@ -1873,7 +1873,8 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
             return invalid("token-holding order: custody token UTXO required");
         }
         for (c, (tok, amount, ext)) in given.iter().zip(&custodies) {
-            check_ending_custody(c, Some(cov), *tok, *amount, *ext, !PINNED_CHECKS_GUARD)?;
+            // R11T-2: a retired order takes a guarded custody, as its single cancel (`cancel_with`) does
+            check_ending_custody(c, Some(cov), *tok, *amount, *ext, it.retired.is_some() || !PINNED_CHECKS_GUARD)?;
         }
         for t in given.into_iter().chain(&it.strays) {
             let tok = tokens.iter().copied().find(|x| t.utxo.covenant_id == Some(x.0)).unwrap_or(tokens[0]);

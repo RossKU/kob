@@ -158,6 +158,102 @@ fn hidden_code_in_an_evidence_state_span() {
     assert!(e.contains("input 0"), "the evidence input fails: {e}");
 }
 
+/// Recomputes the sighashes and the signature requests of `b` after its plans or inputs were changed.
+fn resign(b: &mut kob_protocol::tx::BuiltTx) {
+    use kob_protocol::script::SIGHASH_ALL;
+    use kob_protocol::tx::{sighash, SignRequest};
+    let (tx, entries) = b.tx.to_tx().unwrap();
+    b.sign = b
+        .plans
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| {
+            p.signer().map(|pk| SignRequest {
+                input_index: i,
+                pubkey: pk,
+                sighash_type: SIGHASH_ALL,
+                sighash: sighash(&tx, &entries, i),
+                redeem_script: p.redeem(),
+            })
+        })
+        .collect();
+}
+
+/// Signs and finalizes `b`, then puts the fill-shaped push `0x08 <n>` in front of input `k`'s signature script (the
+/// signatures do not cover signature scripts).
+fn signed_with_fill_push(b: &kob_protocol::tx::BuiltTx, k: usize, n: i64) -> kob_protocol::tx::SignedTx {
+    use kob_protocol::tx::{finalize, sign_locally, FinalizeOptions};
+    let mut s = finalize(b, &sign_locally(b, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+    let ss = &mut s.tx.inputs[k].signature_script;
+    let mut pre = vec![0x08];
+    pre.extend_from_slice(&n.to_le_bytes());
+    ss.splice(0..0, pre);
+    s
+}
+
+/// R11T-1, by execution: the state span runs before the entry dispatch, so a rigged evidence `KobAsk` spent through
+/// its `cancel` (which reads only the maker) can carry a signature script that STARTS with the 8-byte push every stop
+/// reader takes as a fill: `08 <n> | sig | cancel tag`. Code hidden in its `tokenTplHash` field (no reader and no cancel
+/// reads it) drops `n` from the stack before the cancel runs. The stop next to it reads `n` = its `minTouch` (1000
+/// whole tokens) as a print at its price and arms; the attacker only moved its own one-unit custody. The templates
+/// before R11 accepted it (run on c95ab8c70); the cancel now refuses a signature script that starts with 0x08.
+#[test]
+fn hidden_code_evidence_through_cancel() {
+    use kob_protocol::build::{build, Action};
+    use kob_protocol::state::AnyState;
+    use kob_protocol::tx::{spk_to_string, Arg, SigPlan};
+    use kob_protocol::verify::validate_signed;
+    let t = TemplateId::Kcc20Ref;
+    let Action::Batch(b) = scenarios_on(t).into_iter().find(|(n, _)| n == "cond.ask.update.arm").unwrap().1 else { panic!() };
+    let mut built = build(&Action::Batch(b)).unwrap();
+    let claimed: i64 = 1000 * WHOLE;
+    let find = |built: &kob_protocol::tx::BuiltTx, kind: &str, en: &str| {
+        built
+            .plans
+            .iter()
+            .position(|p| matches!(p, SigPlan::Entry { template, entry, .. } if template.name().starts_with(kind) && entry == en))
+            .unwrap()
+    };
+    let (e, st) = (find(&built, "KobAsk", "settle"), find(&built, "KobCondAsk", "update"));
+    let SigPlan::Entry { template: et, state: es, .. } = built.plans[e].clone() else { unreachable!() };
+    let AnyState::KobAsk(ask) = AnyState::decode(et, &es).unwrap() else { panic!() };
+    // tokenTplHash, span [66..99): OP_3 OP_ROLL OP_DROP (n sits under sig, maker and tokenCovId), then a 29-byte push
+    // that keeps the field count
+    let mut rigged = es.clone();
+    assert_eq!(rigged[66], 0x20, "the tokenTplHash push");
+    let mut code = vec![0x53, 0x7a, 0x75, 0x1d];
+    code.resize(33, 0x00);
+    rigged[66..99].copy_from_slice(&code);
+    built.plans[e] = SigPlan::Entry { template: et, state: rigged, entry: "cancel".into(), args: vec![Arg::Sig(ask.maker)] };
+    built.tx.inputs[e].utxo.script_public_key = spk_to_string(&built.plans[e].spk());
+    // the cancel and the extra push weigh more: the rigged order pays the fee
+    built.tx.inputs[e].utxo.amount += 1_000_000;
+    // and its compute budget is a cancel's, not the fill's
+    built.tx.inputs[e].compute_budget = 40;
+    // the stop: its minTouch is the claimed amount
+    let SigPlan::Entry { template: stt, state: ss, entry: sen, args: sa } = built.plans[st].clone() else { unreachable!() };
+    let AnyState::KobCondAsk(stop) = AnyState::decode(stt, &ss).unwrap() else { panic!() };
+    let mut big = stop.clone();
+    big.min_touch = claimed;
+    let cont = |s: &kob_protocol::state::CondAskState| {
+        spk_to_string(&AnyState::KobCondAsk(kob_protocol::state::CondAskState { armed: 1, ..s.clone() }).spk())
+    };
+    let (old_c, new_c) = (cont(&stop), cont(&big));
+    let mut found = false;
+    for o in built.tx.outputs.iter_mut().filter(|o| o.script_public_key == old_c) {
+        o.script_public_key = new_c.clone();
+        found = true;
+    }
+    assert!(found, "the stop's continuation");
+    built.plans[st] = SigPlan::Entry { template: stt, state: AnyState::KobCondAsk(big).encode(), entry: sen, args: sa };
+    built.tx.inputs[st].utxo.script_public_key = spk_to_string(&built.plans[st].spk());
+    resign(&mut built);
+    let v = validate_signed(&signed_with_fill_push(&built, e, claimed));
+    let err = v.expect_err("a fill-shaped cancel of a rigged evidence order must be refused").to_string();
+    println!("R11T-1: {err}");
+    assert!(err.contains(&format!("input {e}")), "the evidence input fails: {err}");
+}
+
 /// The canonical pushes of a state span: (offset, header length, data length) per field.
 fn pushes(span: &[u8]) -> Vec<(usize, usize, usize)> {
     let (mut i, mut out) = (0, vec![]);
@@ -244,6 +340,76 @@ fn a_rigged_state_span_is_refused_by_every_entry_but_the_cancel() {
         assert!(c + o > 0, "{k}");
     }
     println!("{seen:#?}");
+}
+
+/// R11T-1 on every cancel and refund of the five evidence kinds (KobAsk, KobBid, KobPair, KobAskKron, KobBidKron and
+/// the KRON D0 builds) the scenarios spend: the order's span carries code in an 8-byte field (each in turn) that drops the
+/// fill-shaped push `0x08 <n>` put in front of the honest signature script (the pushes above it are counted, so the
+/// code works whatever the entry reads). Every such spend is refused at the order's input: a signature script a stop
+/// reads as a fill runs only through the fill entry, whose span check refuses the hidden code. The same rigged order
+/// with its honest signature script is still cancelled (`a_rigged_state_span_is_refused_by_every_entry_but_the_cancel`).
+#[test]
+fn a_fill_shaped_cancel_or_refund_of_an_evidence_kind_is_refused() {
+    use kob_protocol::build::build;
+    use kob_protocol::tx::{spk_to_string, SigPlan};
+    use kob_protocol::verify::validate_signed;
+    let mut all: Vec<(String, kob_protocol::build::Action)> = vec![];
+    for t in [TemplateId::Kcc20Ref, TemplateId::KronToken2433, TemplateId::KForgeToken1785] {
+        all.extend(scenarios_on(t));
+        all.extend(delivery_scenarios(t));
+        all.extend(common::pair::pair_scenarios(t, t));
+    }
+    all.extend(scenarios_kron());
+    let (mut tried, mut accepted) = (std::collections::BTreeMap::<String, usize>::new(), vec![]);
+    for (name, a) in all {
+        let Ok(built) = build(&a) else { continue };
+        for k in 0..built.plans.len() {
+            let SigPlan::Entry { template, state, entry, args } = built.plans[k].clone() else { continue };
+            let evidence_kind = matches!(template.base(), TemplateId::KobAsk | TemplateId::KobBid | TemplateId::KobPair);
+            if !evidence_kind || !(entry == "cancel" || entry == "refund") {
+                continue;
+            }
+            let ps = pushes(&state);
+            // every 8-byte field in turn: one the entry does not read lets its code run to the end
+            for f in (0..ps.len()).filter(|&f| ps[f].1 == 1 && ps[f].2 == 8) {
+                // the items above n when the field runs: the signature script's arguments, then the fields before it
+                let depth = args.len() + f;
+                let mut code =
+                    if depth <= 16 { vec![0x50 + depth as u8, 0x7a, 0x75, 0x05] } else { vec![0x01, depth as u8, 0x7a, 0x75, 0x04] };
+                code.resize(9, 0x00);
+                let mut rigged = state.clone();
+                rigged[ps[f].0..ps[f].0 + 9].copy_from_slice(&code);
+                let mut b = built.clone();
+                b.plans[k] = SigPlan::Entry { template, state: rigged, entry: entry.clone(), args: args.clone() };
+                b.tx.inputs[k].utxo.script_public_key = spk_to_string(&b.plans[k].spk());
+                b.tx.inputs[k].utxo.amount += 1_000_000;
+                resign(&mut b);
+                let label = format!("{name}: input {k} {} {entry}", template.name());
+                *tried.entry(format!("{} {entry}", template.name())).or_default() += 1;
+                match validate_signed(&signed_with_fill_push(&b, k, 1)) {
+                    Ok(_) => accepted.push(format!("{label} (field {f})")),
+                    Err(e) => assert!(e.to_string().contains(&format!("input {k}")), "{label}: {e}"),
+                }
+            }
+        }
+    }
+    println!("{tried:#?}");
+    assert!(accepted.is_empty(), "fill-shaped spends accepted: {accepted:#?}");
+    // every cancel and refund of the five kinds was tried, the KRON D0 builds too
+    for k in [
+        "KobAsk cancel",
+        "KobBid cancel",
+        "KobBid refund",
+        "KobPair cancel",
+        "KobAskKron cancel",
+        "KobBidKron cancel",
+        "KobBidKron refund",
+        "KobAskKronD0 cancel",
+        "KobBidKronD0 cancel",
+        "KobBidKronD0 refund",
+    ] {
+        assert!(tried.contains_key(k), "{k} not tried: {tried:?}");
+    }
 }
 
 /// The check reads only the push headers: a field whose VALUE is made of bytes that look like opcodes (`OP_RETURN`,

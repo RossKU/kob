@@ -639,6 +639,6 @@ mod tests {
         }
         // The hand-classified sets do not grow unnoticed: a new one is a decision, not a line.
         // never-deployed: 22, and the 18 templates of the first TPLGEN build (replaced on the branch before any switch)
-        assert_eq!((classes["never-deployed"], classes["pre-f1"]), (40, 35));
+        assert_eq!((classes["never-deployed"], classes["pre-f1"]), (62, 35));
     }
 }

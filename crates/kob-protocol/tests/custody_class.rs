@@ -496,6 +496,27 @@ fn a_retired_orders_cancel_still_takes_a_guarded_custody() {
     req.retired = Some(r.hash);
     let built = build_cancel_order(&req, &kob_protocol::budget::lookup).unwrap_or_else(|e| panic!("retired: {e}"));
     engine(&built, "retired KobAsk, guarded custody");
+    // R11T-2: the position cancel takes it alike
+    let pos = |retired: Option<[u8; 32]>| kob_protocol::build::CancelPosition {
+        orders: vec![kob_protocol::build::CancelItem {
+            order: o.clone(),
+            retired,
+            custody: Some(only[0].clone()),
+            prefund: None,
+            strays: vec![],
+        }],
+        funding: vec![key_utxo(3, MAKER_A, 10 * KAS)],
+        change: None,
+        lock_time: 0,
+        token_carrier: None,
+        records: vec![],
+        fee: Default::default(),
+    };
+    let built = kob_protocol::build::build_cancel_position(&pos(Some(r.hash)), &kob_protocol::budget::lookup)
+        .unwrap_or_else(|e| panic!("retired position: {e}"));
+    engine(&built, "retired KobAsk, guarded custody, position cancel");
+    let e = kob_protocol::build::build_cancel_position(&pos(None), &kob_protocol::budget::lookup).expect_err("pinned").to_string();
+    assert!(e.contains("not exactly the one its order pins"), "{e}");
     let e = build_cancel_order(&cancel(o, &only, vec![]), &kob_protocol::budget::lookup).expect_err("pinned").to_string();
     assert!(e.contains("not exactly the one its order pins"), "{e}");
 }
