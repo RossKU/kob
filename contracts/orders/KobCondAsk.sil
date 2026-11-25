@@ -372,6 +372,8 @@ contract KobCondAsk(
         int outIdx = self;
 
         if (n == 0) {
+            // Row 3 (R8F1a-1): a refund pins the maker's output only through the custody, so an order of 0 has none.
+            require(amountLeft > 0);
             // Refund. Due at the earliest of expiryDaa and 90 days idle.
             // Expiry is soft, so a fill that lands first still pays the leg's
             // all-in limit.

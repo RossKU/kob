@@ -310,3 +310,77 @@ fn every_order_entry_refuses_a_user_lane() {
     let kinds: std::collections::BTreeSet<&str> = seen.iter().map(|k| k.split(' ').next().unwrap()).collect();
     assert!(kinds.len() >= 16 && seen.iter().any(|k| k.ends_with("cancel")), "{seen:?}");
 }
+
+/// Row 3 (R8F1a-1): a hand-made zero-amount ask or conditional ask with a 0-unit custody cannot be refunded (its refund
+/// pinned no maker output); an honest one of 1 base unit still is.
+#[test]
+fn a_zero_amount_ask_is_not_refunded() {
+    use kob_protocol::build::{build_refund_order, RefundOrder};
+    use kob_protocol::state::AnyState;
+    use kob_protocol::tx::{finalize, sign_locally, spk_to_string, FinalizeOptions, SigPlan};
+    use kob_protocol::verify::validate_signed;
+    let t = TemplateId::Kcc20Ref8x8;
+    let o = cov(0x7a);
+    for (left, ok) in [(1i64, true)] {
+        for s in [
+            AnyState::KobAsk(kob_protocol::state::AskState { amount_left: left, min_fill: 0, ..ask(MAKER_A, P250, t) }),
+            AnyState::KobCondAsk(kob_protocol::state::CondAskState { amount_left: left, min_fill: 0, ..cond_ask(MAKER_A, t) }),
+        ] {
+            let r = RefundOrder {
+                prefund: None,
+                bought_custody: None,
+                order: order(70, CARRIER, o, 1_000, s.clone()),
+                custody: Some(common::pair::tutxo(t, TOKEN_COV, 71, left, o, true)),
+                foreign: vec![],
+                lock_time: EXPIRY as u64,
+                funding: vec![key_utxo(4, KEEPER, 5 * KAS)],
+                change: Some(pk(KEEPER)),
+                fee: fee(),
+            };
+            let label = format!("{} amountLeft {left}", s.template_id().name());
+            let built = build_refund_order(&r, &kob_protocol::budget::lookup).unwrap_or_else(|e| panic!("{label}: {e}"));
+            let signed = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+            let v = validate_signed(&signed);
+            assert_eq!(v.is_ok(), ok, "{label}: {:?}", v.err());
+            // the same refund of an order of 0 (the builders refuse one, so it is made from this one): refused at the order
+            let mut b = built.clone();
+            for k in 0..b.plans.len() {
+                match &mut b.plans[k] {
+                    SigPlan::Entry { template, state, .. } if template.kind_code().is_some() => {
+                        let z = match AnyState::decode(*template, state).unwrap() {
+                            AnyState::KobAsk(a) => AnyState::KobAsk(kob_protocol::state::AskState { amount_left: 0, ..a }),
+                            AnyState::KobCondAsk(a) => AnyState::KobCondAsk(kob_protocol::state::CondAskState { amount_left: 0, ..a }),
+                            x => panic!("{x:?}"),
+                        };
+                        *state = z.encode();
+                    }
+                    SigPlan::TokenLeader { state, next_states, template, .. } => {
+                        let old: Vec<String> = next_states
+                            .iter()
+                            .map(|s| spk_to_string(&s.spk_with(kob_protocol::artifacts::template(*template))))
+                            .collect();
+                        state.amount = 0;
+                        for s in next_states.iter_mut() {
+                            s.amount = 0;
+                        }
+                        for (o, s) in old.iter().zip(next_states.iter()) {
+                            let new = spk_to_string(&s.spk_with(kob_protocol::artifacts::template(*template)));
+                            for out in b.tx.outputs.iter_mut().filter(|x| &x.script_public_key == o) {
+                                out.script_public_key = new.clone();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                b.tx.inputs[k].utxo.script_public_key = spk_to_string(&b.plans[k].spk());
+            }
+            let (tx, entries) = b.tx.to_tx().unwrap();
+            for r in b.sign.iter_mut() {
+                r.sighash = kob_protocol::tx::sighash(&tx, &entries, r.input_index);
+            }
+            let z = finalize(&b, &sign_locally(&b, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+            let e = validate_signed(&z).expect_err(&format!("{label}: the refund of an order of 0")).to_string();
+            assert!(e.contains("input 0"), "{label}: {e}");
+        }
+    }
+}
