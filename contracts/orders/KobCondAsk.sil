@@ -591,6 +591,10 @@ contract KobCondAsk(
                 int kt = (tpPrice - 1 - stopPrice) / trailStep;
                 if (kt < k) { k = kt; }
             }
+            // Row 4: never past MAX_STOP, where the stop leg could no longer fill (R9FA2-2). A stop already above it
+            // gives km < 0, and the trail is refused.
+            int km = (MAX_STOP - stopPrice) / trailStep;
+            if (km < k) { k = km; }
             require(k >= 1);
             newStop = stopPrice + k * trailStep;
         }

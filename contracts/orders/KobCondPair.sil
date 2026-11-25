@@ -750,12 +750,15 @@ contract KobCondPair(
                 if (sell) {
                     // Up by k steps, and below the take-profit leg.
                     newStop = stopPrice + k * trailStep;
+                    // Row 4: never past MAX_STOP (R9FA2-2), whether or not there is a take-profit (tpPrice itself is
+                    // not bounded by MAX_STOP). A step past it is a cap: the largest k stops there.
+                    require(newStop <= MAX_STOP);
                     x = newStop + trailGap;
                     y = x + trailStep;
-                    cap = false;
+                    cap = newStop > MAX_STOP - trailStep;
                     if (tpPrice > 0) {
                         require(newStop < tpPrice);
-                        cap = newStop + trailStep >= tpPrice;
+                        if (newStop + trailStep >= tpPrice) { cap = true; }
                     }
                 } else {
                     // Down by k steps, above the limit leg and above 0.

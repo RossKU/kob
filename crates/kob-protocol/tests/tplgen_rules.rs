@@ -384,3 +384,143 @@ fn a_zero_amount_ask_is_not_refunded() {
         }
     }
 }
+
+/// Row 4 in the engine (`KobCondAsk.update`, R9FA2-2): a sell trail stops at MAX_STOP. From one step below, a print far
+/// above moves the stop exactly onto MAX_STOP; from MAX_STOP, or above it (a hand-made state), no trail is accepted.
+#[test]
+fn a_sell_trail_stops_at_max_stop_in_the_engine() {
+    use kob_protocol::build::{build, Action};
+    use kob_protocol::state::AnyState;
+    use kob_protocol::tx::{finalize, sighash, sign_locally, spk_to_string, FinalizeOptions, SigPlan};
+    use kob_protocol::verify::validate_signed;
+    for t in [TemplateId::Kcc20Ref, TemplateId::KronToken2433] {
+        let Action::Batch(mut b) = scenarios_on(t).into_iter().find(|(n, _)| n == "cond.ask.update.trail").unwrap().1 else {
+            panic!()
+        };
+        let step = 5_000_000;
+        // the evidence: a resting bid quoting far above MAX_STOP
+        let ev = ev_bid(MAX_STOP_PRICE + 1_000 * step, 1, t);
+        b.legs[b.updates[0].evidence] = ev;
+        let set = |s: &mut AnyState, stop: i64| match s {
+            AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x) => {
+                x.stop_price = stop;
+                x.tp_price = 0;
+            }
+            _ => panic!(),
+        };
+        set(&mut b.updates[0].order.state, MAX_STOP_PRICE - step);
+        let built = build(&Action::Batch(b.clone())).unwrap_or_else(|e| panic!("{}: {e}", t.name()));
+        let s = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+        validate_signed(&s).unwrap_or_else(|e| panic!("{}: one step below: {e}", t.name()));
+        // the continuation's stop is MAX_STOP exactly
+        let k = built.plans.iter().position(|p| matches!(p, SigPlan::Entry { entry, .. } if entry == "update")).unwrap();
+        let SigPlan::Entry { template, state, .. } = &built.plans[k] else { unreachable!() };
+        let mut onto = AnyState::decode(*template, state).unwrap();
+        set(&mut onto, MAX_STOP_PRICE);
+        if let AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x) = &mut onto {
+            x.armed = 0;
+        }
+        assert!(
+            built.tx.outputs.iter().any(|o| o.script_public_key == spk_to_string(&onto.spk())),
+            "{}: the stop moves onto MAX_STOP",
+            t.name()
+        );
+        // the builder refuses a trail from MAX_STOP or above it
+        for stop in [MAX_STOP_PRICE, MAX_STOP_PRICE + 1] {
+            let mut c = b.clone();
+            set(&mut c.updates[0].order.state, stop);
+            assert!(build(&Action::Batch(c)).is_err(), "{}: builder at {stop}", t.name());
+            // the covenant refuses it too: the transaction above with the order's stop at `stop`
+            let mut x = built.clone();
+            let SigPlan::Entry { template, state, entry, args } = x.plans[k].clone() else { unreachable!() };
+            let mut st = AnyState::decode(template, &state).unwrap();
+            set(&mut st, stop);
+            x.plans[k] = SigPlan::Entry { template, state: st.encode(), entry, args };
+            x.tx.inputs[k].utxo.script_public_key = spk_to_string(&x.plans[k].spk());
+            let (tx, entries) = x.tx.to_tx().unwrap();
+            for r in x.sign.iter_mut() {
+                r.sighash = sighash(&tx, &entries, r.input_index);
+            }
+            let s = finalize(&x, &sign_locally(&x, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+            let e = validate_signed(&s).expect_err(&format!("{}: covenant at {stop}", t.name())).to_string();
+            assert!(e.contains(&format!("input {k}")), "{}: {e}", t.name());
+        }
+    }
+}
+
+/// Row 4 in the engine for the pair twin (`KobCondPair`, R10CA-2): the filler names k, and the covenant takes it only as
+/// the largest step the evidence allows unless a cap binds. Near MAX_STOP the cap binds: from one step below, k = 1 (onto
+/// MAX_STOP) is accepted though the print would justify more; from two steps below, k = 2 is the largest and k = 1 is
+/// refused (no cap binds there); a k that passes MAX_STOP is refused.
+#[test]
+fn a_pair_sell_trail_stops_at_max_stop_in_the_engine() {
+    use common::pair::{pair, pair_leg};
+    use kob_protocol::build::{build, Action, Leg};
+    use kob_protocol::state::AnyState;
+    use kob_protocol::tx::{finalize, sighash, sign_locally, spk_to_string, Arg, FinalizeOptions, SigPlan};
+    use kob_protocol::verify::validate_signed;
+    let (pa, pb) = (TemplateId::Kcc20Ref, TemplateId::Kcc20Ref);
+    let Action::Batch(b0) =
+        common::pair::pair_scenarios(pa, pb).into_iter().find(|(n, _)| n == "pair.update.ask.trail.ev1").unwrap().1
+    else {
+        panic!()
+    };
+    let step = 10;
+    let run = |stop: i64, k_override: Option<i64>| -> (Result<(), String>, i64) {
+        let mut b = b0.clone();
+        // the evidence: a resting pair BID quoting far above MAX_STOP (B per whole A)
+        let ev = b.updates[0].evidence;
+        let Leg::Pair { order, .. } = &b.legs[ev] else { panic!() };
+        let c = order.utxo.covenant_id.unwrap();
+        b.legs[ev] = pair_leg(pair(MAKER_C, false, pa, pb, MAX_STOP_PRICE + 1_000 * step), pa, pb, c, 72, 1);
+        if let AnyState::KobCondPair(x) = &mut b.updates[0].order.state {
+            x.stop_price = stop;
+            x.tp_price = 0;
+        }
+        let mut built = match build(&Action::Batch(b)) {
+            Ok(x) => x,
+            Err(e) => return (Err(format!("builder: {e}")), 0),
+        };
+        let u = built
+            .plans
+            .iter()
+            .position(|p| matches!(p, SigPlan::Entry { template, .. } if *template == TemplateId::KobCondPair))
+            .unwrap();
+        let SigPlan::Entry { template, state, entry, mut args } = built.plans[u].clone() else { unreachable!() };
+        // k is the settle argument the builder set (its 15th)
+        let ki = args.len() - 2;
+        let Arg::Int(k) = args[ki] else { panic!("k") };
+        if let Some(k2) = k_override {
+            // the filler names another k: the continuation's stop follows it
+            args[ki] = Arg::Int(k2);
+            let AnyState::KobCondPair(s) = AnyState::decode(template, &state).unwrap() else { panic!() };
+            let old = spk_to_string(
+                &AnyState::KobCondPair(kob_protocol::state::CondPairState { stop_price: s.stop_price + k * step, ..s.clone() }).spk(),
+            );
+            let new = spk_to_string(
+                &AnyState::KobCondPair(kob_protocol::state::CondPairState { stop_price: s.stop_price + k2 * step, ..s.clone() }).spk(),
+            );
+            for o in built.tx.outputs.iter_mut().filter(|o| o.script_public_key == old) {
+                o.script_public_key = new.clone();
+            }
+            built.plans[u] = SigPlan::Entry { template, state, entry, args };
+            let (tx, entries) = built.tx.to_tx().unwrap();
+            for r in built.sign.iter_mut() {
+                r.sighash = sighash(&tx, &entries, r.input_index);
+            }
+        }
+        let s = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+        (validate_signed(&s).map(|_| ()).map_err(|e| e.to_string()), k)
+    };
+    // one step below: the builder names k = 1, onto MAX_STOP, and the covenant takes it as the cap
+    let (r, k) = run(MAX_STOP_PRICE - step, None);
+    assert_eq!(k, 1);
+    r.expect("one step below MAX_STOP");
+    // a k past MAX_STOP is refused
+    assert!(run(MAX_STOP_PRICE - step, Some(2)).0.is_err(), "past MAX_STOP");
+    // two steps below: k = 2 is the largest; k = 1 is not (the cap does not bind there)
+    let (r, k) = run(MAX_STOP_PRICE - 2 * step, None);
+    assert_eq!(k, 2);
+    r.expect("two steps below");
+    assert!(run(MAX_STOP_PRICE - 2 * step, Some(1)).0.is_err(), "k = 1 is not the largest");
+}
