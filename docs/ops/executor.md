@@ -363,7 +363,11 @@ Roles, Configuration and store, Node, Storage, Read API, Log, Executor, Fees, Ma
 `--data-dir`, `--tokens`) and, for `import-orders` and `rebase`, the node options. Exit status of `kobd`: 0 a stop; 1 an error (a
 supervisor starts it again, e.g. "exiting so that a supervisor restarts the executor"); 2 a usage mistake (clap's own, an option of
 another role, `--node` on a start, a role the configuration was not set up for, `--lean` on the wrong role), a configuration file
-that is missing or does not parse, or a stop that did not finish in time (do not start it again unchanged); 130 a second Ctrl+C. The commands that print a document or a report on stdout
+that is missing or does not parse, or a stop that did not finish in time (do not start it again unchanged); 130 a second Ctrl+C. A stop asked while the store does
+its start-up work (the one-time counts and indexes of a store an earlier build wrote: seconds on a small store, longer on a large one
+upgraded from an older schema) logs `stop requested: finishing the store's start-up work first` and is honoured when that work
+ends; the 10 s limit counts from then. Each step is one transaction with its own "done" marker, so a kill or a second Ctrl+C there
+loses only that step, which the next start does again. The commands that print a document or a report on stdout
 (`kobd db ...`, `kobd logo-reports ...`, `kobd address-balance`, `kobd setup --non-interactive`, `kobd withdraw`, `kobd config check`,
 `kobd match` and `kobd keep` with `--offline`) keep their log on stderr, so `kobd db export-orders | jq` works. Log lines have kaspad's
 shape, `2026-11-11 08:44:28.529Z  INFO status: ...` (UTC to the millisecond, the level, no Rust module path; the path is shown only

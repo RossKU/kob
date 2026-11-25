@@ -2937,6 +2937,8 @@ impl<S: ChainSource> Follower<S> {
         if self.proof.is_none() {
             tracing::warn!("chain proofs are OFF ([chain_proof] enabled = false, or the node serves none): no batch is proven, and the time of the cursor's chain block, which the chain authority is judged by, is the node's word (checked against the block's hash only)");
         }
+        // The store is open and the first request to the node goes out now (an operator's marker, and the stop test's).
+        tracing::info!("following the node from the store's cursor");
         loop {
             if *shutdown.borrow() {
                 break;

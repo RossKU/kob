@@ -30,6 +30,11 @@ use tokio::sync::watch;
 /// of the matcher and the read API's open requests. This limit is the net under whatever is not.
 pub const HARD_STOP: Duration = Duration::from_secs(10);
 
+/// Set while the store's start-up work runs ([`finishing_startup`]). The hard limit counts only from its end: that
+/// work is never cut in the middle by the limit, which on a large store upgraded from an older schema could otherwise
+/// end every start in the same step. A second request still exits at once.
+static STARTING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// What a request to stop is called in the log.
 type Kind = &'static str;
 
@@ -107,6 +112,9 @@ async fn watch_signals(mut signals: Signals, requested: watch::Sender<bool>, lim
     let _ = requested.send(true);
     // A plain thread, so it fires even when the runtime is what is stuck.
     std::thread::spawn(move || {
+        while STARTING.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            std::thread::sleep(Duration::from_millis(100));
+        }
         std::thread::sleep(limit);
         eprintln!("shutdown did not finish in {} s: exiting now", limit.as_secs());
         std::process::exit(2);
@@ -114,6 +122,30 @@ async fn watch_signals(mut signals: Signals, requested: watch::Sender<bool>, lim
     let again = signals.recv().await;
     eprintln!("{again} again: exiting now");
     std::process::exit(130);
+}
+
+/// Runs `f`, the store's start-up work (`indexer::Indexer::open`: the schema, the one-time counts and indexes of a store
+/// an earlier build wrote), on this thread. A stop asked meanwhile is honoured once it ends. The work is never cut in
+/// the middle: each step is one transaction with its own "done" marker, so a kill there is safe as well, and the next
+/// open does the step again (`tests/first_open.rs`). Meanwhile the log says the stop was received and what it waits
+/// for.
+pub fn finishing_startup<T>(f: impl FnOnce() -> T) -> T {
+    let waiting = tokio::runtime::Handle::try_current().ok().map(|h| {
+        let stop = shutdown_signal();
+        h.spawn(async move {
+            stop.await;
+            tracing::info!(
+                "stop requested: finishing the store's start-up work first (each step is one transaction, never cut in the middle; press it again to exit at once, and the step is done again at the next start)"
+            );
+        })
+    });
+    STARTING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let r = f();
+    STARTING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    if let Some(w) = waiting {
+        w.abort();
+    }
+    r
 }
 
 /// Resolves when the process is asked to stop (see the module documentation).

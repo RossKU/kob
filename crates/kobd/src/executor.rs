@@ -879,7 +879,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
         let node = multi_submit(&cfg, &full_chain);
         return crate::faststart::run_with(cfg, fast, full_chain, tip_chain, node, Box::new(signer), run_cfg, shutdown).await;
     }
-    let indexer = Indexer::open(cfg.clone()).map_err(|e: IndexerError| anyhow::anyhow!(e))?;
+    let indexer = crate::shutdown::finishing_startup(|| Indexer::open(cfg.clone())).map_err(|e: IndexerError| anyhow::anyhow!(e))?;
     let x402 = match a.x402() {
         Some(p) => {
             let ingest = indexer.ingest.clone();
