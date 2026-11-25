@@ -7,7 +7,7 @@ contract PriceGate(
     int init_max_price
 ) {
     // :: linked templates
-    byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0x070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c);
+    byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0xc4feaee15a4f2151c58667f60c4b8e36b0dc834ff2c2b63b1d9018954f72f0e5);
 
     // :: state layouts
     struct KobAskState {

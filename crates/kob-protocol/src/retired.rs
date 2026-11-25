@@ -65,6 +65,10 @@ pub enum Retirement {
     /// with `KobBidKron` (their KCC-20 twins are [`Retirement::BidDelivery`]). Retired by
     /// `71a6c32`; the last commit carrying these is `1652c9ac`.
     BidMinFill,
+    /// The pre-mainnet re-pin (TPLGEN, 2026-11-25): every order kind, for the native-lane pin, the state-span check
+    /// (audit R10CC-1), the zero borrow guard, refund `amountLeft > 0` and the `MAX_STOP` trail. Retired by `9dc6f0f`;
+    /// the last commit carrying these is `428653bf3`. Their state has the delivery block where the kind has one.
+    PreMainnet,
 }
 
 impl Retirement {
@@ -75,6 +79,7 @@ impl Retirement {
             Retirement::F1 => "da35841",
             Retirement::BidDelivery => "0714451",
             Retirement::BidMinFill => "71a6c32",
+            Retirement::PreMainnet => "9dc6f0f",
         }
     }
 
@@ -84,9 +89,11 @@ impl Retirement {
     /// §2): [`StateLayout::Legacy`]. A retirement of templates that already carry the block (the
     /// generation retired by the pre-mainnet re-pin) returns the kind's layout when it was retired,
     /// so each row's span is read in the layout its orders have, not one fixed layout (TPLGEN step 1).
-    pub fn layout(self, _kind: TemplateId) -> StateLayout {
+    pub fn layout(self, kind: TemplateId) -> StateLayout {
         match self {
             Retirement::BidRefund | Retirement::F1 | Retirement::BidDelivery | Retirement::BidMinFill => StateLayout::Legacy,
+            // the state of these kinds is unchanged by the re-pin: today's layout
+            Retirement::PreMainnet => crate::state::pinned_layout(kind),
         }
     }
 
@@ -97,6 +104,7 @@ impl Retirement {
             Retirement::F1 => "60a4d11",
             Retirement::BidDelivery => "d12b28e1",
             Retirement::BidMinFill => "1652c9ac",
+            Retirement::PreMainnet => "428653bf3",
         }
     }
 }
@@ -268,11 +276,33 @@ retired_table![
     (KobCondBidKronD0, BidMinFill, "9e2bac11"),
     (KobIfdBidKronD0, BidMinFill, "c4742e78"),
     (KobIfdAskKronD0, BidMinFill, "7ae3d8b7"),
+    (KobAsk, PreMainnet, "070bb3b2"),
+    (KobBid, PreMainnet, "2f6079ae"),
+    (KobCondAsk, PreMainnet, "209cf0da"),
+    (KobCondBid, PreMainnet, "aad44664"),
+    (KobIfdBid, PreMainnet, "3ea83cf4"),
+    (KobIfdAsk, PreMainnet, "812905a9"),
+    (KobPair, PreMainnet, "d3d775de"),
+    (KobCondPair, PreMainnet, "46fd3606"),
+    (KobIfdPair, PreMainnet, "59bc8aec"),
+    (KobCurveAsk, PreMainnet, "1e9bee3b"),
+    (KobAskKron, PreMainnet, "f7274b79"),
+    (KobBidKron, PreMainnet, "4dc2420d"),
+    (KobCondAskKron, PreMainnet, "75ad2407"),
+    (KobCondBidKron, PreMainnet, "401b2e29"),
+    (KobIfdBidKron, PreMainnet, "10c1a47f"),
+    (KobIfdAskKron, PreMainnet, "8e030d24"),
+    (KobAskKronD0, PreMainnet, "f43ae142"),
+    (KobBidKronD0, PreMainnet, "8a7ee676"),
+    (KobCondAskKronD0, PreMainnet, "b2b6fe24"),
+    (KobCondBidKronD0, PreMainnet, "82fce430"),
+    (KobIfdBidKronD0, PreMainnet, "ebc5bff8"),
+    (KobIfdAskKronD0, PreMainnet, "daf934fd"),
 ];
 
 /// The full template hashes of [`TABLE`], in its order: the hashes the retired orders were placed
 /// under. Each is recomputed from its bytes on load.
-const HASHES: [&str; 49] = [
+const HASHES: [&str; 71] = [
     "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3",
     "770314aa3391b20333c98037343f538f1903002362f31bd599abfca16aa67247",
     "26042aff0dc58c2cbaa0efd166c38944942d75524cc55033dde80502c4558166",
@@ -322,6 +352,28 @@ const HASHES: [&str; 49] = [
     "9e2bac11bf1398637b2868b863f6f46f42bc3be5510e840a65cca9ae3bde014e",
     "c4742e78f68cdeb2f7fd9ad85debbedd8767b66d09100cbf00deccbf789e8e21",
     "7ae3d8b793c2c97aad575a50577c045b4c881e6777d4d63de7020246f3daf345",
+    "070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c",
+    "2f6079aed0be4c60632509761a407ba2545f0487a667dc228cfebeaacfd00d8d",
+    "209cf0daf867c690ef3bd79b6f814719f51697477bc8837eea0da04427483aaa",
+    "aad44664cc02b48271b3e26f87404a04f610dd8823c16f11f3fa738437b7f987",
+    "3ea83cf4094fb389e4e4cc2c81b575c81213d8ad24844a9554983232e234f638",
+    "812905a9016193c4aa23c7ebe947dd82cc0b8401996657a6bc7aaaee2dce7003",
+    "d3d775de3dfb4091c8d3b631a018c89accac22565bf370e10d9172eb759a6ec8",
+    "46fd3606270f2e790973f0280b837d4a9837d7a86cd3470ad0cc430e18d285e4",
+    "59bc8aec09b5b4d1d6907be3eceea63d148f4f4e6ff120a2ffa6a96818569e71",
+    "1e9bee3b01f67f802dba564ada22d28ca5f5e2bbc0eaf60005d9a8665d46d8b9",
+    "f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d",
+    "4dc2420ddafe56fc71345252e27666b3397cfc47884de86c0dd5c03419e83dcf",
+    "75ad2407fc2a61df87e40ddfd9c77f5ed14584ae2ceb628018d3f5cd05003204",
+    "401b2e29586dcee7c253b9002e57dbd0bdf6240e596478f5c95ce9b6413a9c1d",
+    "10c1a47fe58714f679a8c33cd98fd900f974cdd1c1b41dad38fc7cbb01901a03",
+    "8e030d2490555677cbcbfa76b8bee84a1bab76abf1f433d8084f1e2124fc7dc8",
+    "f43ae142343fe54313e2f742931c76da11cb49e66d823280829a3f91ed227c2c",
+    "8a7ee676f706b1e762b7b7ccaa7977e58650f0432e5c9f62083370c774eb136b",
+    "b2b6fe249859902d1f82ff61621f5525926c8db032ceec4716c48105587c306a",
+    "82fce430931931fd2fe574345a01bc9bf8bf4402910b1740f0ae8085c99c3324",
+    "ebc5bff8bae73fb07ed37cb15795d4e0ef7ebe17290e745b6645224ea2361947",
+    "daf934fd6a1040ed15800ba944da929d3e12886bce1d0f00374c0a96202d6cae",
 ];
 
 fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
@@ -464,14 +516,17 @@ mod tests {
     #[test]
     fn the_table_loads_and_is_not_pinned() {
         self_check().unwrap();
-        assert_eq!(retired().len(), 49);
+        assert_eq!(retired().len(), 71);
         for r in retired() {
-            // the span of the kind's legacy layout: a kind with the delivery block is longer today
-            assert_eq!(r.layout, StateLayout::Legacy, "{}", r.label());
-            assert_eq!(layout_of_len(r.kind, r.state_len), Some(StateLayout::Legacy), "{}", r.label());
-            match crate::state::delivery_block(r.kind) {
-                Some(b) => assert!(r.state_len == b.legacy_len && r.state_len < template(r.kind).state_len, "{}", r.label()),
-                None => assert_eq!(r.state_len, template(r.kind).state_len, "{}", r.label()),
+            // the span of the layout its retirement placed it with: the legacy one before the delivery block (a kind with
+            // the block is longer today), today's for the pre-mainnet re-pin (TPLGEN), which kept every state
+            let want = r.retirement.layout(r.kind);
+            assert_eq!(r.layout, want, "{}", r.label());
+            assert_eq!(layout_of_len(r.kind, r.state_len), Some(want), "{}", r.label());
+            match (crate::state::delivery_block(r.kind), r.retirement) {
+                (_, Retirement::PreMainnet) => assert_eq!(r.state_len, template(r.kind).state_len, "{}", r.label()),
+                (Some(b), _) => assert!(r.state_len == b.legacy_len && r.state_len < template(r.kind).state_len, "{}", r.label()),
+                (None, _) => assert_eq!(r.state_len, template(r.kind).state_len, "{}", r.label()),
             }
             // a retired template is never one this build pins, of any kind
             assert!(crate::artifacts::template_by_hash(&r.hash).is_none(), "{}", r.label());

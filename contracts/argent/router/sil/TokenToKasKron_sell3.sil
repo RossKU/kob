@@ -34,7 +34,7 @@ contract TokenToKasKron_sell3(
     int constant MAX_TOKEN_OUTPUTS = 8;
 
     // :: linked templates
-    byte[32] constant gen__kob_orders_kron__kob_bid_kron_template_const = byte[32](0x4dc2420ddafe56fc71345252e27666b3397cfc47884de86c0dd5c03419e83dcf);
+    byte[32] constant gen__kob_orders_kron__kob_bid_kron_template_const = byte[32](0x70962538aae9485be879f68c5ded6e8111ec2b60987748d4705744c4125bee31);
 
     // :: state layouts
     struct KasToTokenState {

@@ -38,8 +38,8 @@ contract TokenSwap_swap_ask_out_c(
     int constant MAX_TOKEN_OUTPUTS = 8;
 
     // :: linked templates
-    byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0x070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c);
-    byte[32] constant gen__kob_orders__kob_bid_template_const = byte[32](0x2f6079aed0be4c60632509761a407ba2545f0487a667dc228cfebeaacfd00d8d);
+    byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0xc4feaee15a4f2151c58667f60c4b8e36b0dc834ff2c2b63b1d9018954f72f0e5);
+    byte[32] constant gen__kob_orders__kob_bid_template_const = byte[32](0x4ad5709b9726622235eb7ce581c433a3502f123d3b88db6cae6b0d4b6ffd9026);
 
     // :: state layouts
     struct KasToTokenState {

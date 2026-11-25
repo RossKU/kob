@@ -38,6 +38,12 @@ const GENERATIONS = [
   // above. The delivery templates of 1652c9ace itself were never deployed.
   ['1652c9ace', ['KobBidKron', 'KobCondAskKron', 'KobCondBidKron', 'KobIfdBidKron', 'KobIfdAskKron', 'KobBidKronD0', 'KobCondAskKronD0',
     'KobCondBidKronD0', 'KobIfdBidKronD0', 'KobIfdAskKronD0']],
+  // Retired by the pre-mainnet re-pin (TPLGEN, 2026-11-25: the native-lane pin, the state-span check, the zero borrow
+  // guard, refund amountLeft > 0, the MAX_STOP trail). Every order kind changed. 428653bf3 is the last commit carrying
+  // them; their state has the delivery block where the kind has one.
+  ['428653bf3', ['KobAsk', 'KobBid', 'KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk', 'KobPair', 'KobCondPair', 'KobIfdPair', 'KobCurveAsk',
+    'KobAskKron', 'KobBidKron', 'KobCondAskKron', 'KobCondBidKron', 'KobIfdBidKron', 'KobIfdAskKron', 'KobAskKronD0', 'KobBidKronD0',
+    'KobCondAskKronD0', 'KobCondBidKronD0', 'KobIfdBidKronD0', 'KobIfdAskKronD0']],
 ];
 
 let bad = 0;

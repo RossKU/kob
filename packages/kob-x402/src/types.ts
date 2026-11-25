@@ -21,7 +21,7 @@ export const BINDING_INTENT = 'kob-intent-v1';
  * The KOB router artifact the intent offers name (`extra.route.router`):
  * `kob_protocol::router::ROUTER_ARTIFACT_ID`.
  */
-export const ROUTER_ARTIFACT_ID = '0a950380894b31a8ef14d5de12689b969a3d3c836bc6ff3efa0678196c20786c';
+export const ROUTER_ARTIFACT_ID = '3566d820a2ada0d707fd579b1334b18c2de6a7caa8cc0f1a100eedc2f67fecfb';
 /** `invoiceVersion` of an invoice. */
 export const INVOICE_VERSION = 'kob-invoice-v1';
 export const TX_ENCODING = 'kaspa-sdk-safe-json-v2.0.0';
