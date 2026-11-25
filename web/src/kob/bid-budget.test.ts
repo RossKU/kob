@@ -29,3 +29,29 @@ describe('a buy order\'s budget', () => {
     expect(locked.escrow).toBe(29_632_559_382n);
   });
 });
+
+describe('the budget of the other buy kinds (the contracts read: KobCondBid.sil, KobIfdBid.sil)', () => {
+  const at = (name: string) => {
+    const b = kob.build(goldenRequest(name, MAKER.pk) as never);
+    const r = kob.recoverOrders(b.tx)[0]!;
+    const st = r.order as OrderState;
+    const d = describeOrder(st, kob);
+    return { st, d, value: BigInt(r.value), locked: splitOrderValue(d, BigInt(r.value)) };
+  };
+  for (const name of ['create.condBid', 'kron.create.condBid']) {
+    it(`${name}: the refund and keeper tips are not taken out of the budget; it buys the whole amount at the worst leg`, () => {
+      const { d, value, locked } = at(name);
+      expect(locked.escrow).toBe(value - locked.reserves);
+      const worst = (d.trigger?.stopPrice ?? 0n) > 0n ? d.price > d.trigger!.stopPrice ? d.price : d.trigger!.stopPrice : d.price;
+      // enough for amountLeft at the leg price plus the tip (the contract's spend, rounded down)
+      expect(locked.escrow).toBeGreaterThanOrEqual(((d.amountLeft ?? 0n) * (worst + d.tip)) / d.scale);
+    });
+  }
+  for (const name of ['create.ifdBid', 'kron.create.ifdBid', 'create.ifdBid.stopEntry']) {
+    it(`${name}: the refund tip is not taken out of the budget; the keeper tip only with a stop entry`, () => {
+      const { d, value, locked } = at(name);
+      const keeper = (d.entry?.entryStop ?? 0n) > 0n ? locked.keeperTips : 0n;
+      expect(locked.escrow).toBe(value - locked.reserves - keeper);
+    });
+  }
+});
