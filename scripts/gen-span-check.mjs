@@ -17,6 +17,7 @@
 //
 //   node scripts/gen-span-check.mjs          rewrite the generated blocks from contracts/artifacts
 //   node scripts/gen-span-check.mjs --check  exit 1 if a block differs from what the artifacts give
+// Either way it exits 1 if a reader's evidence read is not followed by its span check (the call-site lint below).
 //
 // The positions depend only on the evidence state layouts, not on any code, so one build reaches a fixed point.
 import fs from 'node:fs';
@@ -171,6 +172,73 @@ for (const src of FORMER) {
   const text = fs.readFileSync(path.join(root, 'contracts', src), 'utf8');
   if (text.includes(BEGIN) || /\bspanIsData\b/.test(text)) {
     console.error(`${src}: still carries the evidence order's own span check`);
+    bad++;
+  }
+}
+// R13-2: the generated functions are pinned above; their call sites are pinned here. In every reader source, each
+// `tplState(` call (its definition aside) is classified by its input argument:
+//   ev   an evidence order (touch evidence): the next line is `spanX(o);` on the span it took, with X the layout of
+//        the template it read (`ASK_TPL` / `BID_TPL`: the source's ask or bid layout; a template picked at run time:
+//        `spanBook`, and in a pair source `spanBook` in `evLeg` (a KAS-book leg) and `spanAny` in `rd` (a leg or the
+//        pair order)), and the source has exactly `READS` of them;
+//   tk   a token custody UTXO (a token program's state, not an order template): no span check;
+//   k    an exit order compared byte for byte with `exitState` on the next line;
+//   idx  KobIfdPair `heldGx` (the order's own custodies under its token programs).
+// Any other call fails, so a new read of an order must be classified (and checked) here.
+const READS = {
+  'orders/KobCondAsk.sil': 2,
+  'orders/KobCondBid.sil': 2,
+  'orders/KobIfdAsk.sil': 1,
+  'orders/KobIfdBid.sil': 1,
+  'orders/KobCondPair.sil': 2,
+  'orders/KobIfdPair.sil': 2,
+  'orders/kron/KobCondAskKron.sil': 2,
+  'orders/kron/KobCondBidKron.sil': 2,
+  'orders/kron/KobIfdAskKron.sil': 1,
+  'orders/kron/KobIfdBidKron.sil': 1,
+};
+for (const [src, spec] of Object.entries(SOURCES)) {
+  const lines = fs.readFileSync(path.join(root, 'contracts', src), 'utf8').split(/\r?\n/);
+  const ask = spec.book.find((n) => n.startsWith('spanAsk'));
+  const bid = spec.book.find((n) => n.startsWith('spanBid'));
+  const picked = (func) => (spec.pair.length ? { evLeg: ['spanBook'], rd: ['spanAny'] }[func] ?? [] : spec.book.length > 1 ? ['spanBook'] : spec.book);
+  let reads = 0;
+  let func = '';
+  lines.forEach((line, i) => {
+    const fm = line.match(/^\s*function (\w+)\(/);
+    if (fm) func = fm[1];
+    if (!line.includes('tplState(') || /\bfunction tplState\(/.test(line)) return;
+    const at = `${src}:${i + 1}`;
+    const m = line.match(/^\s*byte\[\]\s+(\w+)\s*=\s*tplState\((\w+),[^,]*,[^,]*,[^,]*,\s*(\w+)\);/);
+    if (!m) {
+      console.error(`${at}: a tplState call the span lint cannot read: ${line.trim()}`);
+      bad++;
+      return;
+    }
+    const [, v, idx, tpl] = m;
+    const next = (lines[i + 1] ?? '').trim();
+    if (idx === 'ev') {
+      reads++;
+      const want = tpl === 'ASK_TPL' ? [ask] : tpl === 'BID_TPL' ? [bid] : picked(func);
+      const call = next.match(/^(span\w+)\((\w+)\);/);
+      if (!call || call[2] !== v || !want.includes(call[1])) {
+        console.error(`${at}: the evidence read of ${tpl} in ${func} is not followed by ${want.join(' or ')}(${v}); (found: ${next})`);
+        bad++;
+      }
+    } else if (idx === 'tk') {
+      // a token custody: its program keeps its outputs' spans
+    } else if (idx === 'k') {
+      if (!next.includes('exitState')) {
+        console.error(`${at}: an exit read not compared with exitState on the next line`);
+        bad++;
+      }
+    } else if (!(idx === 'idx' && src === 'orders/KobIfdPair.sil')) {
+      console.error(`${at}: an unclassified tplState read of input ${idx}`);
+      bad++;
+    }
+  });
+  if (reads !== READS[src]) {
+    console.error(`${src}: ${reads} evidence reads, ${READS[src]} expected (classify a new one here)`);
     bad++;
   }
 }

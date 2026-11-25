@@ -348,24 +348,51 @@ fn rigged_signed(b: &kob_protocol::tx::BuiltTx, swallowed: &[usize]) -> kob_prot
     s
 }
 
-/// R10CC-1 and R12-1 against every reader: in each scenario transaction where a stop reads evidence (the conditional,
-/// if-done and pair kinds of both families, and the KRON D0 builds), every evidence fill input (KobAsk, KobBid, KobPair,
-/// the KRON twins and their D0 builds) is rigged, in place or with the span-final push. The transaction is refused at
-/// a reader's input: the reader proves the evidence span canonical (in place, the rigged order's own code may fail
-/// first). The honest transaction passes.
+/// R10CC-1 and R12-1 against every reader, one evidence input at a time (R13-1). In each scenario transaction where a
+/// stop reads evidence (the conditional, if-done and pair kinds of both families and the KRON D0 builds), each evidence
+/// fill input (KobAsk, KobBid, KobPair, the KRON twins and their D0 builds) is rigged alone, in place (R10CC-1: code in
+/// its last 8-byte field) and with the span-final push (R12-1). Every input's outcome is taken from the engine:
+///
+/// * the honest transaction passes (the control of each (reader, evidence) pair);
+/// * a reader input that reads the rigged evidence fails, and it fails for both shapes (one span check refuses both):
+///   the set of failing readers is the same for the two shapes;
+/// * a rigged evidence that no reader refuses is accepted with the span-final push (nothing else reads it), and a
+///   scenario none of whose rigged evidence any reader refuses is on [`UNREAD_EVIDENCE`] (its stops read no evidence);
+/// * every (reader template, reader entry and function, evidence template) of [`READ_PAIRS`] is refused with both
+///   shapes, and no other is, so a reader branch that loses its span check fails this test.
 #[test]
 fn a_rigged_evidence_span_is_refused_by_every_reader() {
     use kob_protocol::build::build;
     use kob_protocol::tx::SigPlan;
-    use kob_protocol::verify::validate_signed;
+    use kob_protocol::verify::{execute, validate_signed};
+    use std::collections::{BTreeMap, BTreeSet};
     let mut all: Vec<(String, kob_protocol::build::Action)> = vec![];
     for t in [TemplateId::Kcc20Ref, TemplateId::KronToken2433, TemplateId::KForgeToken1785] {
-        all.extend(scenarios_on(t));
-        all.extend(delivery_scenarios(t));
-        all.extend(common::pair::pair_scenarios(t, t));
-        all.extend(common::pair::pair_scenarios(TemplateId::Kcc20Ref, t));
+        let tag = t.name();
+        all.extend(scenarios_on(t).into_iter().map(|(n, a)| (format!("{tag}:{n}"), a)));
+        all.extend(delivery_scenarios(t).into_iter().map(|(n, a)| (format!("{tag}:{n}"), a)));
+        all.extend(common::pair::pair_scenarios(t, t).into_iter().map(|(n, a)| (format!("{tag}+{tag}:{n}"), a)));
+        if t != TemplateId::Kcc20Ref {
+            all.extend(
+                common::pair::pair_scenarios(TemplateId::Kcc20Ref, t).into_iter().map(|(n, a)| (format!("KCC20Ref+{tag}:{n}"), a)),
+            );
+        }
+        // the pair updates of every side, kind and evidence mode (the scenarios above arm a buy-stop entry in mode 1 only)
+        if t.serves_pairs() {
+            for (pa, pb) in [(t, t), (TemplateId::Kcc20Ref, t)] {
+                let pn = format!("{}+{}", pa.name(), pb.name());
+                for k in 0..8u8 {
+                    let (ask, trail, mode1) = (k & 4 != 0, k & 2 != 0, k & 1 != 0);
+                    let b = common::pair::cond_update(pa, pb, ask, trail, mode1, false);
+                    all.push((format!("{pn}:cond_update.{ask}.{trail}.{mode1}"), kob_protocol::build::Action::Batch(b)));
+                }
+                for (buy, mode1) in [(true, false), (true, true), (false, false), (false, true)] {
+                    let b = common::pair::ifd_update(pa, pb, buy, mode1);
+                    all.push((format!("{pn}:ifd_update.{buy}.{mode1}"), kob_protocol::build::Action::Batch(b)));
+                }
+            }
+        }
     }
-    all.extend(scenarios_kron());
     let reader = |t: TemplateId| {
         matches!(
             t.base(),
@@ -380,7 +407,10 @@ fn a_rigged_evidence_span_is_refused_by_every_reader() {
     let evidence = |t: TemplateId, e: &str| {
         matches!((t.base(), e), (TemplateId::KobAsk, "settle") | (TemplateId::KobBid, "fill") | (TemplateId::KobPair, "settle"))
     };
-    let mut refused: std::collections::BTreeMap<String, usize> = Default::default();
+    // (reader, reader entry and function, evidence) -> the shapes refused at the reader
+    let mut refused: BTreeMap<(String, String, String), BTreeSet<&str>> = Default::default();
+    // scenarios with readers and evidence where no evidence is read
+    let mut unread: BTreeSet<String> = Default::default();
     for (name, a) in all {
         let Ok(built) = build(&a) else { continue };
         let entry = |k: usize| match &built.plans[k] {
@@ -394,51 +424,144 @@ fn a_rigged_evidence_span_is_refused_by_every_reader() {
             continue;
         }
         validate_signed(&rigged_signed(&built, &[])).unwrap_or_else(|e| panic!("{name}: the honest transaction: {e}"));
-        for swallow in [false, true] {
-            let mut b = built.clone();
-            for &k in &evs {
+        let mut read_any = false;
+        for &k in &evs {
+            let (et, _) = entry(k).unwrap();
+            let mut failing: BTreeMap<&str, BTreeSet<usize>> = Default::default();
+            for (shape, swallow) in [("in place", false), ("span-final push", true)] {
+                let mut b = built.clone();
                 rig_evidence(&mut b, k, swallow);
+                resign(&mut b);
+                let one = [k];
+                let s = rigged_signed(&b, if swallow { &one[..] } else { &[] });
+                let (tx, entries) = s.tx.to_tx().unwrap();
+                let out = execute(&tx, &entries, true).unwrap();
+                let f: BTreeSet<usize> = readers.iter().copied().filter(|&r| out[r].is_err()).collect();
+                for &r in &f {
+                    let (rt, re) = entry(r).unwrap();
+                    let func = reader_fn(&built.plans[r], k)
+                        .unwrap_or_else(|| panic!("{name}: {} refuses input {k}, which it does not read", rt.name()));
+                    refused.entry((rt.name().into(), format!("{re}.{func}"), et.name().into())).or_default().insert(shape);
+                }
+                if f.is_empty() && swallow {
+                    // nothing refuses the swallowed evidence: no reader reads it, and the transaction is accepted
+                    assert!(
+                        validate_signed(&s).is_ok(),
+                        "{name}: {} at input {k} with the span-final push: no reader fails, yet the transaction is refused",
+                        et.name()
+                    );
+                }
+                failing.insert(shape, f);
             }
-            resign(&mut b);
-            let v = validate_signed(&rigged_signed(&b, if swallow { &evs } else { &[] }));
-            let Err(e) = v else {
-                // a transaction whose stops read no evidence (e.g. a take-profit fill next to a plain fill) is not a read
-                let names: Vec<String> =
-                    readers.iter().map(|&k| format!("{} {}", entry(k).unwrap().0.name(), entry(k).unwrap().1)).collect();
-                println!("not refused (no evidence read?): {name} swallow={swallow} readers {names:?}");
-                continue;
-            };
-            let e = e.to_string();
-            // in place, the rigged order's own code may fail first (it runs on the rigged field): refused either way
-            if !swallow && evs.iter().any(|k| e.contains(&format!("input {k}:"))) {
-                *refused.entry("evidence code (in place)".into()).or_default() += 1;
-                continue;
-            }
-            let at = readers.iter().copied().find(|k| e.contains(&format!("input {k}:"))).unwrap_or_else(|| panic!("{name}: {e}"));
-            let (rt, re) = entry(at).unwrap();
-            let evn: std::collections::BTreeSet<&str> = evs.iter().map(|&k| entry(k).unwrap().0.name()).collect();
-            *refused.entry(format!("{} {re} <- {evn:?} {}", rt.name(), if swallow { "R12-1" } else { "R10CC-1" })).or_default() += 1;
+            assert_eq!(
+                failing["in place"],
+                failing["span-final push"],
+                "{name}: {} at input {k}: the readers refusing the two rigged shapes differ",
+                et.name()
+            );
+            read_any |= !failing["in place"].is_empty();
+        }
+        if !read_any {
+            unread.insert(name);
         }
     }
-    println!("{refused:#?}");
-    let seen = |r: &str| refused.keys().any(|k| k.starts_with(&format!("{r} ")));
-    for r in [
-        "KobCondAsk",
-        "KobCondBid",
-        "KobIfdAsk",
-        "KobIfdBid",
-        "KobCondPair",
-        "KobIfdPair",
-        "KobCondAskKron",
-        "KobCondBidKron",
-        "KobIfdAskKron",
-        "KobIfdBidKron",
-        "KobCondAskKronD0",
-        "KobCondBidKronD0",
-    ] {
-        assert!(seen(r), "no rigged evidence was tried against {r}: {refused:#?}");
+    println!("refused: {refused:#?}");
+    println!("unread: {unread:#?}");
+    // the list is exact: every scenario on it reads no evidence on some program, and no other scenario goes unread
+    let suffix = |n: &str| n.split_once(':').map_or(n.to_string(), |(_, s)| s.to_string());
+    let unread_kinds: BTreeSet<String> = unread.iter().map(|n| suffix(n)).collect();
+    let expected: BTreeSet<String> = UNREAD_EVIDENCE.iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        unread_kinds, expected,
+        "scenarios whose rigged evidence no reader refuses (a reader branch without its span check?): {unread:#?}"
+    );
+    for (r, e, ev) in READ_PAIRS {
+        let shapes = refused.get(&(r.to_string(), e.to_string(), ev.to_string()));
+        assert!(
+            shapes.is_some_and(|s| s.len() == 2),
+            "{r} {e} <- {ev}: not refused with both rigged shapes ({shapes:?}); refused: {refused:#?}"
+        );
     }
+    let listed: BTreeSet<(String, String, String)> =
+        READ_PAIRS.iter().map(|(r, e, ev)| (r.to_string(), e.to_string(), ev.to_string())).collect();
+    let extra: Vec<_> = refused.keys().filter(|k| !listed.contains(*k)).collect();
+    assert!(extra.is_empty(), "refused pairs missing from READ_PAIRS (add them): {extra:#?}");
 }
+
+/// Every (reader template, `entry.function`, evidence template) the scenarios exercise ([`reader_fn`]). A reader function
+/// reads one evidence layout per branch, so each branch is a row: a KAS-book cond reader takes an ask and a bid layout in
+/// its update and its own side in the settle path, an if-done reader its own side, a pair reader each KAS-book layout
+/// through `rd` (leg A, evMode 0) and `evLeg` (leg B) and the pair layout through `rd` (evMode 1). Not reachable here:
+/// `KobCondAskKronD0` settle with a `KobAskKronD0` (the only D0 program, KForgeToken1785, takes one token input per
+/// transaction).
+const READ_PAIRS: &[(&str, &str, &str)] = &[
+    ("KobCondAsk", "settle.touch", "KobAsk"),
+    ("KobCondAsk", "update.touch", "KobAsk"),
+    ("KobCondAsk", "update.touch", "KobBid"),
+    ("KobCondAskKron", "settle.touch", "KobAskKron"),
+    ("KobCondAskKron", "update.touch", "KobAskKron"),
+    ("KobCondAskKron", "update.touch", "KobBidKron"),
+    ("KobCondAskKronD0", "update.touch", "KobAskKronD0"),
+    ("KobCondAskKronD0", "update.touch", "KobBidKronD0"),
+    ("KobCondBid", "settle.touch", "KobBid"),
+    ("KobCondBid", "update.touch", "KobAsk"),
+    ("KobCondBid", "update.touch", "KobBid"),
+    ("KobCondBidKron", "settle.touch", "KobBidKron"),
+    ("KobCondBidKron", "update.touch", "KobAskKron"),
+    ("KobCondBidKron", "update.touch", "KobBidKron"),
+    ("KobCondBidKronD0", "settle.touch", "KobBidKronD0"),
+    ("KobCondBidKronD0", "update.touch", "KobAskKronD0"),
+    ("KobCondBidKronD0", "update.touch", "KobBidKronD0"),
+    ("KobCondPair", "settle.evLeg", "KobAsk"),
+    ("KobCondPair", "settle.evLeg", "KobAskKron"),
+    ("KobCondPair", "settle.evLeg", "KobBid"),
+    ("KobCondPair", "settle.evLeg", "KobBidKron"),
+    ("KobCondPair", "settle.rd.book", "KobAsk"),
+    ("KobCondPair", "settle.rd.book", "KobAskKron"),
+    ("KobCondPair", "settle.rd.book", "KobBid"),
+    ("KobCondPair", "settle.rd.book", "KobBidKron"),
+    ("KobCondPair", "settle.rd.pair", "KobPair"),
+    ("KobIfdAsk", "settle.touch", "KobAsk"),
+    ("KobIfdAsk", "update.touch", "KobAsk"),
+    ("KobIfdAskKron", "settle.touch", "KobAskKron"),
+    ("KobIfdAskKron", "update.touch", "KobAskKron"),
+    ("KobIfdAskKronD0", "update.touch", "KobAskKronD0"),
+    ("KobIfdBid", "fill.touch", "KobBid"),
+    ("KobIfdBid", "update.touch", "KobBid"),
+    ("KobIfdBidKron", "fill.touch", "KobBidKron"),
+    ("KobIfdBidKron", "update.touch", "KobBidKron"),
+    ("KobIfdBidKronD0", "fill.touch", "KobBidKronD0"),
+    ("KobIfdBidKronD0", "update.touch", "KobBidKronD0"),
+    ("KobIfdPair", "fill.evLeg", "KobAsk"),
+    ("KobIfdPair", "fill.evLeg", "KobAskKron"),
+    ("KobIfdPair", "fill.evLeg", "KobBid"),
+    ("KobIfdPair", "fill.evLeg", "KobBidKron"),
+    ("KobIfdPair", "fill.rd.book", "KobAsk"),
+    ("KobIfdPair", "fill.rd.book", "KobAskKron"),
+    ("KobIfdPair", "fill.rd.book", "KobBid"),
+    ("KobIfdPair", "fill.rd.book", "KobBidKron"),
+    ("KobIfdPair", "fill.rd.pair", "KobPair"),
+];
+
+/// Scenarios with a reader and an evidence fill where no reader reads any evidence: a stop next to fills it does not
+/// use, e.g. a take-profit fill beside a plain fill. Every other such scenario must refuse at least one rigged evidence.
+const UNREAD_EVIDENCE: &[&str] = &[
+    "pair.cond.ask.stop.auction",
+    "pair.cond.ask.tp",
+    "pair.cond.bid.limit",
+    "pair.ifd.ask.book",
+    "pair.ifd.ask.close",
+    "pair.ifd.ask.cont",
+    "pair.ifd.bid.book",
+    "pair.ifd.bid.close",
+    "pair.ifd.bid.cont",
+    "pair.rearm.ask",
+    "pair.rearm.ask.new",
+    "pair.rearm.ask.sellout",
+    "pair.rearm.bid",
+    "pair.rearm.bid.new",
+    "pair.rearm.bid.sellout",
+];
 
 /// The canonical pushes of a state span: (offset, header length, data length) per field.
 fn pushes(span: &[u8]) -> Vec<(usize, usize, usize)> {
@@ -877,4 +1000,28 @@ fn a_pair_sell_trail_stops_at_max_stop_in_the_engine() {
     assert_eq!(k, 2);
     r.expect("two steps below");
     assert!(run(MAX_STOP_PRICE - 2 * step, Some(1)).0.is_err(), "k = 1 is not the largest");
+}
+
+/// The reader function of `plan` that reads input `k`. A pair reader's entry reads evidence A through `rd` (a KAS-book leg in
+/// evMode 0, the pair order in evMode 1) and, in evMode 0, evidence B through `evLeg`; its arguments name both inputs. The
+/// other readers read one evidence input per entry (`touch`, or the settle path's read).
+fn reader_fn(plan: &kob_protocol::tx::SigPlan, k: usize) -> Option<&'static str> {
+    use kob_protocol::tx::{Arg, SigPlan};
+    let SigPlan::Entry { template, args, .. } = plan else { return None };
+    let (a, b, mode) = match template.base() {
+        TemplateId::KobCondPair => (7, 8, 10),
+        TemplateId::KobIfdPair => (9, 10, 12),
+        _ => return Some("touch"),
+    };
+    let int = |i: usize| match &args[i] {
+        Arg::Int(v) => *v,
+        x => panic!("{}: argument {i} is {x:?}, not an evidence index", template.name()),
+    };
+    if int(a) == k as i64 {
+        Some(if int(mode) == 0 { "rd.book" } else { "rd.pair" })
+    } else if int(mode) == 0 && int(b) == k as i64 {
+        Some("evLeg")
+    } else {
+        None
+    }
 }
