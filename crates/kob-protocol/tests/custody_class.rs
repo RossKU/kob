@@ -478,3 +478,24 @@ fn the_engine_takes_a_guarded_unit_as_the_custody_of_an_if_done_entry_fill() {
     let e = validate_signed(&signed).expect_err("a guarded unit is no custody").to_string();
     assert!(e.contains("input 0"), "{e}");
 }
+
+/// TPLGEN row 2 and the retired templates: the templates of 428653bf3 (now cancel-only) compare a sell custody without
+/// its guard, so the cancel of such an order still takes a guarded unit as its custody; a pinned order's cancel does not.
+#[test]
+fn a_retired_orders_cancel_still_takes_a_guarded_custody() {
+    use kob_protocol::retired::{retired, Retirement};
+    let t = TemplateId::Kcc20Ref8x8;
+    let s = AnyState::KobAsk(ask(MAKER_A, P250, t));
+    let o = order(70, CARRIER, O, 1_000, s.clone());
+    let good = real(t, &s);
+    let mut only = good.clone();
+    only[0] = guarded(&good[0], 0x5d);
+    let r =
+        retired().iter().find(|r| r.kind == TemplateId::KobAsk && r.retirement == Retirement::PreMainnet).expect("the retired KobAsk");
+    let mut req = cancel(o.clone(), &only, vec![]);
+    req.retired = Some(r.hash);
+    let built = build_cancel_order(&req, &kob_protocol::budget::lookup).unwrap_or_else(|e| panic!("retired: {e}"));
+    engine(&built, "retired KobAsk, guarded custody");
+    let e = build_cancel_order(&cancel(o, &only, vec![]), &kob_protocol::budget::lookup).expect_err("pinned").to_string();
+    assert!(e.contains("not exactly the one its order pins"), "{e}");
+}

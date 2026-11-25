@@ -157,7 +157,7 @@ fn maker_units(built: &BuiltTx) -> i64 {
 #[test]
 fn every_retired_template_is_cancelled_by_its_maker_in_the_engine() {
     let maker_spk = format!("0000{}", to_hex(kob_protocol::script::p2pk_spk(&pk(MAKER_A)).script()));
-    assert_eq!(retired().len(), 49);
+    assert_eq!(retired().len(), 71);
     for r in retired() {
         let p = program_of(r.kind);
         let (state, value) = order_of(r.kind, p);
@@ -174,7 +174,8 @@ fn every_retired_template_is_cancelled_by_its_maker_in_the_engine() {
             built.plans[0]
         );
         let span = r.encode_state(&state).unwrap();
-        assert_eq!(span, state.try_encode_layout(StateLayout::Legacy).unwrap(), "{label}: the retired order's span is legacy");
+        // in the layout its retirement placed it with (legacy before the delivery block; today's for the pre-mainnet re-pin)
+        assert_eq!(span, state.try_encode_layout(r.retirement.layout(r.kind)).unwrap(), "{label}: the retired order's span layout");
         // and its terms decode with today's codec (every delivery field zero)
         assert_eq!(AnyState::decode(r.kind, &span).unwrap(), state, "{label}: the span decodes");
         let spk = spk_from_file(r, &span);
