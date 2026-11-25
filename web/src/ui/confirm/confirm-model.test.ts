@@ -233,20 +233,20 @@ describe('decoded spends and verdicts', () => {
 });
 
 describe('token labels and order types', () => {
-  it('never shows a bare ticker, and no word about a registry: a ticker carries its id, a token without one is its id', () => {
+  it('never shows a bare ticker, and no word about a registry: a ticker carries its whole id, a token without one is its whole id', () => {
     const ref = { covenantId: '70'.repeat(32), ticker: 'TST', decimals: 3, display: '', inRegistry: true, tradable: true };
-    expect(tokenLabel(ref, (k, p) => t(k, p), registry)).toBe('TST (7070...7070)');
-    expect(tokenLabel({ ...ref, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('TST (abababab…abababab)');
-    expect(tokenLabel({ ...ref, ticker: null, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('abababab…abababab');
+    expect(tokenLabel(ref, (k, p) => t(k, p), registry)).toBe(`TST (${'70'.repeat(32)})`);
+    expect(tokenLabel({ ...ref, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe(`TST (${'ab'.repeat(32)})`);
+    expect(tokenLabel({ ...ref, ticker: null, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('ab'.repeat(32));
     // no decimals known to the caller: the scale the order names, the whole token the ticket used
     const { summary, rows } = created('create.ask', null);
-    expect(rowOf(rows, 'amount').value).toBe('10 70707070…70707070');
+    expect(rowOf(rows, 'amount').value).toBe('10 token'); // the unit is the plain word; the token is named in full above
     expect(rows.some((r) => r.value.includes(' / '))).toBe(false);
     expect(codes(summary.warnings)).toContain('token-unlisted');
     // nothing states its decimals (a token movement with no order): the raw amount, said so
-    expect(tokenAmountText({ ...ref, decimals: null, ticker: null }, 500_000_000n, (k, p) => t(k, p))).toBe('500,000,000 70707070…70707070 (raw amount)');
-    // a ticker that reads as KAS is never a bare unit
-    expect(tokenAmountText({ ...ref, decimals: 0, ticker: 'KAS' }, 5n)).toBe('5 KAS (70707070…70707070)');
+    expect(tokenAmountText({ ...ref, decimals: null, ticker: null }, 500_000_000n, (k, p) => t(k, p))).toBe('500,000,000 token (raw amount)');
+    // a ticker that reads as KAS is never a unit: the plain word, the token named in full above
+    expect(tokenAmountText({ ...ref, decimals: 0, ticker: 'KAS' }, 5n)).toBe('5 token');
   });
 
   it('classifies order types from the state, not from anything the form claimed', () => {

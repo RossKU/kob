@@ -19,9 +19,9 @@ describe('covenant id forms', () => {
     expect(longId(ID)).toBe('01234567…89abcdef');
   });
 
-  it('the confirmation names a token outside the registry by 8 + 8 hex', () => {
+  it('the confirmation names a token outside the registry by its whole id', () => {
     const label = tokenLabel({ covenantId: ID, ticker: null, decimals: null, display: '', inRegistry: false, tradable: false }, t, reg());
-    expect(label).toContain('01234567…89abcdef');
+    expect(label).toContain(ID);
   });
 
   it('a token synthesised with its long id as ticker is shown once by it', () => {

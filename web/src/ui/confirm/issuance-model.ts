@@ -29,7 +29,8 @@ import type { WalletNotice } from '../../kob/decode';
 
 const GROUP = { group: ',' };
 const kas = (v: bigint): string => `${formatKas(v, GROUP)} KAS`;
-const short = (h: string): string => (h.length > 12 ? `${h.slice(0, 4)}...${h.slice(-4)}` : h);
+/** An id on the signing screens: whole, never shortened in the middle (founder 2026-11-12). */
+const short = (h: string): string => h;
 const p2pkSpk = (pk: Hex): string => `000020${pk}ac`;
 /**
  * More than this in fees for a genesis is never legitimate (an 8-output genesis costs a few

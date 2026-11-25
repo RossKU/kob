@@ -86,8 +86,9 @@ test('a market of 6 decimals with nothing on chain stating them: the final confi
   await waitReviewable(page);
   await clickPlaceOnly(page);
   const receipt = await readReceipt(page);
-  expect(receipt.orders[0]!.token).toBe(`${OTHER_SHORT} (6 decimals, from its price scale)`);
-  expect(receipt.orders[0]!.rows).toMatchObject({ Amount: `2 ${OTHER_SHORT}`, 'Limit price': `10 KAS per ${OTHER_SHORT}` });
+  // the signing screen names the token once by its whole id; its unit is the plain word (founder 2026-11-12)
+  expect(receipt.orders[0]!.token).toBe(`${'84'.repeat(32)} (6 decimals, from its price scale)`);
+  expect(receipt.orders[0]!.rows).toMatchObject({ Amount: '2 token', 'Limit price': '10 KAS per token' });
   await cancelReceipt(page);
 });
 

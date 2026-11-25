@@ -21,7 +21,15 @@ import { isTokenProgram } from '../kob/programs.generated';
 import { formatRowDate } from '../ui/kit/format';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../kob/order-facts';
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
-import { longId, tickerUnit, type TokenInfo, type TokenRegistry } from '../kob/registry';
+import { tickerNeedsId, type TokenInfo, type TokenRegistry } from '../kob/registry';
+
+/** An id on the signing screens: whole, never shortened in the middle (founder 2026-11-12). */
+const wholeId = (h: string): string => h;
+/**
+ * A ticker as a unit on the signing screens: as it is, or the plain word "token" where it reads as
+ * KAS or is not plain ASCII; never an id fragment (the token is named in full above).
+ */
+const signUnit = (ticker: string, _covenantId?: string): string => (tickerNeedsId(ticker) ? t('signer.token.unit') : ticker);
 import type { BuiltTx, Hex } from '../kob/types';
 import { decimalsOfScale, formatKas, formatTokenAmount } from '../kob/units';
 import type { KobWasm } from '../kob/wasm';
@@ -131,17 +139,17 @@ const tokenName = (covenantId: Hex, hint: TokenHint | undefined, frame = false):
   if (frame) return frameTokenName(covenantId, hint);
   // Nothing states its decimals. It is named by its covenant id, and the label says the amount is
   // raw.
-  if (!hint || hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: longId(covenantId) });
+  if (!hint || hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: wholeId(covenantId) });
   // Named and marked as app/token-display.ts shows it, by its covenant id and by the ticker its
   // creator gave it where it has one.
-  if (hint.source === 'scale') return t('signer.net.tokenScale', { id: longId(covenantId), decimals: hint.decimals });
-  if (hint.source === 'program') return t('signer.net.tokenProgram', { id: longId(covenantId), decimals: hint.decimals, source: hint.convention ?? '' });
-  if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: longId(covenantId) });
-  if (hint.source === 'declared') return t('signer.net.tokenDeclared', { ticker: hint.ticker, id: longId(covenantId) });
+  if (hint.source === 'scale') return t('signer.net.tokenScale', { id: wholeId(covenantId), decimals: hint.decimals });
+  if (hint.source === 'program') return t('signer.net.tokenProgram', { id: wholeId(covenantId), decimals: hint.decimals, source: hint.convention ?? '' });
+  if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: wholeId(covenantId) });
+  if (hint.source === 'declared') return t('signer.net.tokenDeclared', { ticker: hint.ticker, id: wholeId(covenantId) });
   // A registry token. In the signer frame (`frame`) its ticker and decimals are the app's word, and
   // the label says so. The app's own confirmation is the app, so it shows them plainly.
-  if (!frame) return `${hint.ticker} (${longId(covenantId)})`;
-  return t('signer.net.tokenListed', { ticker: hint.ticker, id: longId(covenantId), decimals: hint.decimals });
+  if (!frame) return `${hint.ticker} (${wholeId(covenantId)})`;
+  return t('signer.net.tokenListed', { ticker: hint.ticker, id: wholeId(covenantId), decimals: hint.decimals });
 };
 
 /**
@@ -179,7 +187,7 @@ function frameTokenName(covenantId: Hex, h: TokenHint | undefined): string {
  */
 function refOfHint(covenantId: Hex, hints: TokenHint[], frame = false, role?: 'A' | 'B'): TokenRef {
   const h = hints.find((x) => x.covenantId === covenantId);
-  const ticker = frame ? (verifiedTicker(h) ?? (role ? t('signer.token.unitRole', { role }) : t('signer.token.unit'))) : h ? (h.ticker || longId(covenantId)) : null;
+  const ticker = frame ? (verifiedTicker(h) ?? (role ? t('signer.token.unitRole', { role }) : t('signer.token.unit'))) : h ? (h.ticker || (role ? t('signer.token.unitRole', { role }) : t('signer.token.unit'))) : null;
   return { covenantId, ticker, decimals: h?.decimals ?? null, display: tokenName(covenantId, h, frame), inRegistry: false, tradable: false };
 }
 
@@ -216,7 +224,7 @@ function withOrderScales(s: SigningSummary, hints: readonly TokenHint[]): TokenH
  */
 function hintRegistry(hints: TokenHint[], frame = false): TokenRegistry {
   // a pair order's quote token B: in the frame its unit is a vouched ticker or "token B"
-  const tickerOf = (h: TokenHint) => (frame ? (verifiedTicker(h) ?? t('signer.token.unitRole', { role: 'B' })) : h.ticker || longId(h.covenantId));
+  const tickerOf = (h: TokenHint) => (frame ? (verifiedTicker(h) ?? t('signer.token.unitRole', { role: 'B' })) : h.ticker || t('signer.token.unitRole', { role: 'B' }));
   const byCovenantId = new Map(hints.map((h) => [h.covenantId, { covenantId: h.covenantId, ticker: tickerOf(h), decimals: h.decimals, tradable: false, ...(frame ? { openList: true } : {}) } as unknown as TokenInfo]));
   return { network: '', templates: [], templateChecks: [], tokens: [], byCovenantId };
 }
@@ -283,7 +291,7 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
   const d = o.description;
   const kind = baseKind(d.kind);
   if (!hint?.inverted || d.pair || d.entry || (kind !== 'KobAsk' && kind !== 'KobBid') || d.scale <= 0n || d.price <= 0n) return null;
-  const T = hint.ticker ? tickerUnit(hint.ticker, d.tokenCovId) : longId(d.tokenCovId);
+  const T = hint.ticker ? signUnit(hint.ticker, d.tokenCovId) : t('signer.token.unit');
   const dec = hint.decimals;
   const scale = d.scale;
   // A price that decays to 0 is still a decay. Its bound is 0 KAS, and the summary says so.
@@ -546,7 +554,10 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   lines.push({ label: t('signer.net.kas'), value: signed(k.walletDelta, kas), dir: k.walletDelta < 0n ? 'out' : k.walletDelta > 0n ? 'in' : null });
   // Every token figure carries its unit, as in "−2 EXKCC". A token nothing names has none to
   // carry. That is an assumed one, whose amount is raw and whose label is its covenant id.
-  const unitOf = (hint: TokenHint | undefined): string => (hint && hint.source !== 'assumed' && hint.ticker ? ` ${tickerUnit(hint.ticker, hint.covenantId)}` : '');
+  // In the frame the unit is a ticker the frame vouches for, else the word "token" (the token is
+  // named in full in the line's label): never the app's ticker, never an id fragment.
+  const unitOf = (hint: TokenHint | undefined): string =>
+    terms ? (hint && hint.source !== 'assumed' ? ` ${verifiedTicker(hint) ?? t('signer.token.unit')}` : '') : hint && hint.source !== 'assumed' && hint.ticker ? ` ${signUnit(hint.ticker, hint.covenantId)}` : '';
   // Whom a payment or transfer to other keys goes to: each WHOLE key (never shortened in the
   // middle, founder 2026-11-12: a chosen head and tail is cheap to grind), and an output to a
   // script the decoder could not read as such (R8F2-I1).
@@ -579,6 +590,24 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     // the id is the app's word (no signature covers an input's covenant id); the terms are the
     // order's bound state (R9FB2-4)
     const d = sp.description;
+    // an amend in place changes the order, it does not close it: its terms before and after, from
+    // the two bound states
+    const amended = s.orders.find((o) => o.amendedFrom === sp.input);
+    if (amended && d) {
+      const n = amended.description;
+      const hint = hints.find((h) => h.covenantId === d.tokenCovId);
+      const unit = unitOf(hint).trim() || t('signer.token.unit');
+      const amt = (v: bigint | null) => (v === null ? '-' : hint && hint.source !== 'assumed' ? `${formatTokenAmount(v, hint.decimals)} ${unit}` : t('signer.shape.rawUnitsShort', { amount: String(v) }));
+      const price = (v: bigint) => t('signer.net.pricePer', { price: formatKas(v), unit });
+      const parts = [
+        d.price !== n.price ? t('signer.net.changePrice', { was: price(d.price), now: price(n.price) }) : null,
+        d.amountLeft !== n.amountLeft ? t('signer.net.changeAmount', { was: amt(d.amountLeft), now: amt(n.amountLeft) }) : null,
+        d.expiryDaa !== n.expiryDaa ? t('signer.net.changeExpiry', { was: String(d.expiryDaa), now: String(n.expiryDaa) }) : null,
+      ].filter((x): x is string => !!x);
+      const terms0 = `${d.kind}, ${d.side}${parts.length ? `; ${parts.join('; ')}` : ''}`;
+      lines.push({ label: t('signer.net.changes'), value: terms ? t('signer.net.orderTerms', { id: sp.covenantId!, terms: terms0 }) : `${sp.covenantId!}: ${terms0}`, dir: null, mono: true });
+      continue;
+    }
     // the whole covenant id (never shortened in the middle)
     const value = terms && d ? t('signer.net.orderTerms', { id: sp.covenantId!, terms: `${d.kind}, ${d.side}` }) : sp.covenantId!;
     lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value, dir: null, mono: true });
@@ -591,7 +620,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     if (!token) continue;
     const hint = hints.find((h) => h.covenantId === token);
     const amount = (v: bigint) => `${formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unitOf(hint)}`;
-    if (sp.action === 'claim') lines.push({ label: t('signer.net.claims'), value: longId(sp.covenantId!), dir: null });
+    if (sp.action === 'claim') lines.push({ label: t('signer.net.claims'), value: sp.covenantId!, dir: null, mono: true });
     lines.push({ label: t('signer.net.claimed', { token: tokenName(token, hint, terms) }), value: amount(b.amount), dir: null });
     if (b.toYou !== undefined && b.toOrder !== undefined) {
       const to = b.toOrder === 0n ? t('signer.net.claimToYou') : b.toYou === 0n ? t('signer.net.claimToOrder') : t('signer.net.claimSplit', { order: amount(b.toOrder), you: amount(b.toYou) });
@@ -606,7 +635,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   if (s.take) {
     const tk = s.take;
     const hint = hints.find((h) => h.covenantId === tk.ref.covenantId);
-    const unit = hint && hint.source !== 'assumed' && hint.ticker ? tickerUnit(hint.ticker, hint.covenantId) : longId(tk.ref.covenantId);
+    const unit = hint && hint.source !== 'assumed' && hint.ticker ? signUnit(hint.ticker, hint.covenantId) : t('signer.token.unit');
     lines.push({ label: t('signer.take.fills'), value: t('signer.take.fillsValue', { orders: tk.fills.length, amount: `${formatTokenAmount(tk.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS)} ${unit}` }), dir: null });
     if (tk.avgPrice !== null) lines.push({ label: t('signer.take.price'), value: t('signer.take.priceValue', { price: formatKas(tk.avgPrice), unit }), dir: null });
   }
@@ -620,7 +649,9 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   const found: { code: string }[] = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
   // The decoder's info findings are said in the frame too (a swept order's KAS, strays swept), as
   // the app's confirmation shows them (R9FB2-9).
-  if (terms) for (const f of s.info) lines.push({ label: t('signer.info'), value: issueText(f), dir: null });
+  // (a note that only repeats a line above, the tokens or KAS a sweep or cancel returns, is left out:
+  // its raw amount would read worse than the line)
+  if (terms) for (const f of s.info) if (!['strays-swept', 'other-strays-swept', 'kas-released'].includes(f.code)) lines.push({ label: t('signer.info'), value: issueText(f), dir: null });
   // the frame signs only its closed list of shapes, judged on bound data (signer/shapes.ts)
   if (terms && kob && built) {
     // token amounts as the token lines above name them: scaled with their stated source, else in
@@ -628,8 +659,8 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     const fmtToken = (cov: Hex, v: bigint): string => {
       const hint = hints.find((h) => h.covenantId === cov);
       // with no ticker the amount carries the token's own label, as the token line above names it
-      if (hint && hint.source !== 'assumed') return hint.ticker ? `${formatTokenAmount(v, hint.decimals)}${unitOf(hint)}` : `${formatTokenAmount(v, hint.decimals)} (${tokenName(cov, hint, true)})`;
-      return t('signer.shape.rawUnits', { amount: String(v), token: cov });
+      if (hint && hint.source !== 'assumed') return `${formatTokenAmount(v, hint.decimals)}${unitOf(hint)}`;
+      return t('signer.shape.rawUnitsShort', { amount: String(v) });
     };
     const v = frameShape(s, built, s.maker, kob, fmtToken);
     if (!v.ok) {
@@ -786,7 +817,7 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
     ...(claim
       ? [
           { label: t('signer.declare.program'), value: claim.program, dir: null },
-          { label: t('signer.declare.extension'), value: longId(claim.extensionCommitment), dir: null },
+          { label: t('signer.declare.extension'), value: wholeId(claim.extensionCommitment), dir: null },
         ]
       : []),
     ...(claim && decl.decimals !== null
@@ -832,7 +863,7 @@ function durationWords(ms: number): string {
  */
 export function sessionSummary(terms: Pick<SessionTermsView, 'covenantId' | 'links' | 'utxos' | 'outputs' | 'amount' | 'feeMax' | 'plannedFee' | 'ttlMs'>, hints: TokenHint[], decoded: SigningSummary): SignerSummary {
   const hint = hints.find((h) => h.covenantId === terms.covenantId);
-  const unit = hint && hint.source !== 'assumed' && hint.ticker ? ` ${tickerUnit(hint.ticker, hint.covenantId)}` : '';
+  const unit = hint && hint.source !== 'assumed' && hint.ticker ? ` ${signUnit(hint.ticker, hint.covenantId)}` : '';
   // Nothing this frame can check states the decimals. No pinned table lists the token, and no
   // declaration or convention was hinted. So the amount is in base units and says so, never as a
   // bare integer.
@@ -844,7 +875,7 @@ export function sessionSummary(terms: Pick<SessionTermsView, 'covenantId' | 'lin
     { label: t('signer.session.txs'), value: t('signer.session.txsValue', { count: terms.links.length }), dir: null },
     { label: t('signer.session.valid'), value: t('signer.session.validValue', { time: durationWords(terms.ttlMs) }), dir: null },
   ];
-  const title = hint && hint.source !== 'assumed' && hint.ticker ? t('signer.session.title', { ticker: tickerUnit(hint.ticker, hint.covenantId) }) : t('signer.session.titleToken');
+  const title = hint && hint.source !== 'assumed' && hint.ticker ? t('signer.session.title', { ticker: signUnit(hint.ticker, hint.covenantId) }) : t('signer.session.titleToken');
   return {
     title, lines, orders: [],
     fee: t('signer.session.feeValue', { max: formatKas(terms.feeMax), planned: formatKas(terms.plannedFee) }),

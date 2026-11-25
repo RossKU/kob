@@ -111,16 +111,17 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   const rows = await identityRows(page);
   // the identity rows of both tokens (a scale row per token whose unit is the indexer's, R9FB3-2)
   expect(Object.keys(rows).filter((k) => k.startsWith('ext-')).sort()).toEqual([`ext-${base}`, `ext-${QUOTE}`].sort());
-  expect(rows[`ext-${QUOTE}`]!.text).toContain(long(QUOTE));
+  expect(rows[`ext-${QUOTE}`]!.text).toContain(QUOTE); // the whole id (founder 2026-11-12)
   const receipt = await readReceipt(page);
   // The amounts read as the ticket read them: 8 and 6 decimals, the scales of the two markets. A
   // token without a ticker is named by its id, also as the quote.
+  // with no tickers the units are "token A" / "token B"; both whole ids are named above (founder 2026-11-12)
   expect(receipt.orders[0]!.rows).toMatchObject({
-    Pair: `sells ${long(base)} for ${long(QUOTE)} (prices in ${long(QUOTE)} per ${long(base)})`,
-    'Base tokens locked in the order': `2 ${long(base)}`,
-    'Limit price': `0.0515 ${long(QUOTE)} per ${long(base)}`,
+    Pair: 'sells token A for token B (prices in token B per token A)',
+    'Base tokens locked in the order': '2 token A',
+    'Limit price': '0.0515 token B per token A',
   });
-  expect(Object.values(receipt.orders[0]!.rows), 'the least it receives, 2 x 0.0515').toContain(`0.103 ${long(QUOTE)}`);
+  expect(Object.values(receipt.orders[0]!.rows), 'the least it receives, 2 x 0.0515').toContain('0.103 token B');
   await confirmReceipt(page);
   const placed = await placedBy(mock, await waitSubmitted(page));
   const view = placed.views[0];
@@ -178,7 +179,8 @@ test('only the quote unregistered: a buy escrows it, its identity alone is shown
   await clickPlaceOnly(page);
   expect(Object.keys(await identityRows(page)).filter((k) => k.startsWith('ext-'))).toEqual([`ext-${QUOTE}`]);
   const receipt = await readReceipt(page);
-  expect(receipt.orders[0]!.rows).toMatchObject({ Pair: `buys EXKCC with ${long(QUOTE)} (prices in ${long(QUOTE)} per EXKCC)`, 'Limit price': `0.048 ${long(QUOTE)} per EXKCC` });
+  // the quote has no ticker: its unit is "token B", its whole id named above
+  expect(receipt.orders[0]!.rows).toMatchObject({ Pair: 'buys EXKCC with token B (prices in token B per EXKCC)', 'Limit price': '0.048 token B per EXKCC' });
   await confirmReceipt(page);
   const placed = await placedBy(mock, await waitSubmitted(page));
   const view = placed.views[0];
@@ -203,7 +205,7 @@ test('a quote whose extension commitment differs from the node-verified holdings
   await waitReviewable(page);
   await page.getByTestId('order-place').click();
   const stopped = await expectStopped(page, 'blocked', { code: 'open-token-extension-mismatch' });
-  expect(stopped.text).toContain(long(QUOTE));
+  expect(stopped.text).toContain(QUOTE);
   expect(await wallet!.calls()).toHaveLength(0);
   expect(await mock.submitted()).toHaveLength(0);
 });
