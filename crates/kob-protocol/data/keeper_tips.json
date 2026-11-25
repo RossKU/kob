@@ -1,74 +1,74 @@
 {
   "KCC20KaspaCom_0_2_5": {
-    "refundFee": "6301600",
+    "refundFee": "6327400",
     "refundTip": "12700000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KCC20P2": {
-    "refundFee": "1775200",
-    "refundTip": "3600000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "refundFee": "1801000",
+    "refundTip": "3700000",
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KCC20PublicMint": {
-    "refundFee": "1997400",
-    "refundTip": "4000000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "refundFee": "2023200",
+    "refundTip": "4100000",
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KCC20Ref": {
-    "refundFee": "1774200",
+    "refundFee": "1800000",
     "refundTip": "3600000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KCC20Ref_16x16": {
-    "refundFee": "3560400",
+    "refundFee": "3586200",
     "refundTip": "7200000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KCC20Ref_4x5": {
-    "refundFee": "1969000",
+    "refundFee": "1994800",
     "refundTip": "4000000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KCC20Ref_8x8": {
-    "refundFee": "2461200",
+    "refundFee": "2487000",
     "refundTip": "5000000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KForgeToken1785": {
-    "refundFee": "1393800",
-    "refundTip": "2800000",
-    "updateFee": "959200",
+    "refundFee": "1413000",
+    "refundTip": "2900000",
+    "updateFee": "978400",
     "keeperTip": "2000000"
   },
   "KForgeToken7214": {
-    "refundFee": "2634000",
-    "refundTip": "5300000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "refundFee": "2659800",
+    "refundTip": "5400000",
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KaspaRocketToken11458": {
-    "refundFee": "3482800",
-    "refundTip": "7000000",
-    "updateFee": "1099800",
-    "keeperTip": "2200000"
+    "refundFee": "3508600",
+    "refundTip": "7100000",
+    "updateFee": "1125600",
+    "keeperTip": "2300000"
   },
   "KronToken2433": {
-    "refundFee": "1523000",
+    "refundFee": "1542200",
     "refundTip": "3100000",
-    "updateFee": "959200",
+    "updateFee": "978400",
     "keeperTip": "2000000"
   },
   "KronToken2732": {
-    "refundFee": "1582800",
-    "refundTip": "3200000",
-    "updateFee": "959200",
+    "refundFee": "1602000",
+    "refundTip": "3300000",
+    "updateFee": "978400",
     "keeperTip": "2000000"
   }
 }
