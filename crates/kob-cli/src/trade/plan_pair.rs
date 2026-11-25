@@ -28,15 +28,15 @@ use super::plan::*;
 
 /// Fills for which an if-done exit budgets a delivery carrier, enough for two partial take-profits.
 pub const DEFAULT_EXIT_FILLS: i64 = 2;
-/// KAS cost of the merge in a buy-first pair repeat.
+/// KAS (sompi) one merge of a pair repeat costs the exit's take-profit, by the programs of both tokens.
 ///
-/// The largest extra fee floor of a merge over a plain take-profit on every program pair (0.0741 KAS), rounded up to
-/// 0.001 KAS: `cost` of `pairBuyFirst` in `kob-protocol/data/merge_costs.json` (a test pins this constant to it).
-/// The tip rate spreads it over the smallest take-profit fill of the exit. Equal to web `pair-ifd.ts`.
-pub const PAIR_MERGE_COST_BUY_FIRST: i64 = 7_500_000;
-/// KAS cost of the merge in a sell-first pair repeat (`pairSellFirst`, 0.1254 KAS), spread like
-/// [`PAIR_MERGE_COST_BUY_FIRST`].
-pub const PAIR_MERGE_COST_SELL_FIRST: i64 = 12_600_000;
+/// It is `kob_protocol::defaults::pair_merge_costs` (`data/merge_costs.json`, `pairs`): the largest extra fee floor of
+/// a merge over a plain take-profit on that program pair, rounded up to 0.001 KAS, over every merge shape of the side,
+/// which includes merges into an entry with amount left (its existing custodies are spent; sell-first, the costliest)
+/// and into an empty entry (new custodies). A pair not in the table pays the largest. Web `pairMergeCostOf` is equal.
+pub fn pair_merge_cost(a: &TokenMarket, b: &TokenMarket, buy_first: bool) -> i64 {
+    kob_protocol::defaults::pair_merge_costs(a.program, b.program).cost(buy_first) as i64
+}
 /// B token outputs of a sell-first repeating exit's partial take-profit that re-arms.
 pub const PAIR_SELL_FIRST_MERGE_B_OUTPUTS: usize = 4;
 
@@ -690,11 +690,7 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
-    let merge_tip = if repeat {
-        merge_tip_rate(if buy_first { PAIR_MERGE_COST_BUY_FIRST } else { PAIR_MERGE_COST_SELL_FIRST }, a.scale, exit_min_base)
-    } else {
-        0
-    };
+    let merge_tip = if repeat { merge_tip_rate(pair_merge_cost(a, b, buy_first), a.scale, exit_min_base) } else { 0 };
     let exit_tip = i.exit_tip + merge_tip;
     log.extend(check_pair_tip(env, amount, exit_tip, "the exit tip"));
     let legs = resolve_legs(&lenv, &mut log, exit_side, &exit_input, "exit ", exit_min_base, amount, lenv.market.keeper_tip);

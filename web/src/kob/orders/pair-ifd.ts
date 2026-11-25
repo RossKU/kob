@@ -25,7 +25,8 @@
 import { MAX_IDLE_DAA, MIN_REST_DAA, STOP_BAND_DAA } from '../daa';
 import type { IfdLikeIntent } from '../intent-cond';
 import { isRepeat } from '../intent-cond';
-import type { CarrierLine, PairOrderPlan, PairPlanEnv } from '../plan-types';
+import type { CarrierLine, PairOrderPlan, PairPlanEnv, TokenMarket } from '../plan-types';
+import { pairMergeCostOf } from '../programs.generated';
 import type { OrderState } from '../types';
 import { I64_MAX, ceilDiv, minBig } from '../units';
 import { checkMinFill, touchPrice } from '../guards';
@@ -43,21 +44,16 @@ import { pairIssue } from './pair-issues';
 /** A repeating stop entry re-arms each cycle and prefunds at most this many arming updates. */
 const MAX_ENTRY_ARM_UPDATES = 10n;
 /**
- * The KAS one repeat merge adds to a buy-first exit's take-profit fill.
+ * The KAS (sompi) one merge of a pair repeat costs the exit's take-profit, by the programs of both tokens.
  *
- * It is the largest extra fee floor of a merge over a plain take-profit on every program pair
- * (0.0741 KAS, KCC20Ref + KaspaCom KCC20 0.2.5), rounded up to 0.001 KAS: `cost` of
- * `pairBuyFirst` in crates/kob-protocol/data/merge_costs.json (measured by kob-protocol
- * tests/keeper_tips.rs; a test pins this constant to it; docs/spec/matcher.md 6.1 rule 7).
- * `mergeTipRate` spreads it over the smallest take-profit fill.
+ * It is `pairMergeCostOf` (programs.generated.ts, from crates/kob-protocol/data/merge_costs.json
+ * `pairs`): the largest measured extra fee floor of a merge over a plain take-profit on that program
+ * pair, rounded up to 0.001 KAS, over every merge shape of the side. That includes merges into an
+ * entry with amount left, whose existing custodies the merge spends (sell-first, the costliest), and
+ * into an empty entry (new custodies). A pair not in the table pays the largest. Equal to kob-cli
+ * `pair_merge_cost`; `mergeTipRate` spreads it over the smallest take-profit fill.
  */
-export const PAIR_MERGE_COST_BUY_FIRST = 7_500_000n;
-/**
- * The KAS one repeat merge adds to a sell-first exit's take-profit fill, derived like
- * `PAIR_MERGE_COST_BUY_FIRST` (`pairSellFirst`: 0.1254 KAS, a merge into the entry's custodies on
- * KaspaCom KCC20 0.2.5 for both tokens).
- */
-export const PAIR_MERGE_COST_SELL_FIRST = 12_600_000n;
+export const pairMergeCost = (a: TokenMarket, b: TokenMarket, buyFirst: boolean): bigint => pairMergeCostOf(a.program, b.program, buyFirst);
 /**
  * B token outputs of a sell-first repeating exit's partial take-profit that re-arms.
  *
@@ -143,7 +139,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   log.add(...checkMinFill(exitMinFill, amount, 'exit.minFill'));
   if (log.failed) return fail();
   // A repeat's exit tip (KAS) carries the merge cost, paid even by the smallest take-profit fill.
-  const mergeTip = repeat ? mergeTipRate(buyFirst ? PAIR_MERGE_COST_BUY_FIRST : PAIR_MERGE_COST_SELL_FIRST, a.scale, exitMinBase) : 0n;
+  const mergeTip = repeat ? mergeTipRate(pairMergeCost(a, b, buyFirst), a.scale, exitMinBase) : 0n;
   const exitTip = exitTipBase + mergeTip;
   log.add(...checkPairTip(env, amount, exitTip, 'exit.tip'));
   // The exit's trigger threshold scales with what it sells or buys. That is at most the entry's

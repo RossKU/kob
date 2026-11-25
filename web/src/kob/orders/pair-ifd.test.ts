@@ -10,7 +10,7 @@ import { I64_MAX } from '../units';
 import { B_COV, KAS, ceilDivM, ceilQ, floorQ, kronA, kronB, makePairEnv, tokenA, tokenB } from './pair-fixtures';
 import { market3x3 } from '../../testing/fixtures';
 import { K, codes, errorCodes, pairValid, plan } from './pair-testkit';
-import { PAIR_MERGE_COST_BUY_FIRST, PAIR_MERGE_COST_SELL_FIRST } from './pair-ifd';
+import { pairMergeCost } from './pair-ifd';
 import { keyState } from '../token-state';
 
 const DC = 10n * KAS;
@@ -131,7 +131,7 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
     const r = pairValid(env(), { type: 'repeatIfd', side: 'buy', amount, tip: 0n, entry: { price: 1_400n }, exit: { takeProfit: 1_500n, tip: 1_000n }, repeat: { count: 5n } });
     const e = entryOf(r);
     expect(e.rptAmount).toBe(String(1n + 5n * amount));
-    const mergeTip = ceilDivM(PAIR_MERGE_COST_BUY_FIRST * a.scale, exitMin);
+    const mergeTip = ceilDivM(pairMergeCost(a, b, true) * a.scale, exitMin);
     const exitTip = 1_000n + mergeTip;
     expect((K.ifdPairExit(r.states[0]).state as CondPairState).tip).toBe(String(exitTip));
     const exitCarrier = DC * exitFills + floorQ(amount, exitTip, a.scale);
@@ -145,7 +145,7 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
     const k = 10_000_000n < (I64_MAX - 1n) / amount ? 10_000_000n : (I64_MAX - 1n) / amount;
     expect(entryOf(u).rptAmount).toBe(String(1n + k * amount));
     expect(u.pair!.repeat).toEqual({ count: k, levels: 1n, rptAmount: 1n + k * amount, unlimited: true });
-    expect(u.cond?.repeat?.mergeTip).toBe(ceilDivM(PAIR_MERGE_COST_SELL_FIRST * a.scale, exitMin));
+    expect(u.cond?.repeat?.mergeTip).toBe(ceilDivM(pairMergeCost(a, b, false) * a.scale, exitMin));
     expect(u.disclosure!.notes).toEqual(expect.arrayContaining(['repeatUnlimited', 'repeatReSells', 'repeatStopLossEnds']));
   });
 });
@@ -161,7 +161,8 @@ describe('KobIfdPair economics and refusals', () => {
     expect(r.issues.find((i) => i.code === 'PAIR_EXIT_WHOLE_FILLS')).toMatchObject({ severity: 'info', params: { ticker: 'B3', outputs: 3 } });
     // the merge tip still covers the smallest exit (one entry fill)
     const plainExit = pairValid(makePairEnv(), { type: 'repeatIfd', side: 'sell', amount, entry: { price: 1_600n }, exit: { takeProfit: 1_500n }, repeat: { count: 2n } });
-    expect(r.cond?.repeat?.mergeTip).toBe(plainExit.cond?.repeat?.mergeTip);
+    // (at this pair's merge cost, spread over the exit minimum fill the 8-output pair has)
+    expect(r.cond?.repeat?.mergeTip).toBe(ceilDivM(pairMergeCost(tokenA(), b3(), false) * tokenA().scale, BigInt(exitOf(plainExit).minFill)));
     // an explicit smaller exit minimum fill is kept, with a warning
     const w = pairValid(env3(), { type: 'repeatIfd', side: 'sell', amount, entry: { price: 1_600n }, exit: { takeProfit: 1_500n, minFill: 1_000n }, repeat: { count: 2n } });
     expect(exitOf(w).minFill).toBe('1000');

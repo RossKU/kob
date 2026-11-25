@@ -15,6 +15,7 @@ import type { OrderState } from '../types';
 import { daaToUnix, expiryFor, unixToDaaBound } from '../daa';
 import { checkPrice, checkSelfTrade as guardSelfTrade, checkTimes } from '../guards';
 import { ceilDiv } from '../units';
+import { mergeCostOf, type TokenProgram } from '../programs.generated';
 import { issue, type IssueCode, type IssueParams } from './common-issues';
 import { buildCreate } from './common';
 import { condIssue, type CondIssueCode } from './cond-issues';
@@ -40,24 +41,15 @@ export const MAX_EXPECTED_UPDATES = 1_000;
 /** Repeat count meaning "unlimited": large enough that only the 90-day bound ends it. */
 export const UNLIMITED_REPEAT_COUNT = 10_000_000n;
 /**
- * Extra KAS (sompi) one merge costs a buy-first repeat take-profit.
+ * Extra KAS (sompi) one merge costs a repeat take-profit, by the token's program.
  *
- * It is the largest extra fee floor of a merge over a plain take-profit on every token program
- * (0.0091 KAS), rounded up to 0.001 KAS: `cost` of `buyFirst` in
- * crates/kob-protocol/data/merge_costs.json (measured by kob-protocol tests/keeper_tips.rs; a
- * test pins this constant to it). No doubling as for a keeper tip: the matcher also earns the
- * take-profit's spread and the exit's own tip. See matcher.md 6.1 rule 7 and 10.13.
+ * It is the largest measured extra fee floor of a merge over a plain take-profit on that program, over
+ * every merge shape of the side, rounded up to 0.001 KAS (`mergeCost` of programs.generated.ts, from
+ * crates/kob-protocol/data/merge_costs.json; a program not in the table pays the largest). No
+ * doubling as for a keeper tip: the matcher also earns the take-profit's spread and the exit's own
+ * tip. Equal to kob-cli `merge_cost`. See matcher.md 6.1 rule 7 and 10.13.
  */
-export const MERGE_COST_BUY_FIRST = 1_000_000n;
-/**
- * Extra KAS (sompi) one merge costs a sell-first repeat take-profit, derived like
- * `MERGE_COST_BUY_FIRST` (`sellFirst` in merge_costs.json).
- *
- * A merge adds the entry input (buy-first) or the entry and its custody (sell-first, which pushes
- * the token program: 0.0633 KAS on KaspaCom KCC20 0.2.5, 0.0180 KAS on the reference program) to
- * the take-profit. `mergeTipRate` spreads the cost over the smallest take-profit fill.
- */
-export const MERGE_COST_SELL_FIRST = 6_400_000n;
+export const mergeCost = (program: TokenProgram, buyFirst: boolean): bigint => mergeCostOf(program, buyFirst);
 
 /**
  * The merge cost as a tip rate (sompi per whole token of `scale` base units).

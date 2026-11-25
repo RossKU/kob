@@ -19,7 +19,7 @@ import { I64_MAX, ceilDiv } from '../units';
 import { checkMinFill, checkNotional, touchPrice } from '../guards';
 import { defaultMinFillFor, str } from './common';
 import {
-  MERGE_COST_BUY_FIRST, MERGE_COST_SELL_FIRST, UNLIMITED_REPEAT_COUNT, checkSelfTrade, finishPlan, mergeTipRate, resolveActivation, resolveExpiry,
+  UNLIMITED_REPEAT_COUNT, mergeCost, checkSelfTrade, finishPlan, mergeTipRate, resolveActivation, resolveExpiry,
   toStatePrice, failedPlan, type CondPlan, type CondSpec, type ExitSummary, type IssueLog, type KeeperSummary, type RepeatSummary,
 } from './cond-common';
 import { askWorst, bidWorst, condAskState, condBidState, resolveLegs, type LegInput } from './cond-legs';
@@ -181,7 +181,7 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   log.add(...checkMinFill(exitMinFill, amount, 'exit.minFill'));
   if (log.failed) return failedPlan(log);
   // A repeat's exit tip carries the merge cost, paid even by the smallest take-profit fill.
-  const mergeTip = repeat ? mergeTipRate(buyFirst ? MERGE_COST_BUY_FIRST : MERGE_COST_SELL_FIRST, tk.scale, exitMinFill) : 0n;
+  const mergeTip = repeat ? mergeTipRate(mergeCost(tk.program, buyFirst), tk.scale, exitMinFill) : 0n;
   const exitTip = exitTipBase + mergeTip;
   // The exit's trigger threshold scales with what it sells or buys. That is at most the entry's
   // amount, which is known even though its fills are not.

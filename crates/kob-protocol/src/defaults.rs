@@ -224,6 +224,90 @@ pub fn pair_tips(a: TemplateId, b: TemplateId) -> Result<Tips> {
     pair_tips_table().get(&k).copied().ok_or_else(|| Error::Invalid(format!("no keeper tips for the pair {k}")))
 }
 
+/// Measured merge fees of a repeat and the derived merge costs (sompi), of one token program or program pair.
+///
+/// A repeat exit's take-profit before its `rptUntil` spends its entry in merge mode (`docs/spec/matcher.md` 6.1 rule 7),
+/// and the wallets add the merge's cost to the exit's `tip`, spread over its smallest take-profit fill. The fee is the
+/// largest extra fee floor a merge adds to a plain take-profit over every merge shape of the side (a partial or sold-out
+/// take-profit, into an entry with amount left, whose custodies the merge spends, or into an empty entry, whose custodies
+/// it creates), measured by `tests/keeper_tips.rs`. The cost is the fee rounded up to [`TIP_ROUNDING`], not doubled as a
+/// keeper tip: the matcher also earns the take-profit's spread and the exit's own tip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeCosts {
+    /// Largest extra fee of a buy-first merge (the exit sells, the entry buys again).
+    #[serde(with = "crate::json::field")]
+    pub buy_first_fee: u64,
+    /// The buy-first merge cost: `buyFirstFee` rounded up.
+    #[serde(with = "crate::json::field")]
+    pub buy_first: u64,
+    /// Largest extra fee of a sell-first merge (the exit buys back, the entry sells again).
+    #[serde(with = "crate::json::field")]
+    pub sell_first_fee: u64,
+    /// The sell-first merge cost: `sellFirstFee` rounded up.
+    #[serde(with = "crate::json::field")]
+    pub sell_first: u64,
+}
+
+impl MergeCosts {
+    /// The costs of measured fees.
+    pub fn of_fees(buy_first_fee: u64, sell_first_fee: u64) -> Self {
+        let up = |f: u64| f.div_ceil(TIP_ROUNDING) * TIP_ROUNDING;
+        MergeCosts { buy_first_fee, buy_first: up(buy_first_fee), sell_first_fee, sell_first: up(sell_first_fee) }
+    }
+    /// The cost of a side.
+    pub fn cost(&self, buy_first: bool) -> u64 {
+        if buy_first {
+            self.buy_first
+        } else {
+            self.sell_first
+        }
+    }
+    /// The larger of two, per field.
+    fn max(self, o: Self) -> Self {
+        MergeCosts {
+            buy_first_fee: self.buy_first_fee.max(o.buy_first_fee),
+            buy_first: self.buy_first.max(o.buy_first),
+            sell_first_fee: self.sell_first_fee.max(o.sell_first_fee),
+            sell_first: self.sell_first.max(o.sell_first),
+        }
+    }
+}
+
+/// The committed merge-cost tables: per token program (the KAS kinds) and per program pair (`KobIfdPair`, keyed like
+/// [`pair_tips_key`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeCostTables {
+    /// Program name -> merge costs of a `KobIfdBid` / `KobIfdAsk` repeat.
+    pub programs: BTreeMap<String, MergeCosts>,
+    /// `<program of A>+<program of B>` -> merge costs of a `KobIfdPair` repeat.
+    pub pairs: BTreeMap<String, MergeCosts>,
+}
+
+const MERGE_COSTS_JSON: &str = include_str!("../data/merge_costs.json");
+
+/// The committed merge-cost tables (`data/merge_costs.json`).
+pub fn merge_cost_tables() -> &'static MergeCostTables {
+    static T: OnceLock<MergeCostTables> = OnceLock::new();
+    T.get_or_init(|| serde_json::from_str(MERGE_COSTS_JSON).expect("merge costs json"))
+}
+
+fn max_of<'a>(it: impl Iterator<Item = &'a MergeCosts>) -> MergeCosts {
+    it.copied().reduce(MergeCosts::max).expect("a non-empty merge cost table")
+}
+
+/// Merge costs of a repeat of a token program; a program not in the table gets the largest of the table.
+pub fn merge_costs(program: TemplateId) -> MergeCosts {
+    let t = &merge_cost_tables().programs;
+    t.get(program.name()).copied().unwrap_or_else(|| max_of(t.values()))
+}
+
+/// Merge costs of a pair repeat (base token A on `a`, quote B on `b`); a pair not in the table gets the largest of it.
+pub fn pair_merge_costs(a: TemplateId, b: TemplateId) -> MergeCosts {
+    let t = &merge_cost_tables().pairs;
+    t.get(&pair_tips_key(a, b)).copied().unwrap_or_else(|| max_of(t.values()))
+}
+
 /// Default tips of an order, by its kind.
 ///
 /// A pair order's come from the pair table (its two programs), any other kind's from the table of

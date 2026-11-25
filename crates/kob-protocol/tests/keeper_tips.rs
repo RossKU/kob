@@ -22,7 +22,10 @@ use std::collections::BTreeMap;
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::build::{build, Action};
-use kob_protocol::defaults::{pair_tips_key, pair_tips_table, tip_for_fee, tips_table, Tips};
+use kob_protocol::defaults::{
+    merge_cost_tables, merge_costs, pair_merge_costs, pair_tips_key, pair_tips_table, tip_for_fee, tips_table, MergeCostTables,
+    MergeCosts, Tips,
+};
 use kob_protocol::tx::{finalize, sign_locally, FinalizeOptions};
 use kob_protocol::verify::validate_signed;
 
@@ -127,93 +130,85 @@ fn pair_kinds_have_their_own_tips() {
     assert_eq!(kob_protocol::defaults::tips_for(&a).unwrap(), kas);
 }
 
-/// The merge-cost rounding: the measured fee rounded UP to 0.001 KAS (no doubling, unlike a keeper tip: the matcher also
-/// earns the take-profit's crossing spread and the exit's own tip, docs/spec/matcher.md 6.1 rule 7).
-const MERGE_COST_ROUNDING: u64 = 100_000;
-
 /// The fee floor of the scenario `name` of `scenarios` (None when the program's slots leave it out).
 fn fee_of(scenarios: &[(String, Action)], name: &str, label: &str) -> Option<u64> {
     let (_, action) = scenarios.iter().find(|(n, _)| n == name)?;
     Some(build(action).unwrap_or_else(|e| panic!("{name}@{label}: {e}")).fee.min_fee)
 }
 
-/// The largest extra fee of a merge over the plain take-profit, per (merge, plain) shape pair, on every program.
-fn merge_fee(pairs: &[(&str, &str)], programs: &[(String, Vec<(String, Action)>)]) -> (u64, String) {
-    let mut best = (0u64, String::new());
-    for (label, scenarios) in programs {
-        for (merge, plain) in pairs {
-            let (Some(m), Some(p)) = (fee_of(scenarios, merge, label), fee_of(scenarios, plain, label)) else { continue };
-            let extra = m.checked_sub(p).unwrap_or_else(|| panic!("{merge}@{label}: cheaper than {plain}"));
-            if extra > best.0 {
-                best = (extra, format!("{label}: {merge} - {plain}"));
-            }
-        }
+/// The largest extra fee of a merge over the plain take-profit, over the (merge, plain) shape pairs.
+fn merge_fee(pairs: &[(&str, &str)], scenarios: &[(String, Action)], label: &str) -> u64 {
+    let mut best = 0;
+    for (merge, plain) in pairs {
+        let (Some(m), Some(p)) = (fee_of(scenarios, merge, label), fee_of(scenarios, plain, label)) else { continue };
+        best = best.max(m.checked_sub(p).unwrap_or_else(|| panic!("{merge}@{label}: cheaper than {plain}")));
     }
-    assert!(best.0 > 0, "no merge shapes measured for {pairs:?}");
+    assert!(best > 0, "{label}: no merge shapes measured for {pairs:?}");
     best
 }
 
-/// The measured merge costs (`data/merge_costs.json`): the largest extra fee floor a repeat merge adds to a take-profit over
-/// every program (program pair), and the cost the wallets add to the exit's tip (`MERGE_COST_*` in kob-cli `plan.rs` /
-/// `plan_pair.rs`, web `cond-common.ts` / `pair-ifd.ts`, which their own tests pin to this file).
+/// Buy-first merges: partial, sold out (into the entry's escrow), into an empty entry.
+const KAS_BUY: &[(&str, &str)] = &[
+    ("rpt.bid.merge.partial", "cond.ask.takeProfit.partial"),
+    ("rpt.bid.merge.sellOut", "rpt.bid.takeProfit.afterUntil"),
+    ("rpt.bid.merge.emptyEntry", "rpt.bid.takeProfit.afterUntil"),
+];
+/// Sell-first merges: into the entry's custody (spent), into a new custody.
+const KAS_SELL: &[(&str, &str)] =
+    &[("rpt.ask.merge.partial", "cond.bid.limit.partial"), ("rpt.ask.merge.newCustody", "rpt.ask.takeProfit.afterUntil")];
+/// Pair buy-first merges: into an entry with amount left (partial, sold out; its custodies spent), into an empty entry.
+const PAIR_BUY: &[(&str, &str)] = &[
+    ("pair.rearm.bid", "pair.cond.ask.tp"),
+    ("pair.rearm.bid.sellout", "pair.cond.ask.tp"),
+    ("pair.rearm.bid.new", "pair.cond.ask.tp"),
+];
+/// Pair sell-first merges: into the entry's existing custodies (partial on programs with four token outputs, sold out;
+/// the custodies are spent), into new custodies.
+const PAIR_SELL: &[(&str, &str)] = &[
+    ("pair.rearm.ask", "pair.cond.bid.limit"),
+    ("pair.rearm.ask.sellout", "pair.cond.bid.limit"),
+    ("pair.rearm.ask.new", "pair.cond.bid.limit"),
+];
+
+/// `data/merge_costs.json`: per token program and per program pair, the largest extra fee floor a repeat merge adds to a
+/// take-profit, per side, and the cost the wallets add to the exit's tip (`defaults::MergeCosts`; kob-cli `plan.rs` /
+/// `plan_pair.rs` look it up there, web through `programs.generated.ts`, and both pin their lookups to this file).
 #[test]
 fn merge_costs_are_derived_from_measured_fees() {
-    let kas: Vec<(String, Vec<(String, Action)>)> =
-        common::PROGRAMS.iter().map(|p| (p.name().to_string(), common::scenarios_on(*p))).collect();
-    let mut pair = vec![];
+    let mut programs = BTreeMap::new();
+    for p in common::PROGRAMS {
+        let s = common::scenarios_on(p);
+        programs
+            .insert(p.name().to_string(), MergeCosts::of_fees(merge_fee(KAS_BUY, &s, p.name()), merge_fee(KAS_SELL, &s, p.name())));
+    }
+    let mut pairs = BTreeMap::new();
     for pa in common::pair_programs() {
         for pb in common::pair_programs() {
-            pair.push((pair_tips_key(pa, pb), common::pair::pair_scenarios(pa, pb)));
+            let key = pair_tips_key(pa, pb);
+            let s = common::pair::pair_scenarios(pa, pb);
+            pairs.insert(key.clone(), MergeCosts::of_fees(merge_fee(PAIR_BUY, &s, &key), merge_fee(PAIR_SELL, &s, &key)));
         }
     }
-    let shapes: [(&str, &[(&str, &str)], &[(String, Vec<(String, Action)>)]); 4] = [
-        (
-            "buyFirst",
-            &[
-                ("rpt.bid.merge.partial", "cond.ask.takeProfit.partial"),
-                ("rpt.bid.merge.sellOut", "rpt.bid.takeProfit.afterUntil"),
-                ("rpt.bid.merge.emptyEntry", "rpt.bid.takeProfit.afterUntil"),
-            ],
-            &kas,
-        ),
-        (
-            "sellFirst",
-            &[("rpt.ask.merge.partial", "cond.bid.limit.partial"), ("rpt.ask.merge.newCustody", "rpt.ask.takeProfit.afterUntil")],
-            &kas,
-        ),
-        (
-            "pairBuyFirst",
-            &[
-                ("pair.rearm.bid", "pair.cond.ask.tp"),
-                ("pair.rearm.bid.sellout", "pair.cond.ask.tp"),
-                ("pair.rearm.bid.new", "pair.cond.ask.tp"),
-            ],
-            &pair,
-        ),
-        (
-            "pairSellFirst",
-            &[
-                ("pair.rearm.ask", "pair.cond.bid.limit"),
-                ("pair.rearm.ask.sellout", "pair.cond.bid.limit"),
-                ("pair.rearm.ask.new", "pair.cond.bid.limit"),
-            ],
-            &pair,
-        ),
-    ];
-    let mut table = serde_json::Map::new();
-    for (key, pairs, programs) in shapes {
-        let (fee, shape) = merge_fee(pairs, programs);
-        let cost = fee.div_ceil(MERGE_COST_ROUNDING) * MERGE_COST_ROUNDING;
-        table.insert(key.into(), serde_json::json!({ "fee": fee.to_string(), "cost": cost.to_string(), "shape": shape }));
-    }
-    let mut json = serde_json::to_string_pretty(&serde_json::Value::Object(table)).unwrap();
-    json.push('\n');
+    let tables = MergeCostTables { programs, pairs };
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/merge_costs.json");
     if std::env::var("KOB_REGEN").is_ok_and(|v| v == "1") {
-        std::fs::write(&path, &json).unwrap();
-        println!("{json}");
+        let mut json = serde_json::to_string_pretty(&tables).unwrap();
+        json.push('\n');
+        std::fs::write(&path, json).unwrap();
         return;
     }
-    let committed = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
-    assert!(committed == json, "merge costs are stale: run `KOB_REGEN=1 cargo test -p kob-protocol --test keeper_tips`, then set the MERGE_COST_* constants (web and CLI) to the new costs\n{json}");
+    assert_eq!(
+        merge_cost_tables(),
+        &tables,
+        "merge costs are stale: run `KOB_REGEN=1 cargo test -p kob-protocol --test keeper_tips`, then `npm run gen:programs` in web"
+    );
+    // a program outside the table gets the largest cost of it
+    let worst = |t: &BTreeMap<String, MergeCosts>, buy: bool| t.values().map(|c| c.cost(buy)).max().unwrap();
+    for buy in [true, false] {
+        assert!(tables.programs.values().all(|c| c.cost(buy) <= worst(&tables.programs, buy)));
+        assert!(tables.pairs.values().all(|c| c.cost(buy) <= worst(&tables.pairs, buy)));
+    }
+    let r = TemplateId::Kcc20Ref;
+    assert_eq!(merge_costs(r), tables.programs[r.name()]);
+    assert_eq!(pair_merge_costs(r, r), tables.pairs[&pair_tips_key(r, r)]);
 }

@@ -1094,10 +1094,12 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
    floor, golden vectors `rpt.bid.merge.partial` vs `cond.ask.takeProfit.partial` and `rpt.ask.merge.partial` vs
    `cond.bid.limit.partial`, §9: buy-first 4,544 bytes and 0.0091 KAS, sell-first 8,995 bytes and 0.0180 KAS on the
    reference program; a pair merge adds the entry and its custodies: `pair.rearm.bid` vs `pair.cond.ask.tp` 14,429
-   bytes and 0.0289 KAS, `pair.rearm.ask.sellout` vs `pair.cond.bid.limit` 0.0343 KAS). The largest extra fee over
-   every token program (program pair) is `crates/kob-protocol/data/merge_costs.json` (`tests/keeper_tips.rs`):
-   buy-first 0.0091 KAS, sell-first 0.0633 KAS (KaspaCom KCC20 0.2.5), pair buy-first 0.0741 KAS, pair sell-first
-   0.1254 KAS. Wallets SHOULD raise a repeat exit's tip accordingly; the reference wallets add that cost rounded up to
+   bytes and 0.0289 KAS; sell-first into the entry's existing custodies `pair.rearm.ask.sellout` vs
+   `pair.cond.bid.limit` 0.0343 KAS, into new custodies `pair.rearm.ask.new` 0.0223 KAS). The cost depends on the token
+   program (a spent custody pushes it): `crates/kob-protocol/data/merge_costs.json` (`tests/keeper_tips.rs`) holds, per
+   program and per program pair, the largest extra fee over every merge shape of the side (on KaspaCom KCC20 0.2.5,
+   sell-first 0.0633 KAS). Wallets SHOULD raise a repeat exit's tip accordingly; the reference wallets add that cost of
+   the order's program (pair: of both programs; a program missing from the table: the largest) rounded up to
    0.001 KAS, spread over the exit's smallest take-profit fill.
 8. The indexer derives every step: exits from the fill (§1.1), the entry's continuation after a
    merge from the merge argument, and, sell-first, the entry's new custody from the merge output.

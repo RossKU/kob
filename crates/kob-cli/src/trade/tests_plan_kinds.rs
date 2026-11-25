@@ -438,9 +438,9 @@ fn stop_entries_and_repeats_like_the_web_planner() {
 
     // Repeat buy-first: rptAmount = 1 + K * N, the merge cost is in the exit tip, and there is one
     // more exit carrier.
-    let mt_buy = merge_tip_rate(MERGE_COST_BUY_FIRST, 1000, 2_500);
-    let mt_sell = merge_tip_rate(MERGE_COST_SELL_FIRST, 1000, 2_500);
-    assert_eq!((mt_buy, mt_sell), (400_000, 2_560_000));
+    let mt_buy = merge_tip_rate(merge_cost(&e.market, true), 1000, 2_500);
+    let mt_sell = merge_tip_rate(merge_cost(&e.market, false), 1000, 2_500);
+    assert_eq!((mt_buy, mt_sell), (400_000, 720_000));
     let p = valid(&e, Intent::Ifd(rep(Side::Buy, 240_000_000, 300_000_000, Some(2))));
     let (AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s)) = &p.states[0] else { panic!() };
     assert_eq!(s.rpt_amount, 20_001);
@@ -475,10 +475,10 @@ fn stop_entries_and_repeats_like_the_web_planner() {
     );
     assert!(plan_order(&e, &Intent::Ifd(rep(Side::Buy, 240_000_000, 240_400_100, Some(2)))).ok);
     assert_eq!(
-        errors(&plan_order(&e, &Intent::Ifd(rep(Side::Sell, 260_000_000, 257_440_000, Some(2))))),
+        errors(&plan_order(&e, &Intent::Ifd(rep(Side::Sell, 260_000_000, 259_280_000, Some(2))))),
         vec!["COND_TP_NOT_PROFITABLE"]
     );
-    assert!(plan_order(&e, &Intent::Ifd(rep(Side::Sell, 260_000_000, 257_439_900, Some(2)))).ok);
+    assert!(plan_order(&e, &Intent::Ifd(rep(Side::Sell, 260_000_000, 259_279_900, Some(2)))).ok);
     let plain = valid(&e, Intent::Ifd(ifd(Side::Buy, 240_000_000, Some(240_000_000), None)));
     assert_eq!(codes(&plain), vec!["COND_TP_NOT_PROFITABLE"]);
     for k in [0, -3] {
@@ -506,7 +506,7 @@ fn stop_entries_and_repeats_like_the_web_planner() {
             ..ifd(Side::Sell, 260_000_000, Some(240_000_000), Some(280_000_000))
         }),
     );
-    let mts = merge_tip_rate(MERGE_COST_SELL_FIRST, 1000, 1_250);
+    let mts = merge_tip_rate(merge_cost(&e.market, false), 1000, 1_250);
     let (AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s)) = &p.states[0] else { panic!() };
     assert_eq!((s.rpt_amount, s.prefund), (15_001, 288_400_000 + mts - 260_000_000));
 }
@@ -767,7 +767,7 @@ fn pair_if_done_like_the_web_planner() {
     let s = ipair(&p);
     assert_eq!(s.rpt_amount, 20_001);
     let exit_min = def_min(10_000, a.scale).min(2_500);
-    assert_eq!(s.exit().unwrap().tip, merge_tip_rate(super::plan_pair::PAIR_MERGE_COST_BUY_FIRST, 1000, exit_min));
+    assert_eq!(s.exit().unwrap().tip, merge_tip_rate(super::plan_pair::pair_merge_cost(&a, &b, true), 1000, exit_min));
     let d = p.disclosure.as_ref().unwrap();
     assert!(d.carriers.iter().any(|c| c.kind == "exit carrier" && c.count == 5));
     let loss = plan_order(
@@ -1305,23 +1305,30 @@ fn oco_and_if_done_plans_show_every_leg_and_the_worst_case() {
     for want in ["committed exit: sells", "  exit take-profit price: ", "  exit minimum fill: ", "pays the merge of each repeat"] {
         assert!(lines.iter().any(|l| l.contains(want)), "{want}: {lines:?}");
     }
-    assert_eq!(p.disclosure.as_ref().unwrap().merge_tip, merge_tip_rate(MERGE_COST_BUY_FIRST, 1000, 2_500));
+    assert_eq!(p.disclosure.as_ref().unwrap().merge_tip, merge_tip_rate(merge_cost(&e.market, true), 1000, 2_500));
 }
 
-/// The merge costs are the measured ones (`kob-protocol/data/merge_costs.json`, kob-protocol `tests/keeper_tips.rs`): a
-/// template generation that moves a merge's fee fails here until the constants (and web's equal ones) follow.
+/// The merge costs are the measured ones, per program and program pair (`kob-protocol/data/merge_costs.json`, kob-protocol
+/// `tests/keeper_tips.rs`); web `programs.generated.ts` carries the same table and pins it to the file.
 #[test]
-fn merge_costs_match_the_measured_table() {
+fn merge_costs_follow_the_measured_table() {
     let t: serde_json::Value = serde_json::from_str(include_str!("../../../kob-protocol/data/merge_costs.json")).unwrap();
-    let cost = |k: &str| t[k]["cost"].as_str().unwrap().parse::<i64>().unwrap();
-    let fee = |k: &str| t[k]["fee"].as_str().unwrap().parse::<i64>().unwrap();
-    for (k, c) in [
-        ("buyFirst", MERGE_COST_BUY_FIRST),
-        ("sellFirst", MERGE_COST_SELL_FIRST),
-        ("pairBuyFirst", super::plan_pair::PAIR_MERGE_COST_BUY_FIRST),
-        ("pairSellFirst", super::plan_pair::PAIR_MERGE_COST_SELL_FIRST),
-    ] {
-        assert_eq!(c, cost(k), "{k}: set the constant to the measured cost (and web's)");
-        assert!(c >= fee(k), "{k}: the cost must cover the measured fee");
+    let n = |v: &serde_json::Value| v.as_str().unwrap().parse::<i64>().unwrap();
+    for p in TemplateId::TOKEN_PROGRAMS {
+        let m = market(p);
+        let row = &t["programs"][p.name()];
+        assert_eq!((merge_cost(&m, true), merge_cost(&m, false)), (n(&row["buyFirst"]), n(&row["sellFirst"])), "{}", p.name());
+        assert!(merge_cost(&m, false) >= n(&row["sellFirstFee"]) && merge_cost(&m, true) >= n(&row["buyFirstFee"]));
     }
+    let (a, b) = (market(TemplateId::Kcc20Ref), market(TemplateId::KronToken2433));
+    let row = &t["pairs"]["KCC20Ref+KronToken2433"];
+    assert_eq!(
+        (super::plan_pair::pair_merge_cost(&a, &b, true), super::plan_pair::pair_merge_cost(&a, &b, false)),
+        (n(&row["buyFirst"]), n(&row["sellFirst"]))
+    );
+    // the reference program: 0.0091 / 0.0180 KAS measured, 0.0289 / 0.0343 KAS on the reference pair
+    let r = market(TemplateId::Kcc20Ref);
+    assert_eq!((merge_cost(&r, true), merge_cost(&r, false)), (1_000_000, 1_800_000));
+    let rr = super::plan_pair::pair_merge_cost(&r, &r, true);
+    assert_eq!((rr, super::plan_pair::pair_merge_cost(&r, &r, false)), (2_900_000, 3_500_000));
 }

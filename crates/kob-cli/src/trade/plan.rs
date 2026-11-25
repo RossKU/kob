@@ -101,17 +101,6 @@ pub const DEFAULT_EXPECTED_UPDATES: i64 = 20;
 pub const MAX_EXPECTED_UPDATES: i64 = 1_000;
 /// The repeat count for "unlimited", large enough that only the 90-day bound ends it.
 pub const UNLIMITED_REPEAT_COUNT: i64 = 10_000_000;
-/// The KAS cost of one repeat merge, buy-first, spread over the smallest take-profit fill.
-///
-/// The largest extra fee floor of a merge over a plain take-profit on every token program (0.0091 KAS), rounded up to
-/// 0.001 KAS: `cost` of `buyFirst` in `kob-protocol/data/merge_costs.json` (measured by kob-protocol
-/// `tests/keeper_tips.rs`; a test pins this constant to it). No doubling as for a keeper tip: the matcher also earns the
-/// take-profit's spread and the exit's own tip (matcher.md 6.1 rule 7). Equal to web `cond-common.ts`.
-pub const MERGE_COST_BUY_FIRST: i64 = 1_000_000;
-/// The KAS cost of one repeat merge, sell-first, derived like [`MERGE_COST_BUY_FIRST`] (`sellFirst`).
-///
-/// The entry's custody input pushes the token program: 0.0633 KAS on KaspaCom KCC20 0.2.5, 0.0180 KAS on the reference.
-pub const MERGE_COST_SELL_FIRST: i64 = 6_400_000;
 /// Most arming updates that a repeating stop entry pre-funds.
 pub const MAX_ENTRY_ARM_UPDATES: i64 = 10;
 
@@ -2938,6 +2927,15 @@ pub(crate) fn exit_leg_input(i: &IfdIntent) -> LegInput {
     }
 }
 
+/// The KAS (sompi) one repeat merge costs a take-profit of a token's exit, by the token's program.
+///
+/// It is `kob_protocol::defaults::merge_costs`: the largest extra fee floor of a merge over a plain take-profit on that
+/// program, over every merge shape of the side, rounded up to 0.001 KAS (`data/merge_costs.json`, measured by kob-protocol
+/// `tests/keeper_tips.rs`; a program not in the table pays the largest). Web `mergeCostOf` looks up the same table.
+pub fn merge_cost(m: &TokenMarket, buy_first: bool) -> i64 {
+    kob_protocol::defaults::merge_costs(m.program).cost(buy_first) as i64
+}
+
 /// The merge cost as a tip rate that pays `cost` even on the smallest take-profit fill.
 ///
 /// It is `ceil(cost * scale / minFill)`.
@@ -3150,11 +3148,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     }
     // The exit tip of a repeat carries the merge cost, which even the smallest take-profit fill
     // pays.
-    let merge_tip = if repeat {
-        merge_tip_rate(if buy_first { MERGE_COST_BUY_FIRST } else { MERGE_COST_SELL_FIRST }, m.scale, exit_min_fill)
-    } else {
-        0
-    };
+    let merge_tip = if repeat { merge_tip_rate(merge_cost(m, buy_first), m.scale, exit_min_fill) } else { 0 };
     let exit_tip = i.exit_tip + merge_tip;
     let legs = resolve_legs(env, &mut log, exit_side, &exit_input, "exit ", exit_min_fill, i.amount, m.keeper_tip);
     let act = resolve_activation(env, &mut log, i.active_from);

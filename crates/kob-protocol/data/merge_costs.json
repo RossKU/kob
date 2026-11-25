@@ -1,22 +1,804 @@
 {
-  "buyFirst": {
-    "cost": "1000000",
-    "fee": "908800",
-    "shape": "KCC20Ref: rpt.bid.merge.partial - cond.ask.takeProfit.partial"
+  "programs": {
+    "KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "6326400",
+      "sellFirst": "6400000"
+    },
+    "KCC20P2": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "1800000",
+      "sellFirst": "1800000"
+    },
+    "KCC20PublicMint": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "2022200",
+      "sellFirst": "2100000"
+    },
+    "KCC20Ref": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "1799000",
+      "sellFirst": "1800000"
+    },
+    "KCC20Ref_16x16": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "3585200",
+      "sellFirst": "3600000"
+    },
+    "KCC20Ref_4x5": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "1993800",
+      "sellFirst": "2000000"
+    },
+    "KCC20Ref_8x8": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "2486000",
+      "sellFirst": "2500000"
+    },
+    "KForgeToken1785": {
+      "buyFirstFee": "818800",
+      "buyFirst": "900000",
+      "sellFirstFee": "1045000",
+      "sellFirst": "1100000"
+    },
+    "KForgeToken7214": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "2658800",
+      "sellFirst": "2700000"
+    },
+    "KaspaRocketToken11458": {
+      "buyFirstFee": "908800",
+      "buyFirst": "1000000",
+      "sellFirstFee": "3507600",
+      "sellFirst": "3600000"
+    },
+    "KronToken2433": {
+      "buyFirstFee": "818800",
+      "buyFirst": "900000",
+      "sellFirstFee": "1563800",
+      "sellFirst": "1600000"
+    },
+    "KronToken2732": {
+      "buyFirstFee": "818800",
+      "buyFirst": "900000",
+      "sellFirstFee": "1623600",
+      "sellFirst": "1700000"
+    }
   },
-  "pairBuyFirst": {
-    "cost": "7500000",
-    "fee": "7413200",
-    "shape": "KCC20Ref+KCC20KaspaCom_0_2_5: pair.rearm.bid - pair.cond.ask.tp"
-  },
-  "pairSellFirst": {
-    "cost": "12600000",
-    "fee": "12536000",
-    "shape": "KCC20KaspaCom_0_2_5+KCC20KaspaCom_0_2_5: pair.rearm.ask - pair.cond.bid.limit"
-  },
-  "sellFirst": {
-    "cost": "6400000",
-    "fee": "6326400",
-    "shape": "KCC20KaspaCom_0_2_5: rpt.ask.merge.partial - cond.bid.limit.partial"
+  "pairs": {
+    "KCC20KaspaCom_0_2_5+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "12536000",
+      "sellFirst": "12600000"
+    },
+    "KCC20KaspaCom_0_2_5+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "7953600",
+      "sellFirst": "8000000"
+    },
+    "KCC20KaspaCom_0_2_5+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "8175800",
+      "sellFirst": "8200000"
+    },
+    "KCC20KaspaCom_0_2_5+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "7952600",
+      "sellFirst": "8000000"
+    },
+    "KCC20KaspaCom_0_2_5+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "9794800",
+      "sellFirst": "9800000"
+    },
+    "KCC20KaspaCom_0_2_5+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "8203400",
+      "sellFirst": "8300000"
+    },
+    "KCC20KaspaCom_0_2_5+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "8695600",
+      "sellFirst": "8700000"
+    },
+    "KCC20KaspaCom_0_2_5+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "8868400",
+      "sellFirst": "8900000"
+    },
+    "KCC20KaspaCom_0_2_5+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "9717200",
+      "sellFirst": "9800000"
+    },
+    "KCC20KaspaCom_0_2_5+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "7933800",
+      "sellFirst": "8000000"
+    },
+    "KCC20KaspaCom_0_2_5+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "7993600",
+      "sellFirst": "8000000"
+    },
+    "KCC20P2+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "7953600",
+      "sellFirst": "8000000"
+    },
+    "KCC20P2+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3427200",
+      "sellFirst": "3500000"
+    },
+    "KCC20P2+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "3649400",
+      "sellFirst": "3700000"
+    },
+    "KCC20P2+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3426200",
+      "sellFirst": "3500000"
+    },
+    "KCC20P2+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "5212400",
+      "sellFirst": "5300000"
+    },
+    "KCC20P2+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "3621000",
+      "sellFirst": "3700000"
+    },
+    "KCC20P2+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "4113200",
+      "sellFirst": "4200000"
+    },
+    "KCC20P2+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "4286000",
+      "sellFirst": "4300000"
+    },
+    "KCC20P2+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "5134800",
+      "sellFirst": "5200000"
+    },
+    "KCC20P2+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3355800",
+      "sellFirst": "3400000"
+    },
+    "KCC20P2+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3415600",
+      "sellFirst": "3500000"
+    },
+    "KCC20PublicMint+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "8175800",
+      "sellFirst": "8200000"
+    },
+    "KCC20PublicMint+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3649400",
+      "sellFirst": "3700000"
+    },
+    "KCC20PublicMint+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "3871600",
+      "sellFirst": "3900000"
+    },
+    "KCC20PublicMint+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3648400",
+      "sellFirst": "3700000"
+    },
+    "KCC20PublicMint+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "5434600",
+      "sellFirst": "5500000"
+    },
+    "KCC20PublicMint+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "3843200",
+      "sellFirst": "3900000"
+    },
+    "KCC20PublicMint+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "4335400",
+      "sellFirst": "4400000"
+    },
+    "KCC20PublicMint+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "4508200",
+      "sellFirst": "4600000"
+    },
+    "KCC20PublicMint+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "5357000",
+      "sellFirst": "5400000"
+    },
+    "KCC20PublicMint+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3578000",
+      "sellFirst": "3600000"
+    },
+    "KCC20PublicMint+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3637800",
+      "sellFirst": "3700000"
+    },
+    "KCC20Ref+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "7952600",
+      "sellFirst": "8000000"
+    },
+    "KCC20Ref+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3426200",
+      "sellFirst": "3500000"
+    },
+    "KCC20Ref+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "3648400",
+      "sellFirst": "3700000"
+    },
+    "KCC20Ref+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3425200",
+      "sellFirst": "3500000"
+    },
+    "KCC20Ref+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "5211400",
+      "sellFirst": "5300000"
+    },
+    "KCC20Ref+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "3620000",
+      "sellFirst": "3700000"
+    },
+    "KCC20Ref+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "4112200",
+      "sellFirst": "4200000"
+    },
+    "KCC20Ref+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "4285000",
+      "sellFirst": "4300000"
+    },
+    "KCC20Ref+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "5133800",
+      "sellFirst": "5200000"
+    },
+    "KCC20Ref+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3354800",
+      "sellFirst": "3400000"
+    },
+    "KCC20Ref+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3414600",
+      "sellFirst": "3500000"
+    },
+    "KCC20Ref_16x16+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "9794800",
+      "sellFirst": "9800000"
+    },
+    "KCC20Ref_16x16+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "5212400",
+      "sellFirst": "5300000"
+    },
+    "KCC20Ref_16x16+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "5434600",
+      "sellFirst": "5500000"
+    },
+    "KCC20Ref_16x16+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "5211400",
+      "sellFirst": "5300000"
+    },
+    "KCC20Ref_16x16+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "7053600",
+      "sellFirst": "7100000"
+    },
+    "KCC20Ref_16x16+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "5462200",
+      "sellFirst": "5500000"
+    },
+    "KCC20Ref_16x16+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "5954400",
+      "sellFirst": "6000000"
+    },
+    "KCC20Ref_16x16+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "6127200",
+      "sellFirst": "6200000"
+    },
+    "KCC20Ref_16x16+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "6976000",
+      "sellFirst": "7000000"
+    },
+    "KCC20Ref_16x16+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "5192600",
+      "sellFirst": "5200000"
+    },
+    "KCC20Ref_16x16+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "5252400",
+      "sellFirst": "5300000"
+    },
+    "KCC20Ref_4x5+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "8203400",
+      "sellFirst": "8300000"
+    },
+    "KCC20Ref_4x5+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3621000",
+      "sellFirst": "3700000"
+    },
+    "KCC20Ref_4x5+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "3843200",
+      "sellFirst": "3900000"
+    },
+    "KCC20Ref_4x5+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3620000",
+      "sellFirst": "3700000"
+    },
+    "KCC20Ref_4x5+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "5462200",
+      "sellFirst": "5500000"
+    },
+    "KCC20Ref_4x5+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "3870800",
+      "sellFirst": "3900000"
+    },
+    "KCC20Ref_4x5+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "4363000",
+      "sellFirst": "4400000"
+    },
+    "KCC20Ref_4x5+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "4535800",
+      "sellFirst": "4600000"
+    },
+    "KCC20Ref_4x5+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "5384600",
+      "sellFirst": "5400000"
+    },
+    "KCC20Ref_4x5+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3601200",
+      "sellFirst": "3700000"
+    },
+    "KCC20Ref_4x5+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3661000",
+      "sellFirst": "3700000"
+    },
+    "KCC20Ref_8x8+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "8695600",
+      "sellFirst": "8700000"
+    },
+    "KCC20Ref_8x8+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "4113200",
+      "sellFirst": "4200000"
+    },
+    "KCC20Ref_8x8+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "4335400",
+      "sellFirst": "4400000"
+    },
+    "KCC20Ref_8x8+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "4112200",
+      "sellFirst": "4200000"
+    },
+    "KCC20Ref_8x8+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "5954400",
+      "sellFirst": "6000000"
+    },
+    "KCC20Ref_8x8+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "4363000",
+      "sellFirst": "4400000"
+    },
+    "KCC20Ref_8x8+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "4855200",
+      "sellFirst": "4900000"
+    },
+    "KCC20Ref_8x8+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "5028000",
+      "sellFirst": "5100000"
+    },
+    "KCC20Ref_8x8+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "5876800",
+      "sellFirst": "5900000"
+    },
+    "KCC20Ref_8x8+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "4093400",
+      "sellFirst": "4100000"
+    },
+    "KCC20Ref_8x8+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "4153200",
+      "sellFirst": "4200000"
+    },
+    "KForgeToken7214+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "8868400",
+      "sellFirst": "8900000"
+    },
+    "KForgeToken7214+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "4286000",
+      "sellFirst": "4300000"
+    },
+    "KForgeToken7214+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "4508200",
+      "sellFirst": "4600000"
+    },
+    "KForgeToken7214+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "4285000",
+      "sellFirst": "4300000"
+    },
+    "KForgeToken7214+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "6127200",
+      "sellFirst": "6200000"
+    },
+    "KForgeToken7214+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "4535800",
+      "sellFirst": "4600000"
+    },
+    "KForgeToken7214+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "5028000",
+      "sellFirst": "5100000"
+    },
+    "KForgeToken7214+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "5200800",
+      "sellFirst": "5300000"
+    },
+    "KForgeToken7214+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "6049600",
+      "sellFirst": "6100000"
+    },
+    "KForgeToken7214+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "4266200",
+      "sellFirst": "4300000"
+    },
+    "KForgeToken7214+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "4326000",
+      "sellFirst": "4400000"
+    },
+    "KaspaRocketToken11458+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "9717200",
+      "sellFirst": "9800000"
+    },
+    "KaspaRocketToken11458+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "5134800",
+      "sellFirst": "5200000"
+    },
+    "KaspaRocketToken11458+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "5357000",
+      "sellFirst": "5400000"
+    },
+    "KaspaRocketToken11458+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "5133800",
+      "sellFirst": "5200000"
+    },
+    "KaspaRocketToken11458+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "6976000",
+      "sellFirst": "7000000"
+    },
+    "KaspaRocketToken11458+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "5384600",
+      "sellFirst": "5400000"
+    },
+    "KaspaRocketToken11458+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "5876800",
+      "sellFirst": "5900000"
+    },
+    "KaspaRocketToken11458+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "6049600",
+      "sellFirst": "6100000"
+    },
+    "KaspaRocketToken11458+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "6898400",
+      "sellFirst": "6900000"
+    },
+    "KaspaRocketToken11458+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "5115000",
+      "sellFirst": "5200000"
+    },
+    "KaspaRocketToken11458+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "5174800",
+      "sellFirst": "5200000"
+    },
+    "KronToken2433+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "7934000",
+      "sellFirst": "8000000"
+    },
+    "KronToken2433+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3351600",
+      "sellFirst": "3400000"
+    },
+    "KronToken2433+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "3573800",
+      "sellFirst": "3600000"
+    },
+    "KronToken2433+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3350600",
+      "sellFirst": "3400000"
+    },
+    "KronToken2433+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "5192800",
+      "sellFirst": "5200000"
+    },
+    "KronToken2433+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "3601400",
+      "sellFirst": "3700000"
+    },
+    "KronToken2433+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "4093600",
+      "sellFirst": "4100000"
+    },
+    "KronToken2433+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "4266400",
+      "sellFirst": "4300000"
+    },
+    "KronToken2433+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "5115200",
+      "sellFirst": "5200000"
+    },
+    "KronToken2433+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3331800",
+      "sellFirst": "3400000"
+    },
+    "KronToken2433+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3391600",
+      "sellFirst": "3400000"
+    },
+    "KronToken2732+KCC20KaspaCom_0_2_5": {
+      "buyFirstFee": "7413200",
+      "buyFirst": "7500000",
+      "sellFirstFee": "7993800",
+      "sellFirst": "8000000"
+    },
+    "KronToken2732+KCC20P2": {
+      "buyFirstFee": "2886800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3411400",
+      "sellFirst": "3500000"
+    },
+    "KronToken2732+KCC20PublicMint": {
+      "buyFirstFee": "3109000",
+      "buyFirst": "3200000",
+      "sellFirstFee": "3633600",
+      "sellFirst": "3700000"
+    },
+    "KronToken2732+KCC20Ref": {
+      "buyFirstFee": "2885800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3410400",
+      "sellFirst": "3500000"
+    },
+    "KronToken2732+KCC20Ref_16x16": {
+      "buyFirstFee": "4672000",
+      "buyFirst": "4700000",
+      "sellFirstFee": "5252600",
+      "sellFirst": "5300000"
+    },
+    "KronToken2732+KCC20Ref_4x5": {
+      "buyFirstFee": "3080600",
+      "buyFirst": "3100000",
+      "sellFirstFee": "3661200",
+      "sellFirst": "3700000"
+    },
+    "KronToken2732+KCC20Ref_8x8": {
+      "buyFirstFee": "3572800",
+      "buyFirst": "3600000",
+      "sellFirstFee": "4153400",
+      "sellFirst": "4200000"
+    },
+    "KronToken2732+KForgeToken7214": {
+      "buyFirstFee": "3745600",
+      "buyFirst": "3800000",
+      "sellFirstFee": "4326200",
+      "sellFirst": "4400000"
+    },
+    "KronToken2732+KaspaRocketToken11458": {
+      "buyFirstFee": "4594400",
+      "buyFirst": "4600000",
+      "sellFirstFee": "5175000",
+      "sellFirst": "5200000"
+    },
+    "KronToken2732+KronToken2433": {
+      "buyFirstFee": "2807000",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3391600",
+      "sellFirst": "3400000"
+    },
+    "KronToken2732+KronToken2732": {
+      "buyFirstFee": "2866800",
+      "buyFirst": "2900000",
+      "sellFirstFee": "3451400",
+      "sellFirst": "3500000"
+    }
   }
 }

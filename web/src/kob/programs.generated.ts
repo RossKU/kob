@@ -8,6 +8,8 @@
  * top-up fill, see bid-delivery-spec §9. It is in sompi, as a U64 decimal string, or null when the
  * program has no top-up. The values come from
  * crates/kob-protocol/data/topup_extra.json.
+ * `mergeCost` is the merge cost of a repeat on the program, [buy-first, sell-first] in sompi
+ * (crates/kob-protocol/data/merge_costs.json), or null when it is not measured.
  */
 export const TOKEN_PROGRAMS = [
   {
@@ -29,6 +31,7 @@ export const TOKEN_PROGRAMS = [
     review: 'reviewed',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['1000000', '1800000'],
     topupExtra: '595400',
   },
   {
@@ -50,6 +53,7 @@ export const TOKEN_PROGRAMS = [
     review: 'test-only',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['1000000', '2000000'],
     topupExtra: '790200',
   },
   {
@@ -71,6 +75,7 @@ export const TOKEN_PROGRAMS = [
     review: 'pending-review',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['1000000', '2500000'],
     topupExtra: '1282400',
   },
   {
@@ -92,6 +97,7 @@ export const TOKEN_PROGRAMS = [
     review: 'test-only',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['1000000', '3600000'],
     topupExtra: '2381600',
   },
   {
@@ -113,6 +119,7 @@ export const TOKEN_PROGRAMS = [
     review: 'test-only',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['1000000', '1800000'],
     topupExtra: '596400',
   },
   {
@@ -134,6 +141,7 @@ export const TOKEN_PROGRAMS = [
     review: 'pending-review',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['1000000', '6400000'],
     topupExtra: '5122800',
   },
   {
@@ -155,6 +163,7 @@ export const TOKEN_PROGRAMS = [
     review: 'reviewed',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['1000000', '2100000'],
     topupExtra: '818600',
   },
   {
@@ -176,6 +185,7 @@ export const TOKEN_PROGRAMS = [
     review: 'reviewed',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['900000', '1600000'],
     topupExtra: null,
   },
   {
@@ -197,6 +207,7 @@ export const TOKEN_PROGRAMS = [
     review: 'reviewed',
     networks: [],
     defaultDecimals: null,
+    mergeCost: ['900000', '1700000'],
     topupExtra: null,
   },
   {
@@ -218,6 +229,7 @@ export const TOKEN_PROGRAMS = [
     review: 'pending-review',
     networks: ['testnet-10'],
     defaultDecimals: null,
+    mergeCost: ['900000', '1100000'],
     topupExtra: null,
   },
   {
@@ -239,6 +251,7 @@ export const TOKEN_PROGRAMS = [
     review: 'reviewed',
     networks: ['mainnet', 'testnet-10'],
     defaultDecimals: { decimals: 3, source: 'KaspaRocket convention' },
+    mergeCost: ['1000000', '3600000'],
     topupExtra: '2304000',
   },
   {
@@ -260,6 +273,7 @@ export const TOKEN_PROGRAMS = [
     review: 'reviewed',
     networks: ['mainnet', 'testnet-10'],
     defaultDecimals: { decimals: 0, source: 'KForge convention' },
+    mergeCost: ['1000000', '2700000'],
     topupExtra: '1455200',
   },
 ] as const;
@@ -299,4 +313,154 @@ export function programDefaultDecimals(name: string | null | undefined): { decim
 export function programTopupExtra(name: string | null | undefined): bigint | null {
   const p = TOKEN_PROGRAMS.find((x) => x.name === name);
   return p?.topupExtra == null ? null : BigInt(p.topupExtra);
+}
+
+/**
+ * The merge cost of a pair repeat by '<program of A>+<program of B>': [buy-first, sell-first] in
+ * sompi (crates/kob-protocol/data/merge_costs.json, pairs).
+ */
+export const PAIR_MERGE_COSTS: Readonly<Record<string, readonly [string, string]>> = {
+  'KCC20KaspaCom_0_2_5+KCC20KaspaCom_0_2_5': ['7500000', '12600000'],
+  'KCC20KaspaCom_0_2_5+KCC20P2': ['2900000', '8000000'],
+  'KCC20KaspaCom_0_2_5+KCC20PublicMint': ['3200000', '8200000'],
+  'KCC20KaspaCom_0_2_5+KCC20Ref': ['2900000', '8000000'],
+  'KCC20KaspaCom_0_2_5+KCC20Ref_16x16': ['4700000', '9800000'],
+  'KCC20KaspaCom_0_2_5+KCC20Ref_4x5': ['3100000', '8300000'],
+  'KCC20KaspaCom_0_2_5+KCC20Ref_8x8': ['3600000', '8700000'],
+  'KCC20KaspaCom_0_2_5+KForgeToken7214': ['3800000', '8900000'],
+  'KCC20KaspaCom_0_2_5+KaspaRocketToken11458': ['4600000', '9800000'],
+  'KCC20KaspaCom_0_2_5+KronToken2433': ['2900000', '8000000'],
+  'KCC20KaspaCom_0_2_5+KronToken2732': ['2900000', '8000000'],
+  'KCC20P2+KCC20KaspaCom_0_2_5': ['7500000', '8000000'],
+  'KCC20P2+KCC20P2': ['2900000', '3500000'],
+  'KCC20P2+KCC20PublicMint': ['3200000', '3700000'],
+  'KCC20P2+KCC20Ref': ['2900000', '3500000'],
+  'KCC20P2+KCC20Ref_16x16': ['4700000', '5300000'],
+  'KCC20P2+KCC20Ref_4x5': ['3100000', '3700000'],
+  'KCC20P2+KCC20Ref_8x8': ['3600000', '4200000'],
+  'KCC20P2+KForgeToken7214': ['3800000', '4300000'],
+  'KCC20P2+KaspaRocketToken11458': ['4600000', '5200000'],
+  'KCC20P2+KronToken2433': ['2900000', '3400000'],
+  'KCC20P2+KronToken2732': ['2900000', '3500000'],
+  'KCC20PublicMint+KCC20KaspaCom_0_2_5': ['7500000', '8200000'],
+  'KCC20PublicMint+KCC20P2': ['2900000', '3700000'],
+  'KCC20PublicMint+KCC20PublicMint': ['3200000', '3900000'],
+  'KCC20PublicMint+KCC20Ref': ['2900000', '3700000'],
+  'KCC20PublicMint+KCC20Ref_16x16': ['4700000', '5500000'],
+  'KCC20PublicMint+KCC20Ref_4x5': ['3100000', '3900000'],
+  'KCC20PublicMint+KCC20Ref_8x8': ['3600000', '4400000'],
+  'KCC20PublicMint+KForgeToken7214': ['3800000', '4600000'],
+  'KCC20PublicMint+KaspaRocketToken11458': ['4600000', '5400000'],
+  'KCC20PublicMint+KronToken2433': ['2900000', '3600000'],
+  'KCC20PublicMint+KronToken2732': ['2900000', '3700000'],
+  'KCC20Ref+KCC20KaspaCom_0_2_5': ['7500000', '8000000'],
+  'KCC20Ref+KCC20P2': ['2900000', '3500000'],
+  'KCC20Ref+KCC20PublicMint': ['3200000', '3700000'],
+  'KCC20Ref+KCC20Ref': ['2900000', '3500000'],
+  'KCC20Ref+KCC20Ref_16x16': ['4700000', '5300000'],
+  'KCC20Ref+KCC20Ref_4x5': ['3100000', '3700000'],
+  'KCC20Ref+KCC20Ref_8x8': ['3600000', '4200000'],
+  'KCC20Ref+KForgeToken7214': ['3800000', '4300000'],
+  'KCC20Ref+KaspaRocketToken11458': ['4600000', '5200000'],
+  'KCC20Ref+KronToken2433': ['2900000', '3400000'],
+  'KCC20Ref+KronToken2732': ['2900000', '3500000'],
+  'KCC20Ref_16x16+KCC20KaspaCom_0_2_5': ['7500000', '9800000'],
+  'KCC20Ref_16x16+KCC20P2': ['2900000', '5300000'],
+  'KCC20Ref_16x16+KCC20PublicMint': ['3200000', '5500000'],
+  'KCC20Ref_16x16+KCC20Ref': ['2900000', '5300000'],
+  'KCC20Ref_16x16+KCC20Ref_16x16': ['4700000', '7100000'],
+  'KCC20Ref_16x16+KCC20Ref_4x5': ['3100000', '5500000'],
+  'KCC20Ref_16x16+KCC20Ref_8x8': ['3600000', '6000000'],
+  'KCC20Ref_16x16+KForgeToken7214': ['3800000', '6200000'],
+  'KCC20Ref_16x16+KaspaRocketToken11458': ['4600000', '7000000'],
+  'KCC20Ref_16x16+KronToken2433': ['2900000', '5200000'],
+  'KCC20Ref_16x16+KronToken2732': ['2900000', '5300000'],
+  'KCC20Ref_4x5+KCC20KaspaCom_0_2_5': ['7500000', '8300000'],
+  'KCC20Ref_4x5+KCC20P2': ['2900000', '3700000'],
+  'KCC20Ref_4x5+KCC20PublicMint': ['3200000', '3900000'],
+  'KCC20Ref_4x5+KCC20Ref': ['2900000', '3700000'],
+  'KCC20Ref_4x5+KCC20Ref_16x16': ['4700000', '5500000'],
+  'KCC20Ref_4x5+KCC20Ref_4x5': ['3100000', '3900000'],
+  'KCC20Ref_4x5+KCC20Ref_8x8': ['3600000', '4400000'],
+  'KCC20Ref_4x5+KForgeToken7214': ['3800000', '4600000'],
+  'KCC20Ref_4x5+KaspaRocketToken11458': ['4600000', '5400000'],
+  'KCC20Ref_4x5+KronToken2433': ['2900000', '3700000'],
+  'KCC20Ref_4x5+KronToken2732': ['2900000', '3700000'],
+  'KCC20Ref_8x8+KCC20KaspaCom_0_2_5': ['7500000', '8700000'],
+  'KCC20Ref_8x8+KCC20P2': ['2900000', '4200000'],
+  'KCC20Ref_8x8+KCC20PublicMint': ['3200000', '4400000'],
+  'KCC20Ref_8x8+KCC20Ref': ['2900000', '4200000'],
+  'KCC20Ref_8x8+KCC20Ref_16x16': ['4700000', '6000000'],
+  'KCC20Ref_8x8+KCC20Ref_4x5': ['3100000', '4400000'],
+  'KCC20Ref_8x8+KCC20Ref_8x8': ['3600000', '4900000'],
+  'KCC20Ref_8x8+KForgeToken7214': ['3800000', '5100000'],
+  'KCC20Ref_8x8+KaspaRocketToken11458': ['4600000', '5900000'],
+  'KCC20Ref_8x8+KronToken2433': ['2900000', '4100000'],
+  'KCC20Ref_8x8+KronToken2732': ['2900000', '4200000'],
+  'KForgeToken7214+KCC20KaspaCom_0_2_5': ['7500000', '8900000'],
+  'KForgeToken7214+KCC20P2': ['2900000', '4300000'],
+  'KForgeToken7214+KCC20PublicMint': ['3200000', '4600000'],
+  'KForgeToken7214+KCC20Ref': ['2900000', '4300000'],
+  'KForgeToken7214+KCC20Ref_16x16': ['4700000', '6200000'],
+  'KForgeToken7214+KCC20Ref_4x5': ['3100000', '4600000'],
+  'KForgeToken7214+KCC20Ref_8x8': ['3600000', '5100000'],
+  'KForgeToken7214+KForgeToken7214': ['3800000', '5300000'],
+  'KForgeToken7214+KaspaRocketToken11458': ['4600000', '6100000'],
+  'KForgeToken7214+KronToken2433': ['2900000', '4300000'],
+  'KForgeToken7214+KronToken2732': ['2900000', '4400000'],
+  'KaspaRocketToken11458+KCC20KaspaCom_0_2_5': ['7500000', '9800000'],
+  'KaspaRocketToken11458+KCC20P2': ['2900000', '5200000'],
+  'KaspaRocketToken11458+KCC20PublicMint': ['3200000', '5400000'],
+  'KaspaRocketToken11458+KCC20Ref': ['2900000', '5200000'],
+  'KaspaRocketToken11458+KCC20Ref_16x16': ['4700000', '7000000'],
+  'KaspaRocketToken11458+KCC20Ref_4x5': ['3100000', '5400000'],
+  'KaspaRocketToken11458+KCC20Ref_8x8': ['3600000', '5900000'],
+  'KaspaRocketToken11458+KForgeToken7214': ['3800000', '6100000'],
+  'KaspaRocketToken11458+KaspaRocketToken11458': ['4600000', '6900000'],
+  'KaspaRocketToken11458+KronToken2433': ['2900000', '5200000'],
+  'KaspaRocketToken11458+KronToken2732': ['2900000', '5200000'],
+  'KronToken2433+KCC20KaspaCom_0_2_5': ['7500000', '8000000'],
+  'KronToken2433+KCC20P2': ['2900000', '3400000'],
+  'KronToken2433+KCC20PublicMint': ['3200000', '3600000'],
+  'KronToken2433+KCC20Ref': ['2900000', '3400000'],
+  'KronToken2433+KCC20Ref_16x16': ['4700000', '5200000'],
+  'KronToken2433+KCC20Ref_4x5': ['3100000', '3700000'],
+  'KronToken2433+KCC20Ref_8x8': ['3600000', '4100000'],
+  'KronToken2433+KForgeToken7214': ['3800000', '4300000'],
+  'KronToken2433+KaspaRocketToken11458': ['4600000', '5200000'],
+  'KronToken2433+KronToken2433': ['2900000', '3400000'],
+  'KronToken2433+KronToken2732': ['2900000', '3400000'],
+  'KronToken2732+KCC20KaspaCom_0_2_5': ['7500000', '8000000'],
+  'KronToken2732+KCC20P2': ['2900000', '3500000'],
+  'KronToken2732+KCC20PublicMint': ['3200000', '3700000'],
+  'KronToken2732+KCC20Ref': ['2900000', '3500000'],
+  'KronToken2732+KCC20Ref_16x16': ['4700000', '5300000'],
+  'KronToken2732+KCC20Ref_4x5': ['3100000', '3700000'],
+  'KronToken2732+KCC20Ref_8x8': ['3600000', '4200000'],
+  'KronToken2732+KForgeToken7214': ['3800000', '4400000'],
+  'KronToken2732+KaspaRocketToken11458': ['4600000', '5200000'],
+  'KronToken2732+KronToken2433': ['2900000', '3400000'],
+  'KronToken2732+KronToken2732': ['2900000', '3500000'],
+};
+
+const maxCost = (rows: readonly (readonly [string, string] | null)[], buyFirst: boolean): bigint =>
+  rows.reduce((m, r) => (r === null || BigInt(r[buyFirst ? 0 : 1]) <= m ? m : BigInt(r[buyFirst ? 0 : 1])), 0n);
+
+/**
+ * The KAS (sompi) one repeat merge costs an exit's take-profit on a token program (kob-protocol
+ * defaults::merge_costs): the largest measured extra fee floor of a merge on the program, rounded
+ * up to 0.001 KAS. A program not in the table gets the largest of the table.
+ */
+export function mergeCostOf(name: string | null | undefined, buyFirst: boolean): bigint {
+  const p = TOKEN_PROGRAMS.find((x) => x.name === name);
+  return p?.mergeCost != null ? BigInt(p.mergeCost[buyFirst ? 0 : 1]) : maxCost(TOKEN_PROGRAMS.map((x) => x.mergeCost), buyFirst);
+}
+
+/**
+ * The merge cost of a pair repeat (kob-protocol defaults::pair_merge_costs), by the programs of the
+ * base token A and the quote token B. A pair not in the table gets the largest of the table.
+ */
+export function pairMergeCostOf(a: string | null | undefined, b: string | null | undefined, buyFirst: boolean): bigint {
+  const r = PAIR_MERGE_COSTS[String(a) + '+' + String(b)];
+  return r !== undefined ? BigInt(r[buyFirst ? 0 : 1]) : maxCost(Object.values(PAIR_MERGE_COSTS), buyFirst);
 }

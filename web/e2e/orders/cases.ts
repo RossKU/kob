@@ -544,8 +544,9 @@ export const CASES: OrderCase[] = [
   // ---- repeat IFD / IFO (default unlimited within 90 days; explicit count). The merge tip is
   // charged per exit minimum fill (cond-common.ts mergeTipRate): with the IFD default minimum fill
   // (a quarter of the amount, 0.5 EXKCC) it would double per token and turn these spreads into a
-  // loss, so the cases set a 1 EXKCC minimum fill (merge tip 0.01 KAS per token buy-first, 0.064
-  // sell-first: a sell-first entry needs price - 0.064 > take-profit + 0.064, so it sells at 0.16).
+  // loss, so the cases set a 1 EXKCC minimum fill. EXKCC runs KCC20Ref_8x8, whose merge costs are
+  // 0.01 KAS buy-first and 0.025 sell-first (programs.generated.ts mergeCost): a sell-first entry
+  // needs price - 0.025 > take-profit + 0.025, so it sells at 0.08.
   {
     name: 'repeat IFD buy-first, default unlimited (within 90 days)', type: 'repeatIfd', side: 'buy', kind: 'KobIfdBid', listType: 'repeat', listLabel: 'Repeat IFD', locked: '5.049 KAS', escrowed: null,
     fields: () => ({ amount: '2', minFill: '1', price: '0.0245', 'exit.takeProfit': '0.04' }),
@@ -572,15 +573,15 @@ export const CASES: OrderCase[] = [
   },
   {
     name: 'repeat IFD sell-first, default unlimited', type: 'repeatIfd', side: 'sell', kind: 'KobIfdAsk', listType: 'repeat', listLabel: 'Repeat IFD', locked: '4.00000001 KAS', escrowed: '2 EXKCC',
-    fields: () => ({ amount: '2', minFill: '1', price: '0.16', 'exit.takeProfit': '0.0245' }),
-    exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', tip: '6400000' } } },
+    fields: () => ({ amount: '2', minFill: '1', price: '0.08', 'exit.takeProfit': '0.0245' }),
+    exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', tip: '2500000' } } },
     receipt: {
       orderTitle: 'Sell repeat IFD entry',
       lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.16 KAS per EXKCC', 'You receive at least per token (all-in)': '0.16 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Repeat': 'unlimited (within 90 days) (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.052 KAS', 'KAS on the order output': '3.00000001 KAS' },
-      exitTitle: 'Exit created after each entry fill: Buy take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0885 KAS per EXKCC', 'Priority tip': '0.064 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.052 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.08 KAS per EXKCC', 'You receive at least per token (all-in)': '0.08 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Repeat': 'unlimited (within 90 days) (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.052 KAS', 'KAS on the order output': '3.00000001 KAS' },
+      exitTitle: 'Exit created after each entry fill: Buy take-profit order', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0495 KAS per EXKCC', 'Priority tip': '0.025 KAS per EXKCC', 'Refund tip (paid from what is left if the order is refunded)': '0.052 KAS' },
     },
-    state: { price: '16000000', amountLeft: '200000000', rptAmount: '2000000000000001', prefund: '0' },
+    state: { price: '8000000', amountLeft: '200000000', rptAmount: '2000000000000001', prefund: '0' },
     timing: { kind: 'gtc' },
   },
   {
@@ -596,16 +597,16 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'repeat IFO sell-first with an explicit count of 3', type: 'repeatIfo', side: 'sell', kind: 'KobIfdAsk', listType: 'repeat', listLabel: 'Repeat IFD', locked: '4.22000001 KAS', escrowed: '2 EXKCC',
-    fields: () => ({ amount: '2', minFill: '1', price: '0.16', 'exit.takeProfit': '0.0245', 'exit.stop': '0.2', 'repeat.count': '3' }),
-    exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', stopPrice: '20000000' } } },
+    name: 'repeat IFO sell-first with an explicit count of 3', type: 'repeatIfo', side: 'sell', kind: 'KobIfdAsk', listType: 'repeat', listLabel: 'Repeat IFD', locked: '4.09600001 KAS', escrowed: '2 EXKCC',
+    fields: () => ({ amount: '2', minFill: '1', price: '0.08', 'exit.takeProfit': '0.0245', 'exit.stop': '0.1', 'repeat.count': '3' }),
+    exit: { state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', stopPrice: '10000000' } } },
     receipt: {
       orderTitle: 'Sell repeat IFO entry',
       lines: { 'EXKCC (e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5)': '−2 EXKCC' },
-      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.16 KAS per EXKCC', 'You receive at least per token (all-in)': '0.16 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Prefund': '0.11 KAS per EXKCC', 'Repeat': 're-arms up to 3 times (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.052 KAS', 'KAS on the order output': '3.22000001 KAS' },
-      exitTitle: 'Exit created after each entry fill: Buy OCO order (take-profit and stop)', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.27 KAS per EXKCC', 'Priority tip': '0.064 KAS per EXKCC', 'Stop trigger': '0.2 KAS per EXKCC', 'Worst fill price after the trigger': '0.206 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 1 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.024 KAS', 'Trigger armed': 'not yet armed', 'Refund tip (paid from what is left if the order is refunded)': '0.052 KAS' },
+      card: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Entry limit price': '0.08 KAS per EXKCC', 'You receive at least per token (all-in)': '0.08 KAS per EXKCC', 'Exit carrier': '1 KAS', 'Prefund': '0.048 KAS per EXKCC', 'Repeat': 're-arms up to 3 times (2 EXKCC per cycle)', 'Refund tip kept in the order': '0.052 KAS', 'KAS on the order output': '3.09600001 KAS' },
+      exitTitle: 'Exit created after each entry fill: Buy OCO order (take-profit and stop)', exitCard: { 'Amount': '2 EXKCC', 'Minimum fill': '1 EXKCC', 'Take-profit price': '0.0245 KAS per EXKCC', 'You pay at most per token (all-in)': '0.128 KAS per EXKCC', 'Priority tip': '0.025 KAS per EXKCC', 'Stop trigger': '0.1 KAS per EXKCC', 'Worst fill price after the trigger': '0.103 KAS per EXKCC', 'Fill band': '3% band, 30 s auction', 'Trigger rule': 'a fill of at least 1 EXKCC of a buy order resting at or above the stop for 5 s, used by a matcher to arm it', 'Keeper tip': '0.024 KAS', 'Trigger armed': 'not yet armed', 'Refund tip (paid from what is left if the order is refunded)': '0.052 KAS' },
     },
-    state: { price: '16000000', amountLeft: '200000000', rptAmount: '600000001', prefund: '11000000' },
+    state: { price: '8000000', amountLeft: '200000000', rptAmount: '600000001', prefund: '4800000' },
     timing: { kind: 'gtc' },
   },
 ];

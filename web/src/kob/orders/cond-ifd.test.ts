@@ -8,8 +8,8 @@ import type { CondIntent, ExitSpec } from '../intent-cond';
 import { CLOCK, KAS, TOK, makeEnv } from '../../testing/fixtures';
 import { ceilDiv } from '../units';
 import { planCond } from './cond';
-import { MERGE_COST_BUY_FIRST, MERGE_COST_SELL_FIRST, mergeTipRate } from './cond-common';
-import { PAIR_MERGE_COST_BUY_FIRST, PAIR_MERGE_COST_SELL_FIRST } from './pair-ifd';
+import { mergeCost, mergeTipRate } from './cond-common';
+import { TOKEN_PROGRAMS, mergeCostOf, pairMergeCostOf } from '../programs.generated';
 import { askState, bidState, codes, committedExit, errorCodes, ifdAsk, ifdBid, planOk } from './cond-testkit';
 
 const C = 1_000_000_000n; // carrier
@@ -396,12 +396,15 @@ describe('repeat IFD / IFO', () => {
   } as CondIntent);
   // the merge costs as tip rates over the smallest take-profit fill: the exit minimum fill 2500 (=
   // the entry's)
+  // the token of makeEnv runs the reference program
+  const MERGE_COST_BUY_FIRST = mergeCost('KCC20Ref', true);
+  const MERGE_COST_SELL_FIRST = mergeCost('KCC20Ref', false);
   const MT_BUY = ceilDiv(MERGE_COST_BUY_FIRST * SCALE, 2_500n); // 400_000 sompi per token
-  const MT_SELL = ceilDiv(MERGE_COST_SELL_FIRST * SCALE, 2_500n); // 2_560_000 sompi per token
+  const MT_SELL = ceilDiv(MERGE_COST_SELL_FIRST * SCALE, 2_500n); // 720_000 sompi per token
 
   it('the merge tip rate pays the merge cost even on the smallest take-profit fill', () => {
     expect(MT_BUY).toBe(400_000n);
-    expect(MT_SELL).toBe(2_560_000n);
+    expect(MT_SELL).toBe(720_000n);
     expect(mergeTipRate(MERGE_COST_BUY_FIRST, SCALE, 2_500n)).toBe(MT_BUY);
     for (const [cost, scale, minFill] of [[1_000_000n, 1_000n, 7n], [1_500_000n, 100_000_000n, 123_456n], [1n, 1n, 1n]] as const) {
       const rate = mergeTipRate(cost, scale, minFill);
@@ -471,7 +474,7 @@ describe('repeat IFD / IFO', () => {
     for (const [amount, k] of [[1_000n, 1n], [3_000n, 5n], [7_000n, 2n], [10_000n, 100n], [1_234n, 3n]] as const) {
       const bf = planOk(makeEnv(), rep({ amount, repeat: { count: k } }));
       expect(ifdBid(bf.plan.states[0]!).rptAmount).toBe((1n + k * amount).toString());
-      // (a wider spread: the sell-first merge tip on a quarter of 1 token is 0.256 KAS per token)
+      // (a wider spread: the sell-first merge tip on a quarter of 1 token is 0.072 KAS per token)
       const sf = planOk(makeEnv(), repSell({ amount, repeat: { count: k }, exit: { takeProfit: 200_000_000n } }));
       expect(ifdAsk(sf.plan.states[0]!).rptAmount).toBe((1n + k * amount).toString());
     }
@@ -517,10 +520,10 @@ describe('repeat IFD / IFO', () => {
     const tipped = planCond(env, rep({ exit: { takeProfit: 241_300_000n }, tip: 950_000n }));
     expect(errorCodes(tipped)).toEqual(['COND_TP_NOT_PROFITABLE']);
     expect(profit(tipped)).toMatchObject({ profitPerToken: 241_300_000n - MT_BUY - (240_000_000n + 950_000n) });
-    // sell-first: entry brings 260 KAS; the exit pays take-profit plus the 0.0256 KAS merge tip
-    expect(errorCodes(planCond(env, repSell({ exit: { takeProfit: 257_440_000n } })))).toEqual(['COND_TP_NOT_PROFITABLE']);
+    // sell-first: entry brings 260 KAS; the exit pays take-profit plus the 0.0072 KAS merge tip
+    expect(errorCodes(planCond(env, repSell({ exit: { takeProfit: 259_280_000n } })))).toEqual(['COND_TP_NOT_PROFITABLE']);
     expect(errorCodes(planCond(env, repSell({ exit: { takeProfit: 260_000_000n } })))).toEqual(['COND_TP_NOT_PROFITABLE']);
-    expect(planCond(env, repSell({ exit: { takeProfit: 257_439_900n } })).ok).toBe(true);
+    expect(planCond(env, repSell({ exit: { takeProfit: 259_279_900n } })).ok).toBe(true);
     // a plain IFD only warns about the same numbers
     const plain = planOk(env, buyFirst({ exit: { takeProfit: 240_000_000n } }));
     expect(codes(plain.plan)).toEqual(['COND_TP_NOT_PROFITABLE']);
@@ -608,17 +611,32 @@ describe('IFD timed entry and exit lifetime', () => {
   });
 });
 
-// The merge costs are the measured ones (crates/kob-protocol/data/merge_costs.json, kob-protocol
-// tests/keeper_tips.rs); kob-cli pins its equal constants to the same file.
+// The merge costs are the measured ones, per program and program pair
+// (crates/kob-protocol/data/merge_costs.json, kob-protocol tests/keeper_tips.rs); kob-cli looks up
+// the same table (`merge_cost`, `pair_merge_cost`) and pins its lookups to the file.
 describe('merge costs', () => {
-  it('equal the measured table', () => {
-    const t = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../crates/kob-protocol/data/merge_costs.json', import.meta.url)), 'utf8')) as Record<string, { cost: string; fee: string }>;
-    const ours: Record<string, bigint> = {
-      buyFirst: MERGE_COST_BUY_FIRST, sellFirst: MERGE_COST_SELL_FIRST, pairBuyFirst: PAIR_MERGE_COST_BUY_FIRST, pairSellFirst: PAIR_MERGE_COST_SELL_FIRST,
-    };
-    for (const [k, v] of Object.entries(ours)) {
-      expect(v, k).toBe(BigInt(t[k]!.cost));
-      expect(v >= BigInt(t[k]!.fee), k).toBe(true);
+  type Row = { buyFirstFee: string; buyFirst: string; sellFirstFee: string; sellFirst: string };
+  const t = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../crates/kob-protocol/data/merge_costs.json', import.meta.url)), 'utf8')) as { programs: Record<string, Row>; pairs: Record<string, Row> };
+  const max = (rows: Row[], k: 'buyFirst' | 'sellFirst'): bigint => rows.reduce((m, r) => (BigInt(r[k]) > m ? BigInt(r[k]) : m), 0n);
+
+  it('are looked up by the token program, a missing one paying the largest', () => {
+    for (const p of TOKEN_PROGRAMS) {
+      const r = t.programs[p.name];
+      expect([mergeCost(p.name, true), mergeCost(p.name, false)], p.name).toEqual(r ? [BigInt(r.buyFirst), BigInt(r.sellFirst)] : [max(Object.values(t.programs), 'buyFirst'), max(Object.values(t.programs), 'sellFirst')]);
+      if (r) expect(BigInt(r.sellFirst) >= BigInt(r.sellFirstFee) && BigInt(r.buyFirst) >= BigInt(r.buyFirstFee), p.name).toBe(true);
     }
+    expect(mergeCostOf('NoSuchProgram', false)).toBe(max(Object.values(t.programs), 'sellFirst'));
+    // the reference program: 0.0091 / 0.0180 KAS measured
+    expect([mergeCost('KCC20Ref', true), mergeCost('KCC20Ref', false)]).toEqual([1_000_000n, 1_800_000n]);
+  });
+
+  it('of a pair are looked up by the programs of both tokens, a missing pair paying the largest', () => {
+    for (const [key, r] of Object.entries(t.pairs)) {
+      const [a, b] = key.split('+');
+      expect([pairMergeCostOf(a, b, true), pairMergeCostOf(a, b, false)], key).toEqual([BigInt(r.buyFirst), BigInt(r.sellFirst)]);
+    }
+    expect(pairMergeCostOf('NoSuchProgram', 'KCC20Ref', true)).toBe(max(Object.values(t.pairs), 'buyFirst'));
+    // the reference pair: 0.0289 / 0.0343 KAS measured (sell-first: a merge into the entry's existing custodies)
+    expect([pairMergeCostOf('KCC20Ref', 'KCC20Ref', true), pairMergeCostOf('KCC20Ref', 'KCC20Ref', false)]).toEqual([2_900_000n, 3_500_000n]);
   });
 });
