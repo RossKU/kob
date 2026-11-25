@@ -128,7 +128,7 @@ describe('the maker\'s cancel of an order under a retired template', () => {
 
   it('its cancel releases a custody with a borrow guard (a retired template ignores the guard; a current one pins zero)', async () => {
     const { snap } = await snapshotOf('create.condAsk', COND_ASK_F1);
-    const guarded = { ...snap.custody!, state: { ...snap.custody!.state, borrow_guard: '11'.repeat(32) } as typeof snap.custody.state };
+    const guarded = { ...snap.custody!, state: { ...snap.custody!.state, borrow_guard: '11'.repeat(32) } as NonNullable<typeof snap.custody>['state'] };
     const plan = planCancel(env(), { ...snap, custody: guarded });
     expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
     checkCancel(plan.built!, plan.expected);

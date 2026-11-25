@@ -90,7 +90,7 @@ describe('decoded order terms', () => {
     expect(rowOf(rows, 'allIn').value).toBe('2.499 KAS per TST');
     const k = s.net.kas;
     expect(k.locked.total).toBe(20n * KAS);
-    expect(k.locked.refundTips).toBe(3_600_000n);
+    expect(k.locked.refundTips).toBe(3_800_000n);
     expect(k.locked.carriers).toBeGreaterThan(0n);
     // the wallet's KAS delta is the locked amount plus the fee
     expect(k.walletDelta).toBeLessThan(-20n * KAS);
