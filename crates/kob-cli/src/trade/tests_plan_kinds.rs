@@ -440,7 +440,7 @@ fn stop_entries_and_repeats_like_the_web_planner() {
     // more exit carrier.
     let mt_buy = merge_tip_rate(MERGE_COST_BUY_FIRST, 1000, 2_500);
     let mt_sell = merge_tip_rate(MERGE_COST_SELL_FIRST, 1000, 2_500);
-    assert_eq!((mt_buy, mt_sell), (400_000, 600_000));
+    assert_eq!((mt_buy, mt_sell), (400_000, 2_560_000));
     let p = valid(&e, Intent::Ifd(rep(Side::Buy, 240_000_000, 300_000_000, Some(2))));
     let (AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s)) = &p.states[0] else { panic!() };
     assert_eq!(s.rpt_amount, 20_001);
@@ -475,10 +475,10 @@ fn stop_entries_and_repeats_like_the_web_planner() {
     );
     assert!(plan_order(&e, &Intent::Ifd(rep(Side::Buy, 240_000_000, 240_400_100, Some(2)))).ok);
     assert_eq!(
-        errors(&plan_order(&e, &Intent::Ifd(rep(Side::Sell, 260_000_000, 259_400_000, Some(2))))),
+        errors(&plan_order(&e, &Intent::Ifd(rep(Side::Sell, 260_000_000, 257_440_000, Some(2))))),
         vec!["COND_TP_NOT_PROFITABLE"]
     );
-    assert!(plan_order(&e, &Intent::Ifd(rep(Side::Sell, 260_000_000, 259_399_900, Some(2)))).ok);
+    assert!(plan_order(&e, &Intent::Ifd(rep(Side::Sell, 260_000_000, 257_439_900, Some(2)))).ok);
     let plain = valid(&e, Intent::Ifd(ifd(Side::Buy, 240_000_000, Some(240_000_000), None)));
     assert_eq!(codes(&plain), vec!["COND_TP_NOT_PROFITABLE"]);
     for k in [0, -3] {
@@ -1306,4 +1306,22 @@ fn oco_and_if_done_plans_show_every_leg_and_the_worst_case() {
         assert!(lines.iter().any(|l| l.contains(want)), "{want}: {lines:?}");
     }
     assert_eq!(p.disclosure.as_ref().unwrap().merge_tip, merge_tip_rate(MERGE_COST_BUY_FIRST, 1000, 2_500));
+}
+
+/// The merge costs are the measured ones (`kob-protocol/data/merge_costs.json`, kob-protocol `tests/keeper_tips.rs`): a
+/// template generation that moves a merge's fee fails here until the constants (and web's equal ones) follow.
+#[test]
+fn merge_costs_match_the_measured_table() {
+    let t: serde_json::Value = serde_json::from_str(include_str!("../../../kob-protocol/data/merge_costs.json")).unwrap();
+    let cost = |k: &str| t[k]["cost"].as_str().unwrap().parse::<i64>().unwrap();
+    let fee = |k: &str| t[k]["fee"].as_str().unwrap().parse::<i64>().unwrap();
+    for (k, c) in [
+        ("buyFirst", MERGE_COST_BUY_FIRST),
+        ("sellFirst", MERGE_COST_SELL_FIRST),
+        ("pairBuyFirst", super::plan_pair::PAIR_MERGE_COST_BUY_FIRST),
+        ("pairSellFirst", super::plan_pair::PAIR_MERGE_COST_SELL_FIRST),
+    ] {
+        assert_eq!(c, cost(k), "{k}: set the constant to the measured cost (and web's)");
+        assert!(c >= fee(k), "{k}: the cost must cover the measured fee");
+    }
 }

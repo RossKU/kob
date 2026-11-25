@@ -102,9 +102,16 @@ pub const MAX_EXPECTED_UPDATES: i64 = 1_000;
 /// The repeat count for "unlimited", large enough that only the 90-day bound ends it.
 pub const UNLIMITED_REPEAT_COUNT: i64 = 10_000_000;
 /// The KAS cost of one repeat merge, buy-first, spread over the smallest take-profit fill.
+///
+/// The largest extra fee floor of a merge over a plain take-profit on every token program (0.0091 KAS), rounded up to
+/// 0.001 KAS: `cost` of `buyFirst` in `kob-protocol/data/merge_costs.json` (measured by kob-protocol
+/// `tests/keeper_tips.rs`; a test pins this constant to it). No doubling as for a keeper tip: the matcher also earns the
+/// take-profit's spread and the exit's own tip (matcher.md 6.1 rule 7). Equal to web `cond-common.ts`.
 pub const MERGE_COST_BUY_FIRST: i64 = 1_000_000;
-/// The KAS cost of one repeat merge, sell-first.
-pub const MERGE_COST_SELL_FIRST: i64 = 1_500_000;
+/// The KAS cost of one repeat merge, sell-first, derived like [`MERGE_COST_BUY_FIRST`] (`sellFirst`).
+///
+/// The entry's custody input pushes the token program: 0.0633 KAS on KaspaCom KCC20 0.2.5, 0.0180 KAS on the reference.
+pub const MERGE_COST_SELL_FIRST: i64 = 6_400_000;
 /// Most arming updates that a repeating stop entry pre-funds.
 pub const MAX_ENTRY_ARM_UPDATES: i64 = 10;
 

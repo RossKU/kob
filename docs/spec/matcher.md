@@ -1090,12 +1090,15 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
    fills is not bounded by ⌈N/`minFill`⌉: after every merge the "takes everything left" exception applies again, so a
    re-armed amount below `minFill` fills, and makes an exit, on its own.)
 7. Merges are paid by the take-profit's crossing spread and the exit's `tip` (a merge adds
-   the entry input, and sell-first its custody: buy-first 4,005 bytes and 0.0080 KAS, sell-first 8,543 bytes and
-   0.0171 KAS over a plain take-profit; golden vectors `rpt.bid.merge.partial` vs `cond.ask.takeProfit.partial` and
-   `rpt.ask.merge.partial` vs `cond.bid.limit.partial`, §9; a pair merge adds the entry and its custodies: buy-first
-   12,330 bytes and 0.0247 KAS, sell-first into new custodies 9,071 bytes and 0.0181 KAS, `pair.rearm.bid` vs
-   `pair.cond.ask.tp` and `pair.rearm.ask.new` vs `pair.cond.bid.limit`). Wallets SHOULD raise a repeat exit's tip
-   accordingly.
+   the entry input, and sell-first its custody, which pushes the token program; over a plain take-profit at the fee
+   floor, golden vectors `rpt.bid.merge.partial` vs `cond.ask.takeProfit.partial` and `rpt.ask.merge.partial` vs
+   `cond.bid.limit.partial`, §9: buy-first 4,544 bytes and 0.0091 KAS, sell-first 8,995 bytes and 0.0180 KAS on the
+   reference program; a pair merge adds the entry and its custodies: `pair.rearm.bid` vs `pair.cond.ask.tp` 14,429
+   bytes and 0.0289 KAS, `pair.rearm.ask.sellout` vs `pair.cond.bid.limit` 0.0343 KAS). The largest extra fee over
+   every token program (program pair) is `crates/kob-protocol/data/merge_costs.json` (`tests/keeper_tips.rs`):
+   buy-first 0.0091 KAS, sell-first 0.0633 KAS (KaspaCom KCC20 0.2.5), pair buy-first 0.0741 KAS, pair sell-first
+   0.1254 KAS. Wallets SHOULD raise a repeat exit's tip accordingly; the reference wallets add that cost rounded up to
+   0.001 KAS, spread over the exit's smallest take-profit fill.
 8. The indexer derives every step: exits from the fill (§1.1), the entry's continuation after a
    merge from the merge argument, and, sell-first, the entry's new custody from the merge output.
 

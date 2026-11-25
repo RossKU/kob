@@ -30,10 +30,13 @@ use super::plan::*;
 pub const DEFAULT_EXIT_FILLS: i64 = 2;
 /// KAS cost of the merge in a buy-first pair repeat.
 ///
-/// The tip rate spreads it over the smallest take-profit fill of the exit.
-pub const PAIR_MERGE_COST_BUY_FIRST: i64 = 2_370_000;
-/// KAS cost of the merge in a sell-first pair repeat, spread like [`PAIR_MERGE_COST_BUY_FIRST`].
-pub const PAIR_MERGE_COST_SELL_FIRST: i64 = 1_690_000;
+/// The largest extra fee floor of a merge over a plain take-profit on every program pair (0.0741 KAS), rounded up to
+/// 0.001 KAS: `cost` of `pairBuyFirst` in `kob-protocol/data/merge_costs.json` (a test pins this constant to it).
+/// The tip rate spreads it over the smallest take-profit fill of the exit. Equal to web `pair-ifd.ts`.
+pub const PAIR_MERGE_COST_BUY_FIRST: i64 = 7_500_000;
+/// KAS cost of the merge in a sell-first pair repeat (`pairSellFirst`, 0.1254 KAS), spread like
+/// [`PAIR_MERGE_COST_BUY_FIRST`].
+pub const PAIR_MERGE_COST_SELL_FIRST: i64 = 12_600_000;
 /// B token outputs of a sell-first repeating exit's partial take-profit that re-arms.
 pub const PAIR_SELL_FIRST_MERGE_B_OUTPUTS: usize = 4;
 

@@ -126,3 +126,94 @@ fn pair_kinds_have_their_own_tips() {
     let a = kob_protocol::state::AnyState::KobAsk(common::ask(common::MAKER_A, common::P250, p));
     assert_eq!(kob_protocol::defaults::tips_for(&a).unwrap(), kas);
 }
+
+/// The merge-cost rounding: the measured fee rounded UP to 0.001 KAS (no doubling, unlike a keeper tip: the matcher also
+/// earns the take-profit's crossing spread and the exit's own tip, docs/spec/matcher.md 6.1 rule 7).
+const MERGE_COST_ROUNDING: u64 = 100_000;
+
+/// The fee floor of the scenario `name` of `scenarios` (None when the program's slots leave it out).
+fn fee_of(scenarios: &[(String, Action)], name: &str, label: &str) -> Option<u64> {
+    let (_, action) = scenarios.iter().find(|(n, _)| n == name)?;
+    Some(build(action).unwrap_or_else(|e| panic!("{name}@{label}: {e}")).fee.min_fee)
+}
+
+/// The largest extra fee of a merge over the plain take-profit, per (merge, plain) shape pair, on every program.
+fn merge_fee(pairs: &[(&str, &str)], programs: &[(String, Vec<(String, Action)>)]) -> (u64, String) {
+    let mut best = (0u64, String::new());
+    for (label, scenarios) in programs {
+        for (merge, plain) in pairs {
+            let (Some(m), Some(p)) = (fee_of(scenarios, merge, label), fee_of(scenarios, plain, label)) else { continue };
+            let extra = m.checked_sub(p).unwrap_or_else(|| panic!("{merge}@{label}: cheaper than {plain}"));
+            if extra > best.0 {
+                best = (extra, format!("{label}: {merge} - {plain}"));
+            }
+        }
+    }
+    assert!(best.0 > 0, "no merge shapes measured for {pairs:?}");
+    best
+}
+
+/// The measured merge costs (`data/merge_costs.json`): the largest extra fee floor a repeat merge adds to a take-profit over
+/// every program (program pair), and the cost the wallets add to the exit's tip (`MERGE_COST_*` in kob-cli `plan.rs` /
+/// `plan_pair.rs`, web `cond-common.ts` / `pair-ifd.ts`, which their own tests pin to this file).
+#[test]
+fn merge_costs_are_derived_from_measured_fees() {
+    let kas: Vec<(String, Vec<(String, Action)>)> =
+        common::PROGRAMS.iter().map(|p| (p.name().to_string(), common::scenarios_on(*p))).collect();
+    let mut pair = vec![];
+    for pa in common::pair_programs() {
+        for pb in common::pair_programs() {
+            pair.push((pair_tips_key(pa, pb), common::pair::pair_scenarios(pa, pb)));
+        }
+    }
+    let shapes: [(&str, &[(&str, &str)], &[(String, Vec<(String, Action)>)]); 4] = [
+        (
+            "buyFirst",
+            &[
+                ("rpt.bid.merge.partial", "cond.ask.takeProfit.partial"),
+                ("rpt.bid.merge.sellOut", "rpt.bid.takeProfit.afterUntil"),
+                ("rpt.bid.merge.emptyEntry", "rpt.bid.takeProfit.afterUntil"),
+            ],
+            &kas,
+        ),
+        (
+            "sellFirst",
+            &[("rpt.ask.merge.partial", "cond.bid.limit.partial"), ("rpt.ask.merge.newCustody", "rpt.ask.takeProfit.afterUntil")],
+            &kas,
+        ),
+        (
+            "pairBuyFirst",
+            &[
+                ("pair.rearm.bid", "pair.cond.ask.tp"),
+                ("pair.rearm.bid.sellout", "pair.cond.ask.tp"),
+                ("pair.rearm.bid.new", "pair.cond.ask.tp"),
+            ],
+            &pair,
+        ),
+        (
+            "pairSellFirst",
+            &[
+                ("pair.rearm.ask", "pair.cond.bid.limit"),
+                ("pair.rearm.ask.sellout", "pair.cond.bid.limit"),
+                ("pair.rearm.ask.new", "pair.cond.bid.limit"),
+            ],
+            &pair,
+        ),
+    ];
+    let mut table = serde_json::Map::new();
+    for (key, pairs, programs) in shapes {
+        let (fee, shape) = merge_fee(pairs, programs);
+        let cost = fee.div_ceil(MERGE_COST_ROUNDING) * MERGE_COST_ROUNDING;
+        table.insert(key.into(), serde_json::json!({ "fee": fee.to_string(), "cost": cost.to_string(), "shape": shape }));
+    }
+    let mut json = serde_json::to_string_pretty(&serde_json::Value::Object(table)).unwrap();
+    json.push('\n');
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/merge_costs.json");
+    if std::env::var("KOB_REGEN").is_ok_and(|v| v == "1") {
+        std::fs::write(&path, &json).unwrap();
+        println!("{json}");
+        return;
+    }
+    let committed = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+    assert!(committed == json, "merge costs are stale: run `KOB_REGEN=1 cargo test -p kob-protocol --test keeper_tips`, then set the MERGE_COST_* constants (web and CLI) to the new costs\n{json}");
+}

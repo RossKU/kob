@@ -100,7 +100,7 @@ test.describe('timed start (R-11)', () => {
     { name: 'stop-market sell', type: 'stopMarket', side: 'sell' as const, fields: { amount: '2', stop: '0.023' }, kind: 'KobCondAsk' },
     { name: 'take-profit buy', type: 'takeProfit', side: 'buy' as const, fields: { amount: '2', price: '0.023' }, kind: 'KobCondBid' },
     { name: 'IFD buy-first entry', type: 'ifd', side: 'buy' as const, fields: { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }, kind: 'KobIfdBid' },
-    { name: 'repeat IFO sell-first entry', type: 'repeatIfo', side: 'sell' as const, fields: { amount: '2', minFill: '1', price: '0.04', 'exit.takeProfit': '0.0245', 'exit.stop': '0.05' }, kind: 'KobIfdAsk' },
+    { name: 'repeat IFO sell-first entry', type: 'repeatIfo', side: 'sell' as const, fields: { amount: '2', minFill: '1', price: '0.16', 'exit.takeProfit': '0.0245', 'exit.stop': '0.2' }, kind: 'KobIfdAsk' },
   ];
   for (const c of cases) {
     test(`${c.name}: a start 2 hours ahead is shown and committed as activeFrom; the expiry still counts from placement`, async ({ appPage: page, mock }) => {

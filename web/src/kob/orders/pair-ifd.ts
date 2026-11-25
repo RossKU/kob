@@ -45,16 +45,19 @@ const MAX_ENTRY_ARM_UPDATES = 10n;
 /**
  * The KAS one repeat merge adds to a buy-first exit's take-profit fill.
  *
- * A buy-first merge adds 11,862 bytes and 0.0237 KAS over a plain take-profit, measured
- * (docs/spec/matcher.md 6.1 rule 7). `mergeTipRate` spreads it over the smallest take-profit fill.
+ * It is the largest extra fee floor of a merge over a plain take-profit on every program pair
+ * (0.0741 KAS, KCC20Ref + KaspaCom KCC20 0.2.5), rounded up to 0.001 KAS: `cost` of
+ * `pairBuyFirst` in crates/kob-protocol/data/merge_costs.json (measured by kob-protocol
+ * tests/keeper_tips.rs; a test pins this constant to it; docs/spec/matcher.md 6.1 rule 7).
+ * `mergeTipRate` spreads it over the smallest take-profit fill.
  */
-export const PAIR_MERGE_COST_BUY_FIRST = 2_370_000n;
+export const PAIR_MERGE_COST_BUY_FIRST = 7_500_000n;
 /**
- * The KAS one repeat merge adds to a sell-first exit's take-profit fill.
- *
- * A sell-first merge into new custodies adds 8,428 bytes and 0.0169 KAS, measured.
+ * The KAS one repeat merge adds to a sell-first exit's take-profit fill, derived like
+ * `PAIR_MERGE_COST_BUY_FIRST` (`pairSellFirst`: 0.1254 KAS, a merge into the entry's custodies on
+ * KaspaCom KCC20 0.2.5 for both tokens).
  */
-export const PAIR_MERGE_COST_SELL_FIRST = 1_690_000n;
+export const PAIR_MERGE_COST_SELL_FIRST = 12_600_000n;
 /**
  * B token outputs of a sell-first repeating exit's partial take-profit that re-arms.
  *

@@ -1,0 +1,22 @@
+{
+  "buyFirst": {
+    "cost": "1000000",
+    "fee": "908800",
+    "shape": "KCC20Ref: rpt.bid.merge.partial - cond.ask.takeProfit.partial"
+  },
+  "pairBuyFirst": {
+    "cost": "7500000",
+    "fee": "7413200",
+    "shape": "KCC20Ref+KCC20KaspaCom_0_2_5: pair.rearm.bid - pair.cond.ask.tp"
+  },
+  "pairSellFirst": {
+    "cost": "12600000",
+    "fee": "12536000",
+    "shape": "KCC20KaspaCom_0_2_5+KCC20KaspaCom_0_2_5: pair.rearm.ask - pair.cond.bid.limit"
+  },
+  "sellFirst": {
+    "cost": "6400000",
+    "fee": "6326400",
+    "shape": "KCC20KaspaCom_0_2_5: rpt.ask.merge.partial - cond.bid.limit.partial"
+  }
+}
