@@ -21,27 +21,27 @@ artifact id you reviewed; do not pin a file name or a branch.
 
 | App | Artifact id (`id` field of `artifact.json`) |
 |---|---|
-| `KOBOrders` | `1d0aa40e8302b27c5601cc46139b936f101fddcdf700823ba4c6a02463b81d9e` |
-| `KOBOrdersKron` | `e1c73b72cde101646dc6b4882f441015136bafb3beca91693326483694b88dd4` |
+| `KOBOrders` | `b0b4cbd99cf3655105ca42f5c5b9df0f9016a876a997edb2b86376fdd5dac2b2` |
+| `KOBOrdersKron` | `aba8a1e44008b56abadc10df1df2d7611d2192460c01975997c20c4b6721dfda` |
 | `KOBToken` | `364f6518d3ae5a31d0fcf768c9a1cc5d6e187cb2d03787dee8d8e9088ffec39f` |
-| `KobRouter` | `912f8112f9f1572505689f51db27357638012a033272e2a80aa2940405a9a52f` |
+| `KobRouter` | `b9f847c6197d1490deed369940aae0295823c250282a2c4872c1eda10f633e97` |
 
 Actor-type handles (the template hash of the hand-written program: blake3 over prefix and suffix
 around the state span, the same value silverc reports as `template_hash`):
 
 | Actor | Handle | State span | Program |
 |---|---|---|---|
-| `KOBOrders::KobAsk` | `c4feaee15a4f2151c58667f60c4b8e36b0dc834ff2c2b63b1d9018954f72f0e5` | 1+276 | 1,684 B |
-| `KOBOrders::KobBid` | `39f6f767f4fdd712287084cec7db4dbbad831e246568753ee2e01c3260bba9e5` | 1+321 | 2,699 B |
-| `KOBOrders::KobCondAsk` | `bfaf406fe1f14f0f554a63f93addefa2e74c61ac8252f7e270dadfdd570f8211` | 1+363 | 3,855 B |
-| `KOBOrders::KobCondBid` | `46feb0d09ccadee63b2b9c64805dca0be46dcba80ad838dae00c3643ea7e7e99` | 1+417 | 4,791 B |
-| `KOBOrders::KobIfdAsk` | `87c16b1f953bece3db5f8602ebc0abce19df839f5d577795e0b5a6f85b5a2c3b` | 1+621 | 5,348 B |
-| `KOBOrders::KobIfdBid` | `a2a7bfe5651a4d127f9c2133b7bd4393af4d1b37fa0f44aa207fc17b6370fdc5` | 1+585 | 3,841 B |
-| `KOBOrders::KobPair` | `215986284c6b85a62e32aaaec1b07339239d8da5f744d792b88813f0610064d0` | 1+483 | 3,727 B |
-| `KOBOrders::KobCondPair` | `78309a1773d549e862e8b66ba51fc8ed00f3b9406400dd3df653a991280df4b7` | 1+579 | 7,852 B |
-| `KOBOrders::KobIfdPair` | `221fc23765fb6a91734bcb8835247996ba650cd4c303c4fae3afb70e58fa82fa` | 1+936 | 9,351 B |
-| `KOBOrdersKron::KobAskKron` | `173d56d1c70368ef88f08574a0bfe19b83b7796f30e00028629d94ae155e359f` | 1+243 | 1,487 B |
-| `KOBOrdersKron::KobBidKron` | `6325c554e6f758314595b97127c2f61d583a08aae8d6caa40f090e4d8909203a` | 1+252 | 1,473 B |
+| `KOBOrders::KobAsk` | `946d04e22377679cabf8995497edd3bf540bf817c37d08ca59e33413a3774a93` | 1+276 | 1,744 B |
+| `KOBOrders::KobBid` | `3dbfad203bd5eedf9cfb5296b2d85b13de11a7c38e54343eba9174755f284307` | 1+321 | 2,759 B |
+| `KOBOrders::KobCondAsk` | `339b25df04c125e5ababbce4c3ecb40c6bc85bd8d98351b5cf5f6420421fad9a` | 1+363 | 4,593 B |
+| `KOBOrders::KobCondBid` | `3e9b2b7d1b4cd30b606d953329f94c6fe46d7b523ffc56899357672db761d8ea` | 1+417 | 5,544 B |
+| `KOBOrders::KobIfdAsk` | `94b46d64bfe7a8ac17d393886009b0eeb4ebd2f96a95f000b9d68b706ddfd364` | 1+621 | 5,800 B |
+| `KOBOrders::KobIfdBid` | `37bca72abe3da3544f758e7d950088a0f1b1ccb1d8ffe2586f1c9e70f139502a` | 1+585 | 4,380 B |
+| `KOBOrders::KobPair` | `f470d093487d9ca82c4f67e11405630645b319e5f66afbb24777c0bfd1653e80` | 1+483 | 3,781 B |
+| `KOBOrders::KobCondPair` | `39aa882e2c4a8247004e31bd85fa7a2275b016d4ed40f983e34f816cf814ea9f` | 1+579 | 9,955 B |
+| `KOBOrders::KobIfdPair` | `80e96c3bf2b4cfe56fbd8782a7b3145b0b96c61fe5eac18254397082cb7b9d3a` | 1+936 | 11,450 B |
+| `KOBOrdersKron::KobAskKron` | `6494c47ff8a90fbda6c23489c36fad946bd2a114591a278b012b589a8f7f33d3` | 1+243 | 1,530 B |
+| `KOBOrdersKron::KobBidKron` | `451e39fd3b5419efc5411a0687a87433dafdcdcc1179f49c52c17998031a820b` | 1+252 | 1,533 B |
 | `KOBToken::KCC20` (8 in / 8 out) | `666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032` | 1+112 | 6,350 B |
 
 The test `tools/sil2argent/tests/published.rs` fails if the ids and handles above, or the router
@@ -91,7 +91,7 @@ Two ways to name a KOB order kind in `observes`. Both compile-checked examples l
 ### Closed ICC (recommended)
 
 ```
-import "./KOBOrders/artifact.json" id "1d0aa40e8302b27c5601cc46139b936f101fddcdf700823ba4c6a02463b81d9e";
+import "./KOBOrders/artifact.json" id "b0b4cbd99cf3655105ca42f5c5b9df0f9016a876a997edb2b86376fdd5dac2b2";
 
 actor PriceGate owns PriceGateState {
     entry spend(cov_id ask_covid, int n, sig s)

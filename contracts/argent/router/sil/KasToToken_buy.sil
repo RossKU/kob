@@ -35,7 +35,7 @@ contract KasToToken_buy(
     int constant MAX_TOKEN_OUTPUTS = 8;
 
     // :: linked templates
-    byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0xa862bae7d96a4e9c26cffc26a0698743d518f93cb3ab0e938c24bee151d1dcbb);
+    byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0x946d04e22377679cabf8995497edd3bf540bf817c37d08ca59e33413a3774a93);
 
     // :: state layouts
     struct TokenToKasState {

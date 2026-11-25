@@ -23,7 +23,7 @@
 # Rebuilding after a template change (the order of the template chain, R10CC-3). A template that embeds another
 # carries its hash and lengths in its .ctor.json: the conditional kinds embed KobAsk / KobBid, the if-done kinds embed
 # the conditional ones, and the pair constructors embed KobAskKron / KobBidKron (so they follow the KRON twins). The
-# state-span check of every order source is generated from its own artifact (scripts/gen-span-check.mjs). Until
+# evidence-span check of the stop readers is generated from the evidence artifacts (scripts/gen-span-check.mjs). Until
 # nothing changes: build, `node scripts/check-chain.mjs --fix`, `node scripts/gen-span-check.mjs`, build again (two or
 # three rounds); `--check` refuses a stale chain hash or span check.
 #

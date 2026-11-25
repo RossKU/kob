@@ -218,6 +218,73 @@ contract KobCondPair(
         return rs;
     }
 
+    // BEGIN GENERATED span check (scripts/gen-span-check.mjs): do not edit
+    // R10CC-1, R12-1: an evidence order's span runs as script and the template hash does not cover it. A reader
+    // proves the push headers of the span it takes: then the span parses as data to its end and the order's code
+    // runs as compiled, so the fill the reader sees is the fill that code enforces. The values are free.
+    // KobAsk evidence: its 20 push headers at their offsets (276 state bytes).
+    function spanAsk(byte[] o) {
+        require(o.slice(0, 1) + o.slice(33, 34) + o.slice(66, 67) + o.slice(99, 100)
+            + o.slice(108, 109) + o.slice(117, 118) + o.slice(126, 127) + o.slice(135, 136)
+            + o.slice(144, 145) + o.slice(153, 154) + o.slice(162, 163) + o.slice(171, 172)
+            + o.slice(180, 181) + o.slice(189, 190) + o.slice(198, 199) + o.slice(207, 208)
+            + o.slice(216, 217) + o.slice(225, 226) + o.slice(234, 235) + o.slice(243, 244)
+            == byte[](0x2020200808080808080808080808080808080820));
+    }
+    // KobAskKron evidence: its 19 push headers at their offsets (243 state bytes).
+    function spanAskKron(byte[] o) {
+        require(o.slice(0, 1) + o.slice(33, 34) + o.slice(66, 67) + o.slice(99, 100)
+            + o.slice(108, 109) + o.slice(117, 118) + o.slice(126, 127) + o.slice(135, 136)
+            + o.slice(144, 145) + o.slice(153, 154) + o.slice(162, 163) + o.slice(171, 172)
+            + o.slice(180, 181) + o.slice(189, 190) + o.slice(198, 199) + o.slice(207, 208)
+            + o.slice(216, 217) + o.slice(225, 226) + o.slice(234, 235)
+            == byte[](0x20202008080808080808080808080808080808));
+    }
+    // KobBid evidence: its 25 push headers at their offsets (321 state bytes).
+    function spanBid(byte[] o) {
+        require(o.slice(0, 1) + o.slice(33, 34) + o.slice(66, 67) + o.slice(99, 100)
+            + o.slice(108, 109) + o.slice(117, 118) + o.slice(150, 151) + o.slice(159, 160)
+            + o.slice(168, 169) + o.slice(177, 178) + o.slice(186, 187) + o.slice(195, 196)
+            + o.slice(204, 205) + o.slice(213, 214) + o.slice(222, 223) + o.slice(231, 232)
+            + o.slice(240, 241) + o.slice(249, 250) + o.slice(258, 259) + o.slice(267, 268)
+            + o.slice(276, 277) + o.slice(285, 286) + o.slice(294, 295) + o.slice(303, 304)
+            + o.slice(312, 313)
+            == byte[](0x20202008082008080808080808080808080808080808080808));
+    }
+    // KobBidKron evidence: its 20 push headers at their offsets (252 state bytes).
+    function spanBidKron(byte[] o) {
+        require(o.slice(0, 1) + o.slice(33, 34) + o.slice(66, 67) + o.slice(99, 100)
+            + o.slice(108, 109) + o.slice(117, 118) + o.slice(126, 127) + o.slice(135, 136)
+            + o.slice(144, 145) + o.slice(153, 154) + o.slice(162, 163) + o.slice(171, 172)
+            + o.slice(180, 181) + o.slice(189, 190) + o.slice(198, 199) + o.slice(207, 208)
+            + o.slice(216, 217) + o.slice(225, 226) + o.slice(234, 235) + o.slice(243, 244)
+            == byte[](0x2020200808080808080808080808080808080808));
+    }
+    // KobPair evidence: its 35 push headers at their offsets (483 state bytes).
+    function spanPair(byte[] o) {
+        require(o.slice(0, 1) + o.slice(33, 34) + o.slice(42, 43) + o.slice(75, 76)
+            + o.slice(108, 109) + o.slice(117, 118) + o.slice(126, 127) + o.slice(135, 136)
+            + o.slice(144, 145) + o.slice(177, 178) + o.slice(210, 211) + o.slice(219, 220)
+            + o.slice(228, 229) + o.slice(237, 238) + o.slice(270, 271) + o.slice(279, 280)
+            + o.slice(288, 289) + o.slice(297, 298) + o.slice(306, 307) + o.slice(315, 316)
+            + o.slice(324, 325) + o.slice(333, 334) + o.slice(342, 343) + o.slice(351, 352)
+            + o.slice(360, 361) + o.slice(369, 370) + o.slice(378, 379) + o.slice(387, 388)
+            + o.slice(396, 397) + o.slice(405, 406) + o.slice(414, 415) + o.slice(447, 448)
+            + o.slice(456, 457) + o.slice(465, 466) + o.slice(474, 475)
+            == byte[](0x2008202008080808202008080820080808080808080808080808080808082008080808));
+    }
+    // The KAS-book evidence layout of span o, picked by its length.
+    function spanBook(byte[] o) {
+        int l = o.length;
+        if (l == 276) { spanAsk(o); } else { if (l == 243) { spanAskKron(o); } else { if (l == 321) { spanBid(o); } else { require(l == 252); spanBidKron(o); } } }
+    }
+    // Any evidence layout of span o, picked by its length.
+    function spanAny(byte[] o) {
+        int l = o.length;
+        if (l == 276) { spanAsk(o); } else { if (l == 243) { spanAskKron(o); } else { if (l == 321) { spanBid(o); } else { if (l == 252) { spanBidKron(o); } else { require(l == 483); spanPair(o); } } } }
+    }
+    // END GENERATED span check
+
     // As tplRs, but return only the state span.
     function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
         int size = pre + stLen + suf;
@@ -343,6 +410,7 @@ contract KobCondPair(
             w = 0;
         }
         byte[] o = tplState(ev, pre, len, suf, tpl);
+        spanBook(o); // R12-1: the evidence span is canonical pushes (its layout picked by its length)
         require(byte[32](o.slice(34, 66)) == tok);
         // q spans scale to activeFrom and r spans interval to slope, each at
         // its shift.
@@ -493,6 +561,7 @@ contract KobCondPair(
                 + byte[](0x08) + byte[](tS as byte[8]);
         }
         byte[] o = tplState(ev, pre, len, suf, tpl);
+        spanAny(o); // R12-1: the evidence span is canonical pushes (its layout picked by its length)
         byte[] got = o.slice(34, 66) + o.slice(118, 126 + d);
         if (pair) {
             got = o.slice(34, 75) + o.slice(136, 177) + o.slice(238, 279);

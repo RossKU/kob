@@ -789,17 +789,19 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   (`kobd/src/matcher/candidate.rs` `excluded_by_expiry`, applied at `:652`, and for pairs `matcher/pair.rs:660`), and a
   batch's evidence is only a fill of those candidates (`matcher/batch.rs` `evidence_in` / `evidence_for`). So the gap
   is open only to a party that builds the transaction by hand, which the self-trade limit above already concedes.
-- **What `minTouch` guarantees** (since the 2026-11-25 generation, audit R10CC-1). The fill entry of every evidence kind
-  (`KobAsk`, `KobBid`, `KobPair` and the KRON twins) first checks that its own state span is data only (each field a direct push of its fixed
-  length, `spanIsData`, generated from the compiled state), and every other entry of those kinds (their cancels, and the
-  bids' refunds) refuses a signature script that starts with the fill's 8-byte push `0x08`, the only part of the signature
-  script a reader checks (audit R11T-1: the span runs before the dispatch, so without that rule a rigged order could pass
-  a fill-shaped signature script through its cancel). So an evidence order's own code runs on the state its bytes
-  show, and the fill amount the readers read from its signature script is the amount its code fills: an accepted
-  evidence fill trades at least `minTouch` base units at its quote, exactly as the reader sees it. Before it, a
-  hand-built evidence order could carry code in a field the readers skip and swap that amount, so a fill of one unit
-  could stand for any `minTouch` (confirmed by execution, `kob-protocol/tests/tplgen_rules.rs`). The self-trade limit
-  above remains: the capital at risk is `minTouch` at the quote for R, not its cost.
+- **What `minTouch` guarantees** (since the 2026-11-25 generation, audits R10CC-1, R11T-1, R12-1). Every stop reader
+  (`touchAsk`, `touchBid`, `touch`, the pair `evLeg` / `rd`, in both families) proves the evidence order's state span
+  canonical right after it takes it: each field's push header at its canonical offset with its canonical bytes
+  (generated from the evidence artifacts by `scripts/gen-span-check.mjs`). The span then parses as data to its end, so
+  the evidence order's code runs as compiled on the state its bytes show. Its cancels, and the bids' refunds, refuse a
+  signature script that starts with the fill's 8-byte push `0x08` (the only part of the signature script a reader
+  checks), so the fill entry is the only one such a signature script can run. The fill amount the readers read is the
+  amount that code fills: an accepted evidence fill trades at least `minTouch` base units at its quote, exactly as the
+  reader sees it. Before it, a hand-built evidence order could carry code in a field the readers skip (R10CC-1), pass a
+  fill-shaped signature script through its cancel (R11T-1), or end its span with a push that swallows its whole code
+  (R12-1), so a fill of one unit, or of none, could stand for any `minTouch` (each confirmed by execution,
+  `kob-protocol/tests/tplgen_rules.rs`). The self-trade limit above remains: the capital at risk is `minTouch` at the
+  quote for R, not its cost.
 - The trailing ratchet is free to move for the same reason (audit F5, open). A trailing stop's ratchet is capped only by
   `tpPrice` (`KobCondAsk`, `KobCondPair` trailing legs and their KRON twins), so an invisible evidence order of `minTouch` can
   ratchet a sell trail toward the market, or past it, at no cost: a forced exit within the band, or a stop that no longer

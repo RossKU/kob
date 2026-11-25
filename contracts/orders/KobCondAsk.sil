@@ -145,6 +145,37 @@ contract KobCondAsk(
         return rs;
     }
 
+    // BEGIN GENERATED span check (scripts/gen-span-check.mjs): do not edit
+    // R10CC-1, R12-1: an evidence order's span runs as script and the template hash does not cover it. A reader
+    // proves the push headers of the span it takes: then the span parses as data to its end and the order's code
+    // runs as compiled, so the fill the reader sees is the fill that code enforces. The values are free.
+    // KobAsk evidence: its 20 push headers at their offsets (276 state bytes).
+    function spanAsk(byte[] o) {
+        require(o.slice(0, 1) + o.slice(33, 34) + o.slice(66, 67) + o.slice(99, 100)
+            + o.slice(108, 109) + o.slice(117, 118) + o.slice(126, 127) + o.slice(135, 136)
+            + o.slice(144, 145) + o.slice(153, 154) + o.slice(162, 163) + o.slice(171, 172)
+            + o.slice(180, 181) + o.slice(189, 190) + o.slice(198, 199) + o.slice(207, 208)
+            + o.slice(216, 217) + o.slice(225, 226) + o.slice(234, 235) + o.slice(243, 244)
+            == byte[](0x2020200808080808080808080808080808080820));
+    }
+    // KobBid evidence: its 25 push headers at their offsets (321 state bytes).
+    function spanBid(byte[] o) {
+        require(o.slice(0, 1) + o.slice(33, 34) + o.slice(66, 67) + o.slice(99, 100)
+            + o.slice(108, 109) + o.slice(117, 118) + o.slice(150, 151) + o.slice(159, 160)
+            + o.slice(168, 169) + o.slice(177, 178) + o.slice(186, 187) + o.slice(195, 196)
+            + o.slice(204, 205) + o.slice(213, 214) + o.slice(222, 223) + o.slice(231, 232)
+            + o.slice(240, 241) + o.slice(249, 250) + o.slice(258, 259) + o.slice(267, 268)
+            + o.slice(276, 277) + o.slice(285, 286) + o.slice(294, 295) + o.slice(303, 304)
+            + o.slice(312, 313)
+            == byte[](0x20202008082008080808080808080808080808080808080808));
+    }
+    // The KAS-book evidence layout of span o, picked by its length.
+    function spanBook(byte[] o) {
+        int l = o.length;
+        if (l == 276) { spanAsk(o); } else { require(l == 321); spanBid(o); }
+    }
+    // END GENERATED span check
+
     // As tplRs, but return only the state span.
     function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
         int size = pre + stLen + suf;
@@ -223,6 +254,7 @@ contract KobCondAsk(
         int n = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
         require(n > 0);
         byte[] o = tplState(ev, ASK_PRE, ASK_STATE_LEN, ASK_SUF, ASK_TPL);
+        spanAsk(o); // R12-1: the evidence span is canonical pushes
         require(byte[32](o.slice(34, 66)) == tokenCovId);
         require(int(byte[8](o.slice(118, 126))) == scale);
         require(n >= minTouch);
@@ -271,6 +303,7 @@ contract KobCondAsk(
             w = 0;
         }
         byte[] o = tplState(ev, pre, len, suf, tpl);
+        spanBook(o); // R12-1: the evidence span is canonical pushes (its layout picked by its length)
         require(byte[32](o.slice(34, 66)) == tokenCovId);
         // q runs from scale to activeFrom and r from interval to slope, both
         // shifted for a bid.
