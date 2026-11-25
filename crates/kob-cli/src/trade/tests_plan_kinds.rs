@@ -19,7 +19,7 @@ use super::plan_pair::{apply_pair_tip_defaults, default_pair_tip, pair_tip_below
 use super::tests_plan::*;
 
 const P: i64 = 250_000_000;
-const KT: i64 = 2_300_000;
+const KT: i64 = 2_400_000;
 
 fn ask_of(s: &AnyState) -> AskState {
     match s {

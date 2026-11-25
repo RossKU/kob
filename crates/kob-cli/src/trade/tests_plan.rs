@@ -447,7 +447,7 @@ fn stops_take_profit_and_oco_like_the_web_planner() {
     let AnyState::KobCondAsk(s) = &p.states[0] else { panic!() };
     assert_eq!(
         (s.min_fill, s.min_touch, s.refund_tip, s.keeper_tip, s.slip_bps, s.band_daa, s.min_rest_daa, s.expiry_daa),
-        (4348, 4348, kob_protocol::defaults::tips(TemplateId::Kcc20Ref).unwrap().refund_tip as i64, 2_300_000, 300, 300, 50, GTC)
+        (4348, 4348, kob_protocol::defaults::tips(TemplateId::Kcc20Ref).unwrap().refund_tip as i64, 2_400_000, 300, 300, 50, GTC)
     );
     let d = p.disclosure.unwrap();
     assert_eq!(
@@ -457,7 +457,7 @@ fn stops_take_profit_and_oco_like_the_web_planner() {
     // Stop-market buy: escrow at the stop ceiling, three delivery carriers and the arming tip.
     let p = valid(&e, Intent::Cond(CondIntent { stop: Some(260_000_000), ..cond(CondKind::StopMarket, Side::Buy, 10 * TOK) }));
     let ceiling = 260_000_000 + 26_000 * 300;
-    assert_eq!(p.request.unwrap().value as i64, 10 * ceiling + 3 * C + 2_300_000);
+    assert_eq!(p.request.unwrap().value as i64, 10 * ceiling + 3 * C + 2_400_000);
     let AnyState::KobCondBid(s) = &p.states[0] else { panic!() };
     assert_eq!((s.min_fill, s.min_touch), (3847, 3847));
     // Stop-limit: the largest band within the limit.
