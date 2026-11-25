@@ -318,6 +318,11 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         Ok(())
     };
     check_key(&s.maker(), "order maker")?;
+    // A negative activeFrom can never be filled, and a negative expiryDaa never refunded by others (the maker's cancel
+    // still ends it): no tool places one (2026-11-25 contract review).
+    if s.active_from() < 0 || s.expiry().is_some_and(|(e, _)| e < 0) {
+        return invalid("activeFrom and expiryDaa must be >= 0");
+    }
     let base = |min_fill: i64, tip: i64, refund_tip: i64| -> Result<()> {
         if min_fill <= 0 {
             return invalid("minFill must be positive (at least one base unit)");

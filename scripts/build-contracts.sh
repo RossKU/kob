@@ -20,6 +20,13 @@
 #   ... --no-argent                       skip the Argent artifacts (contracts/argent, needs argentc,
 #                                         built from the pinned upstream: see vendor/argent-upstream/UPSTREAM.md)
 #
+# Rebuilding after a template change (the order of the template chain, R10CC-3). A template that embeds another
+# carries its hash and lengths in its .ctor.json: the conditional kinds embed KobAsk / KobBid, the if-done kinds embed
+# the conditional ones, and the pair constructors embed KobAskKron / KobBidKron (so they follow the KRON twins). The
+# state-span check of every order source is generated from its own artifact (scripts/gen-span-check.mjs). Until
+# nothing changes: build, `node scripts/check-chain.mjs --fix`, `node scripts/gen-span-check.mjs`, build again (two or
+# three rounds); `--check` refuses a stale chain hash or span check.
+#
 # Sources are passed to silverc as repo-relative paths from the repo root.
 # The artifact's `source_path` is `sil/<Name>.sil` whatever the input path, so the paths do not
 # affect the output.
@@ -164,6 +171,9 @@ manifest() {
 }
 if [ "$MODE" = check ]; then
   [ "$fail" = 0 ] || { echo "contract artifacts are stale: run scripts/build-contracts.sh" >&2; exit 1; }
+  # the template chain of the constructors, and the state-span checks generated from the artifacts (R10CC-3, R10CC-1)
+  node scripts/check-chain.mjs || exit 1
+  node scripts/gen-span-check.mjs --check || exit 1
   # SHA256SUMS lives in contracts/, outside the artifacts glob above.
   if ! diff <(manifest) contracts/SHA256SUMS >/dev/null; then
     echo "contracts/SHA256SUMS is stale: run scripts/build-contracts.sh" >&2; diff <(manifest) contracts/SHA256SUMS >&2 || true; exit 1

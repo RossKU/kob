@@ -773,14 +773,30 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   continuation, so it cannot require that the evidence order was visible. This was found in an internal review on
   2026-11-17 and is accepted as a known limit. One such fill arms **every** qualifying stop of the book at once: the
   evidence is one print, and any number of stops whose trigger it crosses may be armed or filled in the same transaction.
-- **Stale evidence counts too** (audit 2026-11-23, finding A2-1). The evidence readers check only that the evidence order
-  rested for R; none reads its expiry, its kill time or its age. So a fill of an order that has passed its `expiryDaa`, its
-  IOC/FOK kill time or its 90-day idle limit, but has not yet been refunded, is accepted as evidence, although no
-  conforming matcher fills such an order (§2.3) and the indexer marks it expired. It gives an attacker nothing beyond the
-  self-trade arming above: whoever uses it must really trade with that order at its quote (the stale order's maker is paid
-  their own limit), and the stop's owner trades at the stop, within its band. The rule that the evidence must also be open
-  for R inside its own lifetime (expiry, kill time and idle limit at least `exposed + R`) will be added in the first
-  template generation after mainnet, with the F5 fix.
+- **Stale evidence counts too** (audit 2026-11-23, finding A2-1; accepted limit, confirmed by the 2026-11-25 contract
+  readers, R10CA-1). Touch evidence is an order that existed and rested: a fill of it that the readers accept proves that
+  the order was on chain, of this token and scale, at its quote, for R. The contract cannot require that it is still
+  fillable at the present, because a script can only bound the present from below: `tx.daa` exists only as
+  `require(tx.daa >= x)`, a lock-time check, and the lock time is the sender's number, at most the present; no opcode
+  gives a script an upper bound on it. A static rule (`exposed + R` before the evidence's refund time) would refuse only
+  an order whose rest never fitted in its life: evidence that went stale after its rest window (a GTD order past
+  `expiryDaa`, an IOC / FOK past its kill, an order idle for 90 days, none refunded yet) still counts. Every evidence kind
+  also accepts its own fill after these times (expiry is soft: `KobAsk.sil`, `KobBid.sil`, `KobPair.sil` fill entries
+  check only `activeFrom`), so only a reader could have applied them. It gives an attacker nothing beyond the self-trade
+  arming above: whoever uses it must really trade with that order at its quote (the stale order's maker is paid their
+  own limit), and the stop's owner trades at the stop, within its band. KOB's own executors and keepers arm and trail
+  only with fills of live orders: the matcher's fill candidates exclude an order at or past its refund time
+  (`kobd/src/matcher/candidate.rs` `excluded_by_expiry`, applied at `:652`, and for pairs `matcher/pair.rs:660`), and a
+  batch's evidence is only a fill of those candidates (`matcher/batch.rs` `evidence_in` / `evidence_for`). So the gap
+  is open only to a party that builds the transaction by hand, which the self-trade limit above already concedes.
+- **What `minTouch` guarantees** (since the 2026-11-25 generation, audit R10CC-1). Every entry of every order template
+  except its maker's cancel first checks that its own state span is data only (each field a direct push of its fixed
+  length, `spanIsData`, generated from the compiled state). So an evidence order's own code runs on the state its bytes
+  show, and the fill amount the readers read from its signature script is the amount its code fills: an accepted
+  evidence fill trades at least `minTouch` base units at its quote, exactly as the reader sees it. Before it, a
+  hand-built evidence order could carry code in a field the readers skip and swap that amount, so a fill of one unit
+  could stand for any `minTouch` (confirmed by execution, `kob-protocol/tests/tplgen_rules.rs`). The self-trade limit
+  above remains: the capital at risk is `minTouch` at the quote for R, not its cost.
 - The trailing ratchet is free to move for the same reason (audit F5, open). A trailing stop's ratchet is capped only by
   `tpPrice` (`KobCondAsk`, `KobCondPair` trailing legs and their KRON twins), so an invisible evidence order of `minTouch` can
   ratchet a sell trail toward the market, or past it, at no cost: a forced exit within the band, or a stop that no longer
@@ -790,16 +806,17 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   recommend `minTouch` 100 %.
   A sell trail raised past `MAX_STOP` (with no take-profit) also fails every stop-leg fill, so the indexer marks the order
   `bad_state`: it leaves the book and no keeper refunds it at expiry; its maker can still cancel it (audit R9FA2-2). The
-  same `trailMax` closes it.
-- **The sell-custody check requires a zero guard** (first template generation after mainnet; audits R9FA-1, R9FA2-1). The
+  same `trailMax` closes it. Since the 2026-11-25 generation a sell trail stops at `MAX_STOP` (`KobCondAsk`, its KRON
+  twin and `KobCondPair`), so that part is closed; `trailMax` itself stays open (founder decision pending).
+- **The sell-custody check requires a zero guard** (done in the 2026-11-25 generation; audits R9FA-1, R9FA2-1). Before it, the
   order covenants compare a sell custody on owner, scheme 4, borrow setting 0, class and amount, but not on its borrow
   guard, and copy the spent custody's guard to the rest: `KobAsk.sil:327`, `KobCurveAsk.sil:182`, `KobCondAsk.sil:509`,
   `KobIfdAsk.sil:285` and `:581`, `KobCondPair.sil:785` with `:1084` and `:1154`, `KobIfdPair.sil:663`, `:668` (via
   `heldGx`, `:274-293`) and `:832`. With borrowing disabled the guard is inert, so nothing is lost, but a unit someone
   sends with a non-zero guard can stand in for the custody. Every custody the covenants create themselves (if-done exits,
-  merges into an empty entry, bought-custodies) already has a zero guard; the KRON twins have no guard. Until then the
-  tools end such an order with the unit the covenant accepts (cancel, position cancel, refund), never fill from it, and
-  never sweep it away from a live order.
+  merges into an empty entry, bought-custodies) already has a zero guard; the KRON twins have no guard. The new
+  generation compares bytes [43..79) (scheme 4, borrowing off, a zero guard) at each custody check. For orders of the
+  retired templates (cancel-only) the tools still end an order with the unit its covenant accepts.
 - Once armed, a stop is only a limit bounded by its band (§2.1). A quote placed beyond the stop to
   trigger it must rest there for R, open to every matcher, before its fill counts; the threshold
   sets how much of it must trade.

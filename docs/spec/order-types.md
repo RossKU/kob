@@ -204,6 +204,12 @@ is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fil
 The KRON family has a twin of every KAS-quoted kind (`KobAskKron` … `KobIfdAskKron`, `contracts/orders/kron/README.md`);
 each pair template is one template for both families of each of its tokens (its state names the family of A and of B).
 
+Every entry refuses a transaction on a KIP-21 user lane (`OpTxSubnetId` must be native), and every entry but `cancel`
+first checks that the order's own state span is data only (each field a direct push of its fixed length): an order
+built by hand with code in its state can only be cancelled by its maker (2026-11-25 generation; audit R10CC-1).
+Known limit: `KobBid`'s refund slot (`refundTo`) accepts any input without a covenant id, including another program's
+script; no KOB script combines with a bid that way today (2026-11-25 contract review).
+
 ## Order types
 
 Every order type below exists on a pair too (*Pair orders*); the table names the KAS-quoted covenants.

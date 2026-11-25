@@ -2815,6 +2815,21 @@ impl AnyState {
             AnyState::KobCurveAsk(s) => s.min_fill,
         }
     }
+    /// `activeFrom` of every order kind.
+    pub fn active_from(&self) -> i64 {
+        match self {
+            AnyState::KobAsk(s) | AnyState::KobAskKron(s) => s.active_from,
+            AnyState::KobBid(s) | AnyState::KobBidKron(s) => s.active_from,
+            AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => s.active_from,
+            AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.active_from,
+            AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => s.active_from,
+            AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.active_from,
+            AnyState::KobPair(s) => s.active_from,
+            AnyState::KobCondPair(s) => s.active_from,
+            AnyState::KobIfdPair(s) => s.active_from,
+            AnyState::KobCurveAsk(s) => s.active_from,
+        }
+    }
     /// Expiry and refund tip (every order kind but `KobCurveAsk`, which has no refund).
     pub fn expiry(&self) -> Option<(i64, i64)> {
         Some(match self {
