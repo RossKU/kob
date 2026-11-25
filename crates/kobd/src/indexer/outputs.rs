@@ -114,6 +114,7 @@ mod tests {
             kcc23: None,
             payer: None,
             in_value: None,
+            lane: None,
         }
     }
 

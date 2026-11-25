@@ -204,7 +204,11 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   whatever their number: in pieces sized by what one step proves at the measured lane-proof time (at most 4,096 lanes,
   one chain block always whole), every lane proof fetched is kept across steps, and a period in which the lane proofs
   answered rise (each call within its 30 s bound) counts as progress, so a lane-heavy window is never thrown away by
-  the progress rule. KOB never reads a coinbase (a coinbase whose blue score reads `KOB1` was refused before). A lane proof a node calls "too deep" halts nothing: of a recent cursor it is that
+  the progress rule. KOB never reads a coinbase (a coinbase whose blue score reads `KOB1` was refused before). **KOB state is created only by native-lane
+  transactions** (`docs/spec/indexer-lanes.md`): a transaction on a KIP-21 user lane can only end what the index tracks (an order,
+  a token UTXO or a holding it spends is closed; an order shows `lane_end`, with what remains on chain for its maker to import),
+  its KOB1 records are not read, and a user lane is proven only where it spends a tracked output. A flood of junk lanes costs the
+  index no lane proofs; before, every lane a batch showed took two. A lane proof a node calls "too deep" halts nothing: of a recent cursor it is that
   node's failure, of one older than the pruning depth a `gap` that is left by itself once a node serves the proof.
   `state`, `caught_up` and `within_lag_tolerance` (the executor's gate) and lean pruning now follow the cursor block's
   verified time; the node's DAA claim is shown, never used. A public node deposed for it that held back chain

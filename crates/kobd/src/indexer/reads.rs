@@ -2269,6 +2269,15 @@ pub struct OrderView {
     /// still show the type and terms of the order. It is never the basis of a spend.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placed_state: Option<Value>,
+    /// Set when the order was closed by a transaction on a lane other than the native one (R9-K,
+    /// `docs/spec/indexer-lanes.md`): `{"reason": "spent_on_other_lane", "txid", "lane", "note", "remainder": [{"txid",
+    /// "index", "value", "amount_left", "state"}]}`. KOB state is created only by native-lane transactions, so the index
+    /// stops following the order there; what the spend left under the order's covenant id is the remainder, which the
+    /// maker can import (`kobd db import-orders`) or find and cancel with `kob recover` (`--amount-left`). `state` is the
+    /// encoded state of the remainder when it could be proven from its script, else null. Only on the single-order view
+    /// and on a maker's list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lane_end: Option<Value>,
     /// DAA score of the block that created the current UTXO.
     pub current_daa: Option<i64>,
     /// Deadline of a day order, in UTC unix seconds, from the placement record.
@@ -2695,6 +2704,7 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         state_known: r.get::<_, Option<i64>>(33)?.unwrap_or(0) != 0,
         state: state.as_ref().and_then(|s| crate::indexer::processor::guarded(|| serde_json::to_value(s).ok()).flatten()),
         placed_state: placed.as_ref().and_then(|s| crate::indexer::processor::guarded(|| serde_json::to_value(s).ok()).flatten()),
+        lane_end: None,
         current_daa,
         deadline_passed: active && deadline_passed(deadline, ctx),
         deadline,
@@ -3005,7 +3015,31 @@ pub fn order(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32) -> DbResult
     kids.reverse();
     v.children = Some(kids);
     attach_holdings(conn, ctx, covenant_id, &mut v)?;
+    attach_lane_end(conn, covenant_id, &mut v)?;
     Ok(Some(v))
+}
+
+/// [`OrderView::lane_end`] of a closed order: its closing event, when a user-lane transaction closed it (R9-K). One
+/// indexed read of its last closing event.
+fn attach_lane_end(conn: &Connection, covenant_id: &Hash32, v: &mut OrderView) -> DbResult<()> {
+    if v.status != "closed" {
+        return Ok(());
+    }
+    let row: Option<(Option<String>, Vec<u8>)> = conn
+        .prepare_cached(
+            "SELECT kob_dtext(e.detail), e.txid FROM order_events e WHERE e.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) \
+             AND e.closes = 1 ORDER BY e.id DESC LIMIT 1",
+        )?
+        .query_row([covenant_id.0.to_vec()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((Some(text), txid)) = row else { return Ok(()) };
+    let Ok(Value::Object(mut d)) = serde_json::from_str::<Value>(&text) else { return Ok(()) };
+    if d.get("reason").and_then(Value::as_str) != Some(crate::indexer::processor::LANE_END_REASON) {
+        return Ok(());
+    }
+    d.insert("txid".into(), Value::String(hex::encode(&txid)));
+    v.lane_end = Some(Value::Object(d));
+    Ok(())
 }
 
 /// Most child orders (if-done exits) an order view carries: the newest. `children_total` says how
@@ -3387,6 +3421,12 @@ pub fn orders(
         for v in items.iter_mut().filter(|v| v.status == "open" || v.status == "partial") {
             if let Ok(id) = Hash32::parse(&v.covenant_id) {
                 attach_holdings(conn, ctx, &id, v)?;
+            }
+        }
+        // and the lane end of its closed ones, so that a maker sees which order ended on another lane (R9-K)
+        for v in items.iter_mut().filter(|v| v.status == "closed") {
+            if let Ok(id) = Hash32::parse(&v.covenant_id) {
+                attach_lane_end(conn, &id, v)?;
             }
         }
     }

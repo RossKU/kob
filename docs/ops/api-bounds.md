@@ -242,6 +242,35 @@ instead of failing. Where a refusal is still possible, its cost and its effect a
 | The web's pair ticket check | The pair's own orders only (`/v1/pairs/{a}/{b}/orders`): each must fund one fill (about 0.16 KAS of carriers, refundable), the cost the pair book's 20,001 rows accept | The ticket waits while the list is longer than the web's page cap |
 | The CLI live-order list (200 pages, a repeated or bad cursor) | A hostile indexer, or per-victim inflation as above | A waivable `own-orders` guard |
 
+## Lanes: the chain-proof work an outsider can cause (R9-K)
+
+The follower proves the native lane and only those KIP-21 user lanes on which a window spends an output the store tracks
+(`docs/spec/indexer-lanes.md`). Each proven lane costs two lane proofs (at the anchor and at the window's end).
+
+- **Junk lanes.** Transactions that spend nothing tracked, each on a lane of its own, cost no proof at whatever volume:
+  - before, the reviewer's figure was about 0.08 KAS per 4,100 transactions, and 2 proofs each;
+  - tests: `a_junk_user_lane_flood_proves_no_lane` and `a_junk_lane_flood_costs_no_lane_proofs` (4,000 lanes applied after
+    the native lane's proofs alone).
+- **Chained lanes.** A chain of user-lane transactions, each spending the last one's output on a fresh lane, proves its
+  first link only: nothing a user-lane transaction creates is tracked (`a_chained_user_lane_flood_proves_only_its_first_link`).
+- **Lanes that each end a tracked output** (the expensive case). Each proven lane ends one tracked output (an order UTXO, an
+  order's token UTXO, a holding) that the attacker made earlier on the native lane. Each output is ended once
+  (`user_lanes_that_each_end_a_tracked_output_are_each_proven_once`).
+  - A tracked output is a covenant output, of KIP-9 storage mass `4·C/v` grams (C = 10^12, v its value in sompi).
+  - Block space is 500,000 grams a block at 10 blocks a second.
+  - So 1.76 M of them (an hour of consensus's maximum of 500 new lanes a second) need:
+
+| Value of each output | Capital (refundable, at risk while out) | Blocks fully used to make them |
+|---|---|---|
+| 1 KAS | about 1.76 M KAS | about 3.9 h |
+| 10 KAS | about 17.6 M KAS | about 23 min |
+
+Plus the fees of about 3.5 M transactions, and orders that rest visibly in the book until they are ended. kobd's work per
+link is the two lane proofs and one record. Against a remote node (the supported setup), kobd proves about 13 such lanes a
+second at 0.3 s a call and 4 at 1 s: each delays the index by 75 ms or 250 ms. Pushing it past the pruning depth (30 h)
+takes about 1.4 M of them at 0.3 s, or 0.43 M at 1 s (`docs/ops/executor.md`, *Node*, *Lane load*). In the normal case
+fewer lanes are proven than before: the native lane alone unless a user lane spends a tracked output.
+
 ## What a cap can leave out (R9)
 
 Every public read with a row cap, scan cap or `LIMIT` over rows an outsider writes, and which honest content the order of its scan

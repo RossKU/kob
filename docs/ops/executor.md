@@ -363,7 +363,11 @@ Roles, Configuration and store, Node, Storage, Read API, Log, Executor, Fees, Ma
 `--data-dir`, `--tokens`) and, for `import-orders` and `rebase`, the node options. Exit status of `kobd`: 0 a stop; 1 an error (a
 supervisor starts it again, e.g. "exiting so that a supervisor restarts the executor"); 2 a usage mistake (clap's own, an option of
 another role, `--node` on a start, a role the configuration was not set up for, `--lean` on the wrong role), a configuration file
-that is missing or does not parse, or a stop that did not finish in time (do not start it again unchanged); 130 a second Ctrl+C. The commands that print a document or a report on stdout
+that is missing or does not parse, or a stop that did not finish in time (do not start it again unchanged); 130 a second Ctrl+C. A stop asked while the store does
+its start-up work (the one-time counts and indexes of a store an earlier build wrote: seconds on a small store, longer on a large one
+upgraded from an older schema) logs `stop requested: finishing the store's start-up work first` and is honoured when that work
+ends; the 10 s limit counts from then. Each step is one transaction with its own "done" marker, so a kill or a second Ctrl+C there
+loses only that step, which the next start does again. The commands that print a document or a report on stdout
 (`kobd db ...`, `kobd logo-reports ...`, `kobd address-balance`, `kobd setup --non-interactive`, `kobd withdraw`, `kobd config check`,
 `kobd match` and `kobd keep` with `--offline`) keep their log on stderr, so `kobd db export-orders | jq` works. Log lines have kaspad's
 shape, `2026-11-11 08:44:28.529Z  INFO status: ...` (UTC to the millisecond, the level, no Rust module path; the path is shown only
@@ -3227,8 +3231,8 @@ run without the file). Unlisted tokens (stray dust) are only merged, or with `--
 forged, whichever node served the batch: every header must hash to its block, link to the chain block before it, meet the
 target of its `bits` (kHeavyHash, rusty-kaspa's `kaspa-pow`) and not claim a target easier than `floor_factor` (default
 4) times the median of the last `floor_window` (600) headers, nor than a network minimum (`min_difficulty`: 1e13 on
-mainnet, 1e4 on testnet-10); every transaction must hash to its id; every lane the batch touches (the native lane always,
-coinbase aside) must fold into the tip a KIP-21 lane proof (`getSeqCommitLaneProof`) shows against the last chain block's
+mainnet, 1e4 on testnet-10); every transaction must hash to its id; the native lane, and every user lane on which the batch
+spends an output the store tracks (R9-K, `docs/spec/indexer-lanes.md`; the coinbase lane is never read), must fold into the tip a KIP-21 lane proof (`getSeqCommitLaneProof`) shows against the last chain block's
 `accepted_id_merkle_root`, so no native transaction can be hidden or added; and the signature scripts of every
 transaction that can matter to KOB must match its merged block, whose transactions must match its `hash_merkle_root`
 and which must be in the merge set of the chain block that accepted the transaction (a direct parent, or found below one
@@ -3245,6 +3249,46 @@ remote node, they held the follower to 1-1.5x chain speed on the TN10 soak). Lef
 native one that a batch hides entirely (until it next shows up), and the spent outputs attached to inputs, which are
 read for untracked trigger evidence only: a spend of a tracked output is read from the store's own output, looked up by
 outpoint.
+
+**Lane load** (R9C1-H1, R9-K).
+- **The lane rule.** KOB state is created only by native-lane transactions. A transaction on a KIP-21 user lane can only end
+  what the index tracks (`docs/spec/indexer-lanes.md`), so a user lane is proven only where it spends a tracked output. A
+  flood of junk transactions on lanes of their own costs the index no lane proofs.
+- **What still costs proofs.** Each proven user lane ends one tracked output made earlier on the native lane, at two lane
+  proofs. The bound is in `docs/ops/api-bounds.md`, *Lanes*.
+- **Against a remote node** (the supported setup: RPC only, someone else's server).
+  - The node has no batched lane-proof call today, so each lane costs two calls of its own.
+  - kobd proves what still needs proofs at about `8 / (2 × call time)` lanes a second: about 13 a second at 0.3 s a call, 4
+    a second at 1 s.
+  - So each lane an attacker makes proven delays the index by 75 ms at 0.3 s, or 250 ms at 1 s. Each such lane ends one
+    tracked output the attacker made beforehand (the cost table of `docs/ops/api-bounds.md`, *Lanes*).
+  - Delaying it past the node's pruning depth (30 h) takes about 1.4 M such outputs at 0.3 s (about 1.4 M KAS at 1 KAS
+    each, refundable), or about 0.43 M at 1 s.
+  - A shorter burst falls behind (`catching_up`, the cursor's true age shown) and recovers at the same rate.
+- **Calls in the normal case go down.** A window that shows no spend of a tracked output on a user lane proves the native
+  lane alone: two lane proofs. Before, it proved every lane it showed, two each.
+- **Optional: a node next to the index.** An operator may run one on the same host or LAN. Its lane-proof rate is an
+  estimate until measured: 2,000 to 8,000 lanes a second at 0.5 to 2 ms a call.
+- Consensus allows at most 500 new lanes a second.
+- **How an operator tells lane load from a slow node.** `/v1/health` `chain_proof`:
+  - `lanes_pending` (lane proofs still to fetch for the piece in progress), `lane_proofs_answered` rising, and
+    `lane_proof_failures` flat mean lane load;
+  - `lane_budget` (lanes a piece takes, from the measured call time: 4,096 against a fast node, down to 64 against a slow
+    one);
+  - `user_lanes_proven_total`;
+  - the status line says `proving lanes: N pending, M answered, K a piece` while it lasts.
+  - A slow node instead shows failures or timeouts and an `authority_pace` of `failing`.
+
+**After a "too deep" gap.** A lane proof the node calls too deep, of a cursor older than the pruning depth, halts the
+follower with that message.
+1. Point `--rpc-url` (or an extra node) at a node that still proves the cursor, if there is one: an archival node, or one
+   whose pruning point is older.
+2. Otherwise rebase. The recovering follower does it by itself when the node no longer knows the cursor; else run
+   `kobd db rebase` by hand. The store moves to the node's pruning point, and its tracked orders are reconciled with the
+   node's UTXO set: those the node no longer has are closed `gap`, successors under the same script are adopted.
+3. Orders created inside the skipped stretch and still open are missing until their makers import them (7.5).
+4. The rebase takes minutes. Following from the pruning point then means catching up about 30 h of chain, which takes hours
+   (not measured). Under continued lane load it falls behind again at the rates above.
 
 Run a rusty-kaspa v2.1.0 node with `--utxoindex` (funding lookup), `--retention-period-days=7`,
 `--disable-upnp`, RPC on loopback only, never `--unsaferpc` (the recommended setup), or use public nodes (*Public nodes*

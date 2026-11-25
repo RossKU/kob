@@ -607,7 +607,7 @@ pub async fn follow_and_serve(opts: IndexOpts) -> Result<()> {
     tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
     // Listen before the slow part, so that a Ctrl+C while the store opens is not lost.
     let shutdown = shutdown_signal();
-    let idx = Indexer::open(cfg)?;
+    let idx = crate::shutdown::finishing_startup(|| Indexer::open(cfg))?;
     let status = opts.status_every().map(|every| {
         let health = idx.health.clone();
         tokio::spawn(async move {

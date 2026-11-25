@@ -486,6 +486,10 @@ pub struct Follower<S: ChainSource> {
     lane_budget: std::sync::atomic::AtomicUsize,
     /// Merged-block walks that ran out of one attempt's headers, by (chain block, merged block) (R9C1-L3).
     merge_walks: Mutex<std::collections::HashMap<(Hash32, Hash32), crate::rpc::proof::MergeWalk>>,
+    /// Tests: prove every user lane the window shows, as if each held a spend of a tracked output (the expensive case
+    /// of R9-K), so that the lane-heavy paths are exercised against a store that tracks nothing.
+    #[cfg(test)]
+    prove_every_lane: std::sync::atomic::AtomicBool,
 }
 
 /// The state of the progress rule (module documentation, *Progress*).
@@ -569,6 +573,8 @@ struct Blame {
 #[derive(Default)]
 struct EndProofs {
     end: Option<Hash32>,
+    /// The lane proofs the piece's end needs, for `lanes_pending` in `/v1/health`.
+    want: usize,
     got: std::collections::HashMap<kaspa_hashes::Hash, (kaspa_rpc_core::GetSeqCommitLaneProofResponse, Origin)>,
 }
 
@@ -792,6 +798,8 @@ impl<S: ChainSource> Follower<S> {
             proof_failures: std::sync::atomic::AtomicU64::new(0),
             lane_budget: std::sync::atomic::AtomicUsize::new(crate::rpc::proof::MAX_BATCH_LANES),
             merge_walks: Mutex::new(Default::default()),
+            #[cfg(test)]
+            prove_every_lane: Default::default(),
         }
     }
 
@@ -1659,7 +1667,20 @@ impl<S: ChainSource> Follower<S> {
         if cross.alone {
             alarms.push(format!("cross-check: {}", cross.reason.as_deref().unwrap_or("none answers: the chain authority runs alone")));
         }
-        let proof = self.proof.as_ref().map(|p| p.lock().unwrap_or_else(|e| e.into_inner()).status());
+        let pending = {
+            let g = self.end_proofs.lock().unwrap_or_else(|e| e.into_inner());
+            g.want.saturating_sub(g.got.len())
+        };
+        let proof = self.proof.as_ref().map(|p| {
+            let mut g = p.lock().unwrap_or_else(|e| e.into_inner());
+            g.note_lanes(
+                self.proofs_answered.load(std::sync::atomic::Ordering::Relaxed),
+                self.proof_failures.load(std::sync::atomic::Ordering::Relaxed),
+                self.lane_budget.load(std::sync::atomic::Ordering::Relaxed),
+                pending,
+            );
+            g.status()
+        });
         self.health.update(|h| {
             h.cross_checked = cross.checked;
             h.cross_check_alone = cross.alone;
@@ -2003,10 +2024,33 @@ impl<S: ChainSource> Follower<S> {
             return (raw, Ok(()), confirmed);
         };
         let mut raw = raw;
+        // The user lanes to prove: those on which the window spends an output the store tracks (R9-K). Every other
+        // user lane holds nothing KOB reads and is neither folded nor proven.
+        let keys = super::trust::WindowKeys::of(&raw.chain_block_accepted_transactions);
+        let user_lanes =
+            match self.blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys)).await {
+                Ok(ctx) => ctx.user_lanes(&raw.chain_block_accepted_transactions),
+                Err(e) => {
+                    let verdict = self.proof_verdict(&proof, origin, Err(ProofError::Unavailable(format!("database: {e}")))).await;
+                    self.fault(WAIT_OWN);
+                    return (raw, verdict, Ok(()));
+                }
+            };
+        #[cfg(test)]
+        let user_lanes = if self.prove_every_lane.load(std::sync::atomic::Ordering::Relaxed) {
+            raw.chain_block_accepted_transactions
+                .iter()
+                .flat_map(|b| &b.accepted_transactions)
+                .filter(|t| super::record::user_lane(t).is_some())
+                .filter_map(|t| t.subnetwork_id.as_ref().and_then(|s| <[u8; 20]>::try_from(s.0.as_slice()).ok()))
+                .collect()
+        } else {
+            user_lanes
+        };
         // More lanes than one step proves in time: the window is proven and applied in pieces, cut once on the raw
         // subnetwork ids before the check (R9C1-L1), resuming the piece whose end proofs are kept (R9C1-H1). kobd's own
         // bound: no refusal, no blame (R8C1-H1).
-        if let Some(k) = self.piece_of(&raw) {
+        if let Some(k) = self.piece_of(&raw, &user_lanes) {
             tracing::info!(
                 chain_blocks = raw.added_chain_block_hashes.len(),
                 first = k,
@@ -2021,7 +2065,7 @@ impl<S: ChainSource> Follower<S> {
             .waiting_on(
                 WAIT_OWN,
                 tokio::task::spawn_blocking(move || {
-                    let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
+                    let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local_for(start, &raw, &user_lanes);
                     (raw, r)
                 }),
             )
@@ -2191,7 +2235,7 @@ impl<S: ChainSource> Follower<S> {
     /// The piece of `raw` a step proves and applies (R9C1-H1, R9C1-L1): the one whose end proofs are kept, when that
     /// end is in the window (work is never thrown away), else its longest prefix within [`Follower::lane_budget`] lanes
     /// counted on the raw subnetwork ids, at least one chain block. `None`: the whole window.
-    fn piece_of(&self, raw: &RawVspcResponse) -> Option<usize> {
+    fn piece_of(&self, raw: &RawVspcResponse, user_lanes: &std::collections::HashSet<[u8; 20]>) -> Option<usize> {
         let kept = self.end_proofs.lock().unwrap_or_else(|e| e.into_inner()).end;
         if let Some(i) = kept.and_then(|e| raw.added_chain_block_hashes.iter().position(|h| *h == e)) {
             return (i + 1 < raw.added_chain_block_hashes.len()).then_some(i + 1);
@@ -2202,8 +2246,12 @@ impl<S: ChainSource> Follower<S> {
             std::collections::HashSet::from([kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE.as_bytes().as_slice()]);
         for (k, b) in raw.chain_block_accepted_transactions.iter().enumerate() {
             for t in &b.accepted_transactions {
+                // the lanes proven: the native lane and the user lanes KOB reads (R9-K)
                 if let Some(s) = t.subnetwork_id.as_ref().filter(|s| s.0.as_slice() != coinbase.as_slice()) {
-                    seen.insert(s.0.as_slice());
+                    let proven = <[u8; 20]>::try_from(s.0.as_slice()).is_ok_and(|b| b == [0u8; 20] || user_lanes.contains(&b));
+                    if proven {
+                        seen.insert(s.0.as_slice());
+                    }
                 }
             }
             if seen.len() > budget {
@@ -2257,7 +2305,7 @@ impl<S: ChainSource> Follower<S> {
         let missing: Vec<kaspa_hashes::Hash> = {
             let mut g = self.end_proofs.lock().unwrap_or_else(|e| e.into_inner());
             if g.end != Some(end) {
-                *g = EndProofs { end: Some(end), got: Default::default() };
+                *g = EndProofs { end: Some(end), want: lanes.len(), got: Default::default() };
             }
             lanes.iter().copied().filter(|l| !g.got.contains_key(l)).collect()
         };
@@ -2889,6 +2937,8 @@ impl<S: ChainSource> Follower<S> {
         if self.proof.is_none() {
             tracing::warn!("chain proofs are OFF ([chain_proof] enabled = false, or the node serves none): no batch is proven, and the time of the cursor's chain block, which the chain authority is judged by, is the node's word (checked against the block's hash only)");
         }
+        // The store is open and the first request to the node goes out now (an operator's marker, and the stop test's).
+        tracing::info!("following the node from the store's cursor");
         loop {
             if *shutdown.borrow() {
                 break;
@@ -3322,6 +3372,8 @@ mod tests {
             {
                 let (mut f, src, ingest, health) = follower_with(MAINNET, |_| {}, Duration::from_millis(delay_ms));
                 src.extra_lanes.store(lanes, SeqCst);
+                // the expensive case of R9-K: every lane holds a spend of a tracked output
+                f.prove_every_lane.store(true, SeqCst);
                 // an hour behind, its time known from the start: the progress rule judges the first step too
                 f.set_clock_at(src.fx.start_header.timestamp + 3_600_000);
                 *f.cursor_ts.lock().unwrap() = Some((src.fx.start, src.fx.start_header.timestamp));
@@ -3354,6 +3406,41 @@ mod tests {
             }
         }
 
+        /// R9-K: the same 4,000-lane chain block against the same 0.4 s node, its lanes holding nothing the store
+        /// tracks: no user lane is proven, so the block is applied after the native lane's proofs alone, in seconds,
+        /// where proving every lane took 405 s (the test above).
+        #[tokio::test(start_paused = true)]
+        async fn a_junk_lane_flood_costs_no_lane_proofs() {
+            let (mut f, src, ingest, _health) = follower_with(MAINNET, |_| {}, Duration::from_millis(400));
+            src.extra_lanes.store(4_000, SeqCst);
+            f.set_clock_at(src.fx.start_header.timestamp + 3_600_000);
+            *f.cursor_ts.lock().unwrap() = Some((src.fx.start, src.fx.start_header.timestamp));
+            {
+                let p = f.proof.as_ref().unwrap();
+                let mut g = p.lock().unwrap();
+                let old = std::mem::replace(&mut *g, ChainProof::new(ChainProofConfig::default(), "mainnet"));
+                *g = old.skipping(crate::rpc::proof::skip::LANES);
+            }
+            let (stop, rx) = watch::channel(false);
+            let start = src.fx.start;
+            let watcher = async {
+                let t0 = tokio::time::Instant::now();
+                while t0.elapsed() < Duration::from_secs(600) {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    if cursor(&ingest) != start {
+                        break;
+                    }
+                }
+                let _ = stop.send(true);
+                t0.elapsed()
+            };
+            let ((), took) = tokio::join!(f.run(rx), watcher);
+            assert_ne!(cursor(&ingest), start, "applied");
+            assert!(took < Duration::from_secs(60), "applied after {took:?}");
+            let answered = f.proofs_answered.load(SeqCst);
+            assert!(answered < 16, "the native lanes' proofs only, not 8,000: {answered}");
+        }
+
         fn cursor(ingest: &Mutex<Ingest>) -> Hash32 {
             ingest.lock().unwrap().cursor().unwrap().unwrap().hash
         }
@@ -3372,11 +3459,14 @@ mod tests {
                 assert!(src.refused.lock().unwrap().is_empty());
                 assert!(!health.snapshot().cross_checked, "a single node is not cross-checked");
 
-                // A native transaction hidden by the node: refused, nothing applied, the node reported.
+                // A native transaction hidden by the node: refused, nothing applied, the node reported. (A user-lane
+                // transaction that spends nothing tracked is not proven, R9-K: the native lane always is.)
                 let (f, src, ingest, health) = follower(text, |r| {
-                    let b = r.chain_block_accepted_transactions.iter_mut().find(|b| b.accepted_transactions.len() > 1);
+                    let native = |t: &crate::rpc::types::Tx| t.subnetwork_id.as_ref().is_some_and(|s| s.0 == [0u8; 20]);
+                    let b = r.chain_block_accepted_transactions.iter_mut().find(|b| b.accepted_transactions.iter().any(native));
                     if let Some(b) = b {
-                        b.accepted_transactions.pop();
+                        let k = b.accepted_transactions.iter().rposition(native).expect("a native transaction");
+                        b.accepted_transactions.remove(k);
                     }
                 });
                 let o = f.step().await;
@@ -3445,6 +3535,9 @@ mod tests {
             let mut merged = 0;
             for text in [MAINNET, TN10] {
                 let (f, src, ingest, health) = follower_with(text, |_| {}, rtt);
+                // every lane of the fixture, as if each held a spend of a tracked output (R9-K): the point is that the
+                // requests go out together
+                f.prove_every_lane.store(true, SeqCst);
                 let lanes = src.fx.proofs.len();
                 let t0 = tokio::time::Instant::now();
                 let o = f.step().await;

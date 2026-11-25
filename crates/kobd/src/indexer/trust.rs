@@ -110,6 +110,25 @@ impl TrustContext {
         self.matters(blocks).into_iter().map(|t| !t.is_empty()).collect()
     }
 
+    /// The user lanes of `blocks` the chain proof proves (R9-K): those that hold a transaction that matters to KOB,
+    /// which on a user lane is a spend of an output the store tracks. The native lane is always proven, and a user
+    /// lane with nothing tracked on it need not be: a lane the window does not show is left to the node anyway, so
+    /// proving one whose transactions KOB never reads would add no safety, only the cost of its two lane proofs.
+    pub fn user_lanes(&self, blocks: &[RawChainBlock]) -> HashSet<[u8; 20]> {
+        let mut out = HashSet::new();
+        for (b, ks) in blocks.iter().zip(self.matters(blocks)) {
+            for k in ks {
+                let t = &b.accepted_transactions[k];
+                if super::record::user_lane(t).is_some() {
+                    if let Some(s) = t.subnetwork_id.as_ref().and_then(|s| <[u8; 20]>::try_from(s.0.as_slice()).ok()) {
+                        out.insert(s);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Per chain block of `blocks`: the positions of its transactions that can matter to KOB.
     pub fn matters(&self, blocks: &[RawChainBlock]) -> Vec<Vec<usize>> {
         let mut created: HashSet<(Hash32, u32)> = HashSet::new();
@@ -118,19 +137,29 @@ impl TrustContext {
             .map(|b| {
                 let mut any = vec![];
                 for (k, t) in b.accepted_transactions.iter().enumerate() {
-                    let matters = places(t)
-                        || t.inputs.iter().any(|i| {
-                            let op = (i.previous_outpoint.transaction_id, i.previous_outpoint.index);
-                            self.outpoints.contains(&op) || created.contains(&op)
-                        })
-                        || t.outputs
-                            .iter()
-                            .filter_map(|o| o.covenant)
-                            .any(|c| self.tokens.contains(&c.covenant_id) || self.allowlist.get(&c.covenant_id).is_some());
+                    let spends = t.inputs.iter().any(|i| {
+                        let op = (i.previous_outpoint.transaction_id, i.previous_outpoint.index);
+                        self.outpoints.contains(&op) || created.contains(&op)
+                    });
+                    // A user-lane transaction only ends what the store tracks: it matters by a spend alone, and
+                    // nothing it creates is tracked, so its outputs never make a later transaction matter (R9-K).
+                    let other_lane = super::record::user_lane(t).is_some();
+                    let matters = if other_lane {
+                        spends
+                    } else {
+                        places(t)
+                            || spends
+                            || t.outputs
+                                .iter()
+                                .filter_map(|o| o.covenant)
+                                .any(|c| self.tokens.contains(&c.covenant_id) || self.allowlist.get(&c.covenant_id).is_some())
+                    };
                     if matters {
                         any.push(k);
-                        let id = t.verbose_data.transaction_id;
-                        created.extend((0..t.outputs.len() as u32).map(|k| (id, k)));
+                        if !other_lane {
+                            let id = t.verbose_data.transaction_id;
+                            created.extend((0..t.outputs.len() as u32).map(|k| (id, k)));
+                        }
                     }
                 }
                 any
@@ -151,8 +180,9 @@ impl TrustContext {
 fn places(t: &crate::rpc::types::Tx) -> bool {
     use kob_protocol::payload::{decode, MAGIC};
     let payload = &t.payload.0;
-    // a coinbase is never read (R9C1-M1)
+    // a coinbase is never read (R9C1-M1); a KOB1 record is read on the native lane only (R9-K)
     !super::record::is_coinbase(t)
+        && super::record::user_lane(t).is_none()
         && payload.starts_with(MAGIC)
         && decode(payload).ok().flatten().is_some_and(|p| p.records.iter().any(|r| super::record::places_order(t, r)))
 }
@@ -216,6 +246,92 @@ mod tests {
         assert_eq!(ctx.outpoints, HashSet::from([(Hash32([0x11; 32]), 0)]));
         assert_eq!(ctx.tokens, HashSet::from([Hash32([0x77; 32])]));
         assert_eq!(ctx.flag(&blocks), [true, false, true, true]);
+    }
+
+    /// A transaction on user lane `n` (KIP-21: 4 namespace bytes, then 16 zero bytes).
+    fn on_lane(mut t: Tx, n: u32) -> Tx {
+        let mut s = [0u8; 20];
+        s[0] = 2;
+        s[1..4].copy_from_slice(&n.to_be_bytes()[1..]);
+        t.subnetwork_id = Some(crate::hex::HexBytes(s.to_vec()));
+        t
+    }
+
+    /// A store tracking the order outputs `0x10 + i : 0` for `i < n` (unspent).
+    fn tracking(n: u8) -> rusqlite::Connection {
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        conn.execute_batch(
+            "INSERT INTO ids (h) VALUES (x'0000000000000000000000000000000000000000000000000000000000000000'); \
+             INSERT INTO orders (covenant_id, contract, template_id, family, side, token_id, in_book, genesis_state, genesis_block, genesis_daa, listed) \
+             VALUES (x'01', 'KobAsk', 1, 1, 1, 1, 1, x'00', 1, 1, 1);",
+        )
+        .unwrap();
+        for i in 0..n {
+            conn.execute(
+                "INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa) VALUES (?1, 0, 1, 1, x'00', 1, 1)",
+                [vec![0x10 + i; 32]],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    fn lanes_of(conn: &rusqlite::Connection, blocks: &[RawChainBlock]) -> HashSet<[u8; 20]> {
+        let ctx = TrustContext::load(conn, Arc::new(TokenAllowlist::from_entries([])), &WindowKeys::of(blocks)).unwrap();
+        ctx.user_lanes(blocks)
+    }
+
+    /// R9-K: a flood of user-lane transactions that spend nothing the store tracks proves no user lane, and neither
+    /// a KOB1 placement nor a token output makes a user-lane transaction matter: KOB state is created on the native
+    /// lane only. The lane proofs of R9C1-H1 are thus no longer the attacker's to cause by junk.
+    #[test]
+    fn a_junk_user_lane_flood_proves_no_lane() {
+        let conn = tracking(1);
+        let txs: Vec<Tx> = (0..4_100u32).map(|n| on_lane(tx((n % 200) as u8 + 0x30, vec![input(0x99, n)], Some(0x77)), n)).collect();
+        let blocks = vec![block(txs)];
+        assert!(lanes_of(&conn, &blocks).is_empty());
+        let ctx = TrustContext::load(&conn, Arc::new(TokenAllowlist::from_entries([])), &WindowKeys::of(&blocks)).unwrap();
+        assert_eq!(ctx.flag(&blocks), [false], "nothing to fetch a merged block for either");
+    }
+
+    /// R9-K: a chain of user-lane transactions, each on a lane of its own and each spending the output of the one
+    /// before, the first spending a tracked output, proves the first lane alone: what a user-lane transaction creates
+    /// is never tracked, so the second link spends nothing tracked. Each further link would otherwise have cost two lane
+    /// proofs for a fee.
+    #[test]
+    fn a_chained_user_lane_flood_proves_only_its_first_link() {
+        let conn = tracking(1);
+        let mut txs = vec![on_lane(tx(0xc0, vec![input(0x10, 0)], Some(0x01)), 1)];
+        for k in 1..1_000u32 {
+            let prev = 0xc0u8.wrapping_add((k - 1) as u8);
+            let mut t = on_lane(tx(0xc0u8.wrapping_add(k as u8), vec![input(prev, 0)], Some(0x01)), 1 + k);
+            // distinct ids beyond 256 links
+            t.verbose_data.transaction_id.0[1] = (k >> 8) as u8;
+            t.inputs[0].previous_outpoint.transaction_id.0[1] = ((k - 1) >> 8) as u8;
+            txs.push(t);
+        }
+        let blocks = vec![block(txs)];
+        let lanes = lanes_of(&conn, &blocks);
+        assert_eq!(lanes.len(), 1, "{lanes:?}");
+        let mut first = [0u8; 20];
+        first[..4].copy_from_slice(&[2, 0, 0, 1]);
+        assert!(lanes.contains(&first));
+    }
+
+    /// R9-K, the expensive variant: each link spends a tracked output of its own, so each lane is proven, two lane
+    /// proofs a link. The work is then bounded by the tracked outputs the attacker made on the native lane beforehand
+    /// (each a covenant output costing `4·C/v` grams of storage mass, `docs/ops/api-bounds.md`), and each link ends one
+    /// of them: n tracked outputs make at most n proven lanes, once.
+    #[test]
+    fn user_lanes_that_each_end_a_tracked_output_are_each_proven_once() {
+        let conn = tracking(50);
+        let txs: Vec<Tx> = (0..50u8).map(|i| on_lane(tx(0x60 + i, vec![input(0x10 + i, 0)], None), 100 + i as u32)).collect();
+        let blocks = vec![block(txs)];
+        assert_eq!(lanes_of(&conn, &blocks).len(), 50);
+        // the same tracked outputs again, spent on fresh lanes in a later window: nothing left to end, nothing proven
+        conn.execute("UPDATE order_utxos SET spent_block = 2", []).unwrap();
+        let again: Vec<Tx> = (0..50u8).map(|i| on_lane(tx(0xb0 + i, vec![input(0x10 + i, 0)], None), 200 + i as u32)).collect();
+        assert!(lanes_of(&conn, &[block(again)]).is_empty());
     }
 
     /// C-M4, R2C-M2: neither the KOB1 magic nor a record that decodes makes a transaction matter.
